@@ -1086,13 +1086,18 @@ async def on_message(message):
         interaction_type = "REPLY"
         logger.info(f"Reply từ user {user_id}: {message.content[:50]}...")
 
-    # Auto-reply kiểu tương tác (tùy chọn, cute e-girl)
-    if interaction_type == "DM":
-        await message.reply(f"Hí anh! Tui nhận DM nè, hỏi gì cứ nói đi uwu 💕")
-    elif interaction_type == "MENTION":
-        await message.reply(f"Ơ anh mention tui hả? Tui đây nè! 😳")
-    elif interaction_type == "REPLY":
-        await message.reply(f"Reply tui à? Tui nghe hết rồi, kể tiếp đi! ✨")
+    # === XÁC ĐỊNH LOẠI TƯƠNG TÁC (DM / MENTION / REPLY) ===
+    interaction_type = None
+    if message.guild is None:
+        interaction_type = "DM"
+    elif message.reference and message.reference.message_id:
+        interaction_type = "REPLY"
+    elif bot.user in message.mentions:
+        interaction_type = "MENTION"
+
+    # === LOG RA SERVER (bot.log) - KHÔNG HIỆN TRÊN CHAT ===
+    if interaction_type:
+        logger.info(f"[TƯƠNG TÁC] User {message.author} ({message.author.id}) - Loại: {interaction_type} - Nội dung: {query}")
 
     # === CHỈ XỬ LÝ KHI: bot bị mention HOẶC reply bot HOẶC DM ===
     if not (bot.user.mentioned_in(message) or 
