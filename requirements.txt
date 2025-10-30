@@ -1,0 +1,7 @@
+discord.py
+python-dotenv
+sympy
+google-generativeai
+requests
+duckduckgo-search
+flask
