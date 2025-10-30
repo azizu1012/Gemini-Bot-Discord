@@ -168,7 +168,7 @@ async def run_gemini_api(messages, model, temperature=0.7, max_tokens=2000):
                 generation_config=generation_config,
                 safety_settings=safety_settings,
                 system_instruction=system_instruction,
-                tools=[{"google_search": {}}] if "google search" in system_instruction.lower() else []
+                tools=[{"google_search": {}}]
             )
 
             response = await asyncio.to_thread(gemini_model.generate_content, gemini_messages)
