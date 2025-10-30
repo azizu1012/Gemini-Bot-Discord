@@ -134,6 +134,7 @@ SPAM_WINDOW = 30
 # --- KHỞI TẠO BOT (CHỈ 1 INSTANCE) ---
 intents = discord.Intents.default()
 intents.message_content = True
+intents.dm_messages = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # --- HÀM GEMINI ---
@@ -1103,7 +1104,8 @@ async def on_message(message):
 
     # === CHỈ XỬ LÝ KHI: bot bị mention HOẶC reply bot HOẶC DM admin ===
     if not (bot.user.mentioned_in(message) or 
-            (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user)):
+            (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user) or
+            message.guild is None):  # THÊM DÒNG NÀY - XỬ LÝ DM
         await bot.process_commands(message)
         return
 
