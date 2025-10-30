@@ -621,7 +621,6 @@ async def clear_all_data():
     return db_cleared and json_cleared
 
 
-bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
 # Thêm intents nếu chưa có
 intents = discord.Intents.default()
 intents.message_content = True
@@ -657,7 +656,6 @@ async def dm_slash(interaction: discord.Interaction, user_id: str, message: str)
 
 
 # --- TÌM KIẾM SỰ KIỆN VN (CẬP NHẬT) ---
-# --- THAY THẾ HÀM get_vn_events CŨ BẰNG HÀM NÀY ---
 async def get_vn_events(query):
     """Tìm sự kiện VN bằng Google Custom Search JSON API - HOẠT ĐỘNG ỔN ĐỊNH TRÊN RENDER"""
     if not any(word in query.lower() for word in ['sự kiện', 'festival', 'cosplay', 'ngày lễ', 'holiday']):
@@ -729,6 +727,71 @@ async def get_vn_events(query):
     except Exception as e:
         logger.error(f"Google CSE API lỗi: {e}")
         return "[Lỗi tìm kiếm ~ tui vẫn trả lời cute nha]"
+    
+# --- HÀM MỚI: SEARCH THÔNG TIN CHUNG (GLOBAL) ---
+async def get_general_search(query):
+    """Search thông tin chung (không phải event VN) bằng Google CSE - Trigger khi query cụ thể."""
+    # Trigger chỉ khi query KHÔNG phải event VN, và có từ khóa "cụ thể" (ai là, là gì, cách, etc.)
+    event_keywords = ['sự kiện', 'festival', 'cosplay', 'ngày lễ', 'holiday']
+    general_keywords = ['ai là', 'là gì', 'cách', 'làm thế nào', 'tổng thống', 'president', 'usa', 'mỹ', 'election', 'bầu cử']
+    
+    query_lower = query.lower()
+    if any(word in query_lower for word in event_keywords):
+        return ""  # Để hàm get_vn_events xử lý
+    if not any(word in query_lower for word in general_keywords):
+        return ""  # Không search nếu không cụ thể
+
+    cse_id = os.getenv('GOOGLE_CSE_ID')
+    api_key = os.getenv('GOOGLE_CSE_API_KEY')
+
+    if not cse_id or not api_key:
+        logger.warning("Thiếu GOOGLE_CSE_ID hoặc GOOGLE_CSE_API_KEY → bỏ qua search chung")
+        return ""
+
+    try:
+        # Xây dựng query search (dùng query gốc + thêm "2025" nếu cần real-time)
+        search_q = query + " 2025" if any(year_word in query_lower for year_word in ['2025', 'năm nay']) else query
+        search_q = f"{search_q} site:en.wikipedia.org OR site:bbc.com OR site:nytimes.com"  # Ưu tiên nguồn uy tín
+
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            'key': api_key,
+            'cx': cse_id,
+            'q': search_q,
+            'num': 3,  # Ít hơn để nhanh
+            'gl': 'us',  # Global (không phải 'vn')
+            'hl': 'en'   # Tiếng Anh cho info chính xác
+        }
+
+        # Gọi API async
+        response = await asyncio.to_thread(requests.get, url, params=params, timeout=10)
+        data = response.json()
+
+        if 'items' not in data:
+            logger.info(f"General search không có kết quả: {data.get('error', 'No items')}")
+            return "[Không tìm thấy info cụ thể ~ tui dùng kiến thức cũ nha]"
+
+        relevant = []
+        for item in data['items'][:2]:  # Chỉ 2 kết quả để ngắn gọn
+            title = item.get('title', 'Không có tiêu đề')
+            snippet = item.get('snippet', '')
+            link = item.get('link', '')
+
+            # Lọc quảng cáo
+            if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
+                continue
+
+            short_snippet = snippet[:120] + "..." if len(snippet) > 120 else snippet
+            relevant.append(f"**{title}**: {short_snippet} (Nguồn: {link})")
+
+        if relevant:
+            return ("**Info nhanh từ web:**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI CHÍNH XÁC THEO STYLE E-GIRL, KHÔNG LEAK NGUỒN]")
+        else:
+            return "[Không có info nổi bật ~ tui trả lời dựa trên kiến thức nha]"
+
+    except Exception as e:
+        logger.error(f"General search lỗi: {e}")
+        return "[Lỗi search chung ~ tui vẫn cute bình thường 😅]"
     
 # --- TỰ ĐỘNG BỔ SUNG THÔNG TIN (CẬP NHẬT) ---
 async def auto_enrich(query):
@@ -1194,6 +1257,7 @@ async def on_message(message):
 
     # === 9. XỬ LÝ LỆNH @bot.command (Không đổi) ===
     await bot.process_commands(message)
+    return  # THÊM DÒNG NÀY - NGĂN LOOP VỚI COMMANDS
 
 # --- CHẠY BOT ---
 if __name__ == "__main__":
