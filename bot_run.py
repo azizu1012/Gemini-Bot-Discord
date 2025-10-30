@@ -163,18 +163,11 @@ async def run_gemini_api(messages, model, temperature=0.7, max_tokens=2000):
                 ]
             ]
 
-            # FIX NHANH: LUÔN BẬT SEARCH GROUNDING VÀ FUNCTION CALLING
-            tools_list = [
-                run_calculator,
-                Tool.Type.GOOGLE_SEARCH # THÊM NÓ CỐ ĐỊNH VÀO ĐÂY
-            ]
-
             gemini_model = genai.GenerativeModel(
                 model_name=model,
                 generation_config=generation_config,
                 safety_settings=safety_settings,
                 system_instruction=system_instruction,
-                tools=tools_list
             )
 
             response = await asyncio.to_thread(gemini_model.generate_content, gemini_messages)
