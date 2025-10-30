@@ -17,7 +17,6 @@ import sympy as sp
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold, Tool
 import requests
-from duckduckgo_search import DDGS
 from datetime import datetime, timedelta
 import json
 import os
@@ -658,43 +657,78 @@ async def dm_slash(interaction: discord.Interaction, user_id: str, message: str)
 
 
 # --- TÌM KIẾM SỰ KIỆN VN (CẬP NHẬT) ---
+# --- THAY THẾ HÀM get_vn_events CŨ BẰNG HÀM NÀY ---
 async def get_vn_events(query):
-    """Search sự kiện VN chỉ khi hỏi, lọc relevant."""
+    """Tìm sự kiện VN bằng Google Custom Search JSON API - HOẠT ĐỘNG ỔN ĐỊNH TRÊN RENDER"""
     if not any(word in query.lower() for word in ['sự kiện', 'festival', 'cosplay', 'ngày lễ', 'holiday']):
-        return ""  # Không search nếu không liên quan
+        return ""
+
+    cse_id = os.getenv('GOOGLE_CSE_ID')
+    api_key = os.getenv('GOOGLE_CSE_API_KEY')
+
+    if not cse_id or not api_key:
+        logger.warning("Thiếu GOOGLE_CSE_ID hoặc GOOGLE_CSE_API_KEY → bỏ qua tìm kiếm")
+        return ""
+
+    # Xây dựng query tìm kiếm
+    base_queries = {
+        'cosplay': 'cosplay event Vietnam 2025 site:facebook.com OR site:eventbrite.com OR site:cosplay.vn',
+        'festival': 'festival Vietnam 2025 music food culture site:facebook.com OR site:timeout.com OR site:vietnamcoracle.com',
+        'holiday': 'public holiday Vietnam 2025 OR ngày lễ Việt Nam 2025',
+        'default': 'sự kiện sắp tới Việt Nam 2025 cosplay festival concert anime'
+    }
+
+    if 'cosplay' in query.lower():
+        search_q = base_queries['cosplay']
+    elif 'festival' in query.lower():
+        search_q = base_queries['festival']
+    elif 'ngày lễ' in query.lower() or 'holiday' in query.lower():
+        search_q = base_queries['holiday']
+    else:
+        search_q = base_queries['default']
 
     try:
-        with DDGS() as ddgs:
-            # Search tùy theo keyword
-            if 'cosplay' in query.lower():
-                results = list(ddgs.text("upcoming cosplay events Vietnam 2025", max_results=5))
-            elif 'festival' in query.lower():
-                results = list(ddgs.text("upcoming festivals Vietnam 2025", max_results=5))
-            elif 'ngày lễ' in query.lower() or 'holiday' in query.lower():
-                results = list(ddgs.text("upcoming holidays Vietnam 2025", max_results=5))
-            else:
-                results = list(ddgs.text("upcoming events Vietnam 2025 cosplay festival holidays", max_results=5))
+        url = "https://www.googleapis.com/customsearch/v1"
+        params = {
+            'key': api_key,
+            'cx': cse_id,
+            'q': search_q,
+            'num': 5,
+            'gl': 'vn',
+            'hl': 'vi'
+        }
 
-            relevant = []
-            for r in results:
-                # Lọc chỉ VN-related (keyword 'Vietnam', 'Hanoi', etc.)
-                if 'vietnam' not in r['body'].lower() and 'vn' not in r['body'].lower():
-                    continue
-                # Lọc quảng cáo (amazon, ebay, etc.)
-                if any(ad in r['href'].lower() for ad in ['amazon', 'ebay', 'shopee', 'lazada']):
-                    continue
-                # Score tương quan (keyword match >30%)
-                score = sum(1 for word in query.lower().split() if word in r['body'].lower()) / max(len(query.split()), 1)
-                if score > 0.3:
-                    relevant.append(f"{r['title']}: {r['body'][:150]} (Nguồn: {r['href']})")
+        # Gọi API trong thread để không block bot
+        response = await asyncio.to_thread(requests.get, url, params=params, timeout=10)
+        data = response.json()
 
-            if relevant:
-                return "\n".join(relevant[:3]) + "\n\n[INFO NÀY TƯƠNG QUAN - DÙNG ĐỂ TRẢ LỜI E-GIRL STYLE]"
-            else:
-                return "[KHÔNG TÌM THẤY SỰ KIỆN LIÊN QUAN - BỎ QUA VÀ TRẢ LỜI BÌNH THƯỜNG]"
+        if 'items' not in data:
+            logger.info(f"CSE không có kết quả: {data.get('error', 'No items')}")
+            return "[Không tìm thấy sự kiện nào hot ~ tui bỏ qua nha]"
+
+        relevant = []
+        for item in data['items'][:3]:
+            title = item.get('title', 'Không có tiêu đề')
+            snippet = item.get('snippet', '')
+            link = item.get('link', '')
+
+            # Lọc quảng cáo
+            if any(ad in link.lower() for ad in ['shopee', 'lazada', 'tiki', 'amazon']):
+                continue
+
+            short_snippet = snippet[:140] + "..." if len(snippet) > 140 else snippet
+            relevant.append(f"**{title}**\n{short_snippet}\n[Link]({link})")
+
+        if relevant:
+            return ("**Sự kiện hot sắp tới ở Việt Nam:**\n" +
+                    "\n\n".join(relevant) +
+                    "\n\n[Info từ Google nha~ anh book vé sớm đi nè uwu]")
+        else:
+            return "[Không có event nào nổi bật ~ tui trả lời bình thường nha]"
+
     except Exception as e:
-        logger.error(f"Search events lỗi: {e}")
-        return "[LỖI SEARCH - BỎ QUA]"
+        logger.error(f"Google CSE API lỗi: {e}")
+        return "[Lỗi tìm kiếm ~ tui vẫn trả lời cute nha]"
     
 # --- TỰ ĐỘNG BỔ SUNG THÔNG TIN (CẬP NHẬT) ---
 async def auto_enrich(query):
