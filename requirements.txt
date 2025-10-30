@@ -1,7 +1,7 @@
+python 3.13.9
 discord.py
 python-dotenv
 sympy
 google-generativeai
 requests
-duckduckgo-search
 flask
