@@ -824,10 +824,15 @@ async def auto_enrich(query):
         else:
             enrich_parts.append(f"Thời tiết {CITY or 'Thành phố Hồ Chí Minh'}: Lỗi dữ liệu, dùng mặc định (mưa rào, 23-28°C).")
 
-    # Sự kiện: Chỉ khi hỏi
+    # Sự kiện VN: Chỉ khi hỏi event
     events = await get_vn_events(query)
     if events:
         enrich_parts.append(events)
+
+    # THÊM MỚI: Search chung cho info cụ thể
+    general_info = await get_general_search(query)
+    if general_info:
+        enrich_parts.append(general_info)
 
     if enrich_parts:
         return "\n".join(enrich_parts) + "\n\n[THÊM INFO NÀY VÀO TRẢ LỜI THEO STYLE E-GIRL, KHÔNG LEAK NGUỒN]"
