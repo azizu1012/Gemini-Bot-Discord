@@ -4,3 +4,6 @@ sympy
 google-generativeai
 requests
 flask
+google-search-results 
+tavily-python 
+exa-py
