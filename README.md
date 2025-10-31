@@ -11,7 +11,7 @@
     <img alt="Python" src="https://img.shields.io/badge/Python-3.13%2B-blue?style=flat-square&logo=python"/>
   </a>
   <a href="https://render.com/">
-    <img alt="Render" src="https://img.shields.io/badge/Render-Background%20Worker-46E3B7?style=flat-square&logo=render&logoColor=white"/>
+    <img alt="Render" src="https://img.shields.io/badge/Render-Web%20Service%20(Free)-46E3B7?style=flat-square&logo=render&logoColor=white"/>
   </a>
 </p>
 
@@ -21,7 +21,7 @@
 
 **Discord AI Assistant** là một bot Discord hiệu suất cao, được phát triển bằng `discord.py` và tích hợp **Google Gemini AI** để xử lý hội thoại tự nhiên, tìm kiếm thông tin thời gian thực và hỗ trợ tính toán toán học.
 
-Bot được thiết kế để hoạt động ổn định trên nền tảng **Render (Background Worker)**, không phụ thuộc vào web server, đảm bảo uptime cao và khả năng mở rộng.
+Bot được thiết kế để hoạt động **ổn định 24/7 trên Render Free Tier** bằng **Web Service** với **Flask tích hợp** (không cần file `keep_alive.py` riêng), đảm bảo uptime cao và không bị restart loop.
 
 ---
 
@@ -90,14 +90,15 @@ python bot_run.py
 
 ---
 
-## Triển khai trên Render (Background Worker)
+## Triển khai trên Render (Web Service – Free Tier)
 
-> **Không sử dụng Flask hoặc Web Service** – chỉ dùng **Background Worker** để tránh restart loop.
+> **Không dùng Background Worker (cần paid)**  
+> **Dùng Web Service + Flask tích hợp trong `bot_run.py`** để giữ alive và tránh restart loop.
 
 ### 1. Tạo dịch vụ
 
 1. Truy cập [Render Dashboard](https://dashboard.render.com)
-2. **New** → **Background Worker**
+2. **New** → **Web Service**
 3. Kết nối repository: `azizu1012/Gemini-Bot-Discord`
 
 ### 2. Cấu hình
@@ -109,12 +110,16 @@ python bot_run.py
 | **Runtime** | `Python 3` |
 | **Build Command** | `pip install -r requirements.txt` |
 | **Start Command** | `python bot_run.py` |
+| **Health Check Path** | `/` |
 
 ### 3. Biến môi trường
 
 Thêm toàn bộ biến từ file `.env` vào phần **Environment** trên Render.
 
-> **Lưu ý**: Không cần biến `PORT`, không cần `keep_alive.py`.
+> **Lưu ý**:  
+> - **Không cần `keep_alive.py`** – Flask đã tích hợp trong `bot_run.py`  
+> - **Không cần `PORT`** – Render tự động cung cấp  
+> - **Flask bind `0.0.0.0` + `PORT` env** → Render health check ổn định
 
 ---
 
@@ -122,7 +127,7 @@ Thêm toàn bộ biến từ file `.env` vào phần **Environment** trên Rende
 
 ```
 /
-├── bot_run.py              # Logic chính
+├── bot_run.py              # Logic chính + Flask tích hợp
 ├── requirements.txt        # Dependencies
 ├── chat_history.db         # SQLite DB (tạo tự động)
 ├── chat_history_backup.db  # Backup DB
@@ -141,6 +146,7 @@ python-dotenv
 sympy
 google-generativeai
 requests
+flask
 google-search-results
 tavily-python
 exa-py
@@ -161,8 +167,22 @@ exa-py
 ## Bảo mật
 
 - **Không commit `.env`** lên repository công khai.
-- Sử dụng **Background Worker** để tránh lộ port và restart loop.
 - Tất cả API key được quản lý qua **Environment Variables** trên Render.
+- Flask chỉ trả về `"Bot alive!"` tại `/` – an toàn cho health check.
+
+---
+
+## Giữ Bot Luôn Sống (Free Tier)
+
+Render Free **sleep sau 15 phút không hoạt động**.
+
+### Giải pháp (miễn phí):
+
+**Dùng [UptimeRobot](https://uptimerobot.com)**:
+1. Tạo monitor → **HTTP(s)**
+2. URL: `https://your-service.onrender.com/`
+3. Interval: **5 phút**
+→ Bot được ping → **không sleep**
 
 ---
 
@@ -179,9 +199,7 @@ Dự án được cấp phép theo **[MIT License](LICENSE)**.
 
 ---
 
-> **Đã được kiểm thử và triển khai thành công trên Render Free Tier**  
-> **Không cần UptimeRobot nếu bot có tương tác thường xuyên**
+> **Đã kiểm thử và triển khai thành công trên Render Free Tier**  
+> **Không cần Background Worker, không cần UptimeRobot nếu có người chat thường xuyên**  
+> **Flask tích hợp → ổn định, không loop, không lỗi**
 ```
-
-
----
