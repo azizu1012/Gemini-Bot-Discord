@@ -17,6 +17,9 @@ import sympy as sp
 import google.generativeai as genai
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import requests
+from serpapi import GoogleSearch  # SerpAPI (dùng google-search-results package)
+from tavily import TavilyClient  # Tavily
+import exa_py  # Exa.ai (exa-py package)
 from datetime import datetime, timedelta
 import json
 import os
@@ -48,19 +51,26 @@ def normalize_city_name(city_query):
     # Nếu không khớp, trả về tên gốc (WeatherAPI sẽ cố gắng nhận diện)
     return (city_query, city_query.title())
 
-# Setup logging
+# Setup logging (sửa duplicate)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger('bot_gemini')
 formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-# FileHandler cho bot.log
+
 file_handler = logging.FileHandler('bot.log', encoding='utf-8')
 file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
-# StreamHandler cho CMD
+file_handler.setLevel(logging.INFO)
+
 stream_handler = logging.StreamHandler()
 stream_handler.setFormatter(formatter)
 stream_handler.setLevel(logging.INFO)
-logger.addHandler(stream_handler)
+
+# Tránh duplicate: Chỉ add nếu chưa có handlers
+if not logger.handlers:
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+
+# Xóa logger.addHandler cũ nếu còn
+logger.handlers = [h for h in logger.handlers if isinstance(h, logging.NullHandler)]  # Clear null nếu có
 
 # --- TẢI BIẾN MÔI TRƯỜNG ---
 load_dotenv()
@@ -78,6 +88,17 @@ ADO_FAT_USER_ID = os.getenv('ADO_FAT_USER_ID', '')
 MUC_RIM_USER_ID = os.getenv('MUC_RIM_USER_ID', '')
 SUC_VIEN_USER_ID = os.getenv('SUC_VIEN_USER_ID', '')
 CHUI_USER_ID = os.getenv('CHUI_USER_ID', '')
+
+# API Keys cho Search (từ .env)
+SERPAPI_API_KEY = os.getenv('SERPAPI_API_KEY')
+TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
+EXA_API_KEY = os.getenv('EXA_API_KEY')
+GOOGLE_CSE_ID = os.getenv('GOOGLE_CSE_ID')  # Đã có
+GOOGLE_CSE_API_KEY = os.getenv('GOOGLE_CSE_API_KEY')  # Đã có
+
+# Global counter cho round-robin balance (chia đều 4 APIs)
+SEARCH_API_COUNTER = 0
+SEARCH_LOCK = asyncio.Lock()  # Lock để an toàn async
 
 # File cache cho thời tiết (cập nhật mỗi giờ)
 WEATHER_CACHE_PATH = os.path.join(os.path.dirname(__file__), 'weather_cache.json')
@@ -656,74 +677,176 @@ async def dm_slash(interaction: discord.Interaction, user_id: str, message: str)
     except:
         await interaction.response.send_message("Lỗi gửi DM! 😢", ephemeral=True)
 
-
-# --- OLLAMA WEB SEARCH HELPER (DÙNG CHUNG CHO EVENT & GENERAL) ---
-async def _ollama_search_helper(query, focus="general"):
-    """Gọi Ollama Web Search API - trả kết quả structured, filter theo focus."""
-    ollama_api_key = os.getenv('OLLAMA_SEARCH_API_KEY')
-    ollama_url = os.getenv('OLLAMA_SEARCH_URL', 'https://api.ollama.com/api/web_search')
+# --- HÀM BALANCE SEARCH APIs (THAY THẾ OLLAMA) ---
+async def run_search_apis(query, focus="general"):
+    """Balance 4 APIs: CSE (0), SerpAPI (1), Tavily (2), Exa (3). Fallback nếu fail."""
+    global SEARCH_API_COUNTER
+    apis = ["CSE", "SerpAPI", "Tavily", "Exa"]
     
-    if not ollama_api_key:
-        logger.warning("Thiếu OLLAMA_SEARCH_API_KEY → bỏ qua Ollama")
-        return ""
-
-    try:
-        headers = {
-            'Authorization': f'Bearer {ollama_api_key}',
-            'Content-Type': 'application/json'
-        }
-        payload = {
-            'query': query,
-            'num_results': 3,
-            'safe': True
-        }
-
-        # Tùy chỉnh theo focus
-        if focus == "vn_event":
-            payload['query'] = f"{query} Vietnam 2025 event festival cosplay"
-            payload['gl'] = 'vn'
-            payload['hl'] = 'vi'
-        elif focus == "general":
-            # Tự động thêm năm tương lai nếu cần
-            if re.search(r'\b(202[6-9]|năm\s+sau|sắp\s+tới)\b', query.lower()):
-                payload['query'] = f"{query} {datetime.now().year + 1}"
-            payload['gl'] = 'us' if 'usa' in query.lower() or 'president' in query.lower() else 'vn'
-            payload['hl'] = 'en' if re.search(r'[a-zA-Z]{4,}', query) and not any(c in 'áàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ' for c in query) else 'vi'
-
-        response = await asyncio.to_thread(requests.post, ollama_url, json=payload, headers=headers, timeout=12)
-        data = response.json()
-
-        if response.status_code != 200 or 'results' not in data:
-            logger.error(f"Ollama search lỗi {response.status_code}: {data.get('error', 'Unknown')}")
-            return ""
-
-        relevant = []
-        for item in data.get('results', [])[:2]:
-            title = item.get('title', 'Không có tiêu đề')
-            snippet = item.get('snippet', '').strip()
-            link = item.get('url', '')
+    async with SEARCH_LOCK:
+        idx = SEARCH_API_COUNTER % 4
+        SEARCH_API_COUNTER += 1  # Round-robin
+    
+    tried = set()
+    start_idx = idx
+    
+    for i in range(4):  # Thử tối đa 4 lần (fallback chain)
+        api_idx = (start_idx + i) % 4
+        if api_idx in tried:
+            continue
+        tried.add(api_idx)
+        api_name = apis[api_idx]
+        
+        try:
+            if api_name == "CSE":
+                result = await _search_cse(query, focus)
+            elif api_name == "SerpAPI":
+                if not SERPAPI_API_KEY:
+                    continue
+                result = await _search_serpapi(query, focus)
+            elif api_name == "Tavily":
+                if not TAVILY_API_KEY:
+                    continue
+                result = await _search_tavily(query, focus)
+            elif api_name == "Exa":
+                if not EXA_API_KEY:
+                    continue
+                result = await _search_exa(query, focus)
             
-            # Lọc quảng cáo
-            if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki', 'ads']):
-                continue
-            
-            short_snippet = snippet[:130] + "..." if len(snippet) > 130 else snippet
-            relevant.append(f"**{title}**: {short_snippet} (Nguồn: {link})")
+            if result and result.strip():  # Nếu có kết quả hợp lệ
+                logger.info(f"Search thành công với {api_name} cho query: {query[:50]}...")
+                return result
+        
+        except Exception as e:
+            logger.error(f"{api_name} fail cho query '{query}': {e}")
+            continue  # Fallback sang API sau
+    
+    logger.warning(f"Tất cả 4 APIs fail cho query: {query}")
+    return ""  # Không có kết quả
 
-        if not relevant:
-            return ""
-
-        prefix = "**Ollama Search (xịn hơn!):**" if focus == "general" else "**Sự kiện hot từ Ollama:**"
-        result = prefix + "\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]"
-        return result
-
-    except Exception as e:
-        logger.error(f"Ollama helper lỗi: {e}")
+# --- HÀM HELPER CHO TỪNG API (RIÊNG BIỆT, ASYNC) ---
+async def _search_cse(query, focus):
+    """CSE: Dùng requests, focus VN nếu event."""
+    if focus == "vn_event":
+        search_q = f"{query} Vietnam 2025 event festival cosplay"
+        params = {'key': GOOGLE_CSE_API_KEY, 'cx': GOOGLE_CSE_ID, 'q': search_q, 'num': 5, 'gl': 'vn', 'hl': 'vi'}
+    else:
+        params = {'key': GOOGLE_CSE_API_KEY, 'cx': GOOGLE_CSE_ID, 'q': query, 'num': 3, 'gl': 'us' if 'usa' in query.lower() else 'vn', 'hl': 'en' if re.search(r'[a-zA-Z]{4,}', query) else 'vi'}
+    
+    response = await asyncio.to_thread(requests.get, "https://www.googleapis.com/customsearch/v1", params=params, timeout=10)
+    data = response.json()
+    
+    if 'items' not in data:
         return ""
+    
+    relevant = []
+    for item in data['items'][:3]:
+        title = item.get('title', 'Không có tiêu đề')
+        snippet = item.get('snippet', '')[:130] + "..." if len(item.get('snippet', '')) > 130 else item.get('snippet', '')
+        link = item.get('link', '')
+        if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
+            continue
+        relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
+    
+    prefix = "**Search CSE (fallback ổn định):**" if focus == "general" else "**Sự kiện VN từ CSE:**"
+    return prefix + "\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
 
-# --- TÌM KIẾM SỰ KIỆN VN (OLLAMA PRIMARY + CSE FALLBACK) ---
+async def _search_serpapi(query, focus):
+    """SerpAPI: Dùng SDK, engine=google."""
+    if not SERPAPI_API_KEY:
+        return ""
+    
+    params = {
+        "q": query,
+        "api_key": SERPAPI_API_KEY,
+        "engine": "google",
+        "num": 3
+    }
+    if focus == "vn_event":
+        params["q"] = f"{query} Vietnam 2025 event festival cosplay"
+        params["gl"] = "vn"
+        params["hl"] = "vi"
+    else:
+        if re.search(r'\b(202[6-9]|năm\s+sau|sắp\s+tới)\b', query.lower()):
+            params["q"] += f" {datetime.now().year + 1}"
+        params["gl"] = "us" if 'usa' in query.lower() else "vn"
+        params["hl"] = "en" if re.search(r'[a-zA-Z]{4,}', query) else "vi"
+    
+    search = GoogleSearch(params)
+    results = await asyncio.to_thread(search.get_dict)
+    
+    if 'organic_results' not in results:
+        return ""
+    
+    relevant = []
+    for item in results['organic_results'][:3]:
+        title = item.get('title', 'Không có tiêu đề')
+        snippet = item.get('snippet', '')[:130] + "..." if len(item.get('snippet', '')) > 130 else item.get('snippet', '')
+        link = item.get('link', '')
+        if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
+            continue
+        relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
+    
+    prefix = "**Search SerpAPI (xịn xò!):**" if focus == "general" else "**Sự kiện VN từ SerpAPI:**"
+    return prefix + "\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
+
+async def _search_tavily(query, focus):
+    """Tavily: Dùng client.search(), max_tokens=1000."""
+    if not TAVILY_API_KEY:
+        return ""
+    
+    tavily = TavilyClient(api_key=TAVILY_API_KEY)
+    params = {"query": query, "search_depth": "basic", "max_results": 3, "include_answer": False}
+    if focus == "vn_event":
+        params["query"] = f"{query} Vietnam 2025 event festival cosplay"
+    
+    results = await asyncio.to_thread(tavily.search, **params)
+    
+    if 'results' not in results:
+        return ""
+    
+    relevant = []
+    for item in results['results'][:3]:
+        title = item.get('title', 'Không có tiêu đề')
+        snippet = item.get('content', '')[:130] + "..." if len(item.get('content', '')) > 130 else item.get('content', '')
+        link = item.get('url', '')
+        if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
+            continue
+        relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
+    
+    prefix = "**Search Tavily (AI-optimized!):**" if focus == "general" else "**Sự kiện VN từ Tavily:**"
+    return prefix + "\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
+
+async def _search_exa(query, focus):
+    """Exa.ai: Dùng exa_py.search(), num_results=3."""
+    if not EXA_API_KEY:
+        return ""
+    
+    exa = exa_py.Exa(api_key=EXA_API_KEY)
+    params = {"query": query, "num_results": 3, "use_autoprompt": True, "type": "keyword" if focus != "vn_event" else "neural"}
+    if focus == "vn_event":
+        params["query"] = f"{query} Vietnam 2025 event festival cosplay"
+    
+    results = await asyncio.to_thread(exa.search, **params)
+    
+    if not results.results:
+        return ""
+    
+    relevant = []
+    for item in results.results[:3]:
+        title = item.title or 'Không có tiêu đề'
+        snippet = item.text[:130] + "..." if len(item.text or '') > 130 else item.text or ''
+        link = item.url
+        if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
+            continue
+        relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
+    
+    prefix = "**Search Exa.ai (neural search!):**" if focus == "general" else "**Sự kiện VN từ Exa:**"
+    return prefix + "\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
+
+# --- TÌM KIẾM SỰ KIỆN VN (DÙNG BALANCE APIs) ---
 async def get_vn_events(query):
-    """Tìm sự kiện VN: Ollama primary (xịn, real-time), CSE fallback."""
+    """Tìm sự kiện VN: Dùng balance APIs + cache."""
     query_lower = query.lower()
     if not any(word in query_lower for word in ['sự kiện', 'festival', 'cosplay', 'ngày lễ', 'holiday', 'event']):
         return ""
@@ -733,70 +856,16 @@ async def get_vn_events(query):
         if cache_key in SEARCH_CACHE and (datetime.now() - SEARCH_CACHE[cache_key]['time']).total_seconds() < 3600:
             return SEARCH_CACHE[cache_key]['result']
 
-    # Ollama primary
-    ollama_result = await _ollama_search_helper(query, focus="vn_event")
-    if ollama_result:
-        async with CACHE_LOCK:
-            SEARCH_CACHE[cache_key] = {'result': ollama_result, 'time': datetime.now()}
-        logger.info("Ollama event search thành công")
-        return ollama_result
+    # Dùng balance APIs
+    result = await run_search_apis(query, focus="vn_event")
+    
+    async with CACHE_LOCK:
+        SEARCH_CACHE[cache_key] = {'result': result, 'time': datetime.now()}
+    return result
 
-    # CSE fallback
-    logger.info("Ollama event fail → dùng CSE fallback")
-    cse_id = os.getenv('GOOGLE_CSE_ID')
-    api_key = os.getenv('GOOGLE_CSE_API_KEY')
-    if not cse_id or not api_key:
-        return "[Fallback fail ~ tui dùng kiến thức cũ nha]"
-
-    base_queries = {
-        'cosplay': 'cosplay event Vietnam 2025 site:facebook.com OR site:eventbrite.com OR site:cosplay.vn',
-        'festival': 'festival Vietnam 2025 music food culture site:facebook.com OR site:timeout.com OR site:vietnamcoracle.com',
-        'holiday': 'public holiday Vietnam 2025 OR ngày lễ Việt Nam 2025',
-        'default': 'sự kiện sắp tới Việt Nam 2025 cosplay festival concert anime'
-    }
-    if 'cosplay' in query_lower:
-        search_q = base_queries['cosplay']
-    elif 'festival' in query_lower:
-        search_q = base_queries['festival']
-    elif 'ngày lễ' in query_lower or 'holiday' in query_lower:
-        search_q = base_queries['holiday']
-    else:
-        search_q = base_queries['default']
-
-    try:
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': api_key, 'cx': cse_id, 'q': search_q, 'num': 5, 'gl': 'vn', 'hl': 'vi'}
-        response = await asyncio.to_thread(requests.get, url, params=params, timeout=10)
-        data = response.json()
-
-        if 'items' not in data:
-            result = "[CSE không có kết quả ~ tui bỏ qua nha]"
-        else:
-            relevant = []
-            for item in data['items'][:3]:
-                title = item.get('title', 'Không có tiêu đề')
-                snippet = item.get('snippet', '')
-                link = item.get('link', '')
-                if any(ad in link.lower() for ad in ['shopee', 'lazada', 'tiki', 'amazon']):
-                    continue
-                short_snippet = snippet[:140] + "..." if len(snippet) > 140 else snippet
-                relevant.append(f"**{title}**\n{short_snippet}\n[Link]({link})")
-
-            result = ("**Sự kiện hot sắp tới ở Việt Nam (CSE fallback):**\n" +
-                      "\n\n".join(relevant) +
-                      "\n\n[Info từ Google nha~ anh book vé sớm đi nè uwu]") if relevant else "[Không có event nổi bật ~ tui trả lời bình thường nha]"
-
-        async with CACHE_LOCK:
-            SEARCH_CACHE[cache_key] = {'result': result, 'time': datetime.now()}
-        return result
-
-    except Exception as e:
-        logger.error(f"CSE event fallback lỗi: {e}")
-        return "[Lỗi tìm kiếm ~ tui vẫn trả lời cute nha]"
-
-# --- SEARCH THÔNG TIN CHUNG (GLOBAL: OLLAMA PRIMARY + CSE FALLBACK) ---
+# --- SEARCH THÔNG TIN CHUNG (DÙNG BALANCE APIs) ---
 async def get_general_search(query):
-    """Search thông tin chung: Ollama primary (xịn), CSE fallback."""
+    """Search thông tin chung: Dùng balance APIs + cache."""
     query_lower = query.lower()
    
     event_keywords = ['sự kiện', 'festival', 'cosplay', 'ngày lễ', 'holiday', 'event']
@@ -818,67 +887,12 @@ async def get_general_search(query):
         if cache_key in SEARCH_CACHE and (datetime.now() - SEARCH_CACHE[cache_key]['time']).total_seconds() < 3600:
             return SEARCH_CACHE[cache_key]['result']
 
-    # Ollama primary
-    ollama_result = await _ollama_search_helper(query, focus="general")
-    if ollama_result:
-        async with CACHE_LOCK:
-            SEARCH_CACHE[cache_key] = {'result': ollama_result, 'time': datetime.now()}
-        logger.info("Ollama general search thành công")
-        return ollama_result
-
-    # CSE fallback
-    logger.info("Ollama general fail → dùng CSE fallback")
-    cse_id = os.getenv('GOOGLE_CSE_ID')
-    api_key = os.getenv('GOOGLE_CSE_API_KEY')
-    if not cse_id or not api_key:
-        return "[Fallback fail ~ tui dùng kiến thức cũ nha]"
-
-    try:
-        has_vi = any(c in 'áàảãạăắằẳẵặâấầẩãậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợúùủũụưứừửữựýỳỷỹỵ' for c in query)
-        lang = 'en' if re.search(r'[a-zA-Z]{4,}', query) and not has_vi else 'vi'
-        gl = 'us' if lang == 'en' else 'vn'
-        search_q = query
-        if re.search(r'\b(202[6-9]|năm\s+sau|sắp\s+tới)\b', query_lower):
-            search_q += f" {datetime.now().year + 1}"
-        search_q = f"{search_q} site:en.wikipedia.org OR site:bbc.com OR site:nytimes.com OR site:vietnamnet.vn OR site:tuoitre.vn"
-
-        url = "https://www.googleapis.com/customsearch/v1"
-        params = {'key': api_key, 'cx': cse_id, 'q': search_q, 'num': 3, 'gl': gl, 'hl': lang}
-        response = await asyncio.to_thread(requests.get, url, params=params, timeout=12)
-        data = response.json()
-
-        if 'error' in data:
-            code = data['error'].get('code', 0)
-            result = "[Quota CSE hết ~ tui dùng kiến thức cũ nha]" if code == 429 else f"[Lỗi search: {data['error'].get('message', 'Unknown')}]"
-            async with CACHE_LOCK:
-                SEARCH_CACHE[cache_key] = {'result': result, 'time': datetime.now()}
-            return result
-
-        if 'items' not in data or not data['items']:
-            result = "[Không tìm thấy info mới ~ tui dùng kiến thức cũ nha]"
-            async with CACHE_LOCK:
-                SEARCH_CACHE[cache_key] = {'result': result, 'time': datetime.now()}
-            return result
-
-        relevant = []
-        for item in data['items'][:2]:
-            title = item.get('title', '').strip()
-            snippet = item.get('snippet', '').strip()
-            link = item.get('link', '')
-            if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki', 'ads']):
-                continue
-            short_snippet = snippet[:130] + "..." if len(snippet) > 130 else snippet
-            relevant.append(f"**{title}**: {short_snippet} (Nguồn: {link})")
-
-        result = ("**Info nhanh từ web (CSE fallback):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI CHÍNH XÁC THEO STYLE E-GIRL, KHÔNG LEAK NGUỒN]") if relevant else "[Có kết quả nhưng không đáng tin ~ tui dùng kiến thức cũ nha]"
-
-        async with CACHE_LOCK:
-            SEARCH_CACHE[cache_key] = {'result': result, 'time': datetime.now()}
-        return result
-
-    except Exception as e:
-        logger.error(f"General search fallback lỗi: {e}")
-        return "[Lỗi search ~ tui vẫn cute bình thường nha]"
+    # Dùng balance APIs
+    result = await run_search_apis(query, focus="general")
+    
+    async with CACHE_LOCK:
+        SEARCH_CACHE[cache_key] = {'result': result, 'time': datetime.now()}
+    return result
 
 # --- AUTO ENRICH (TỐI ƯU: KHÔNG ẢNH) ---
 async def auto_enrich(query):
