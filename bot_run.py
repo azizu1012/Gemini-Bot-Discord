@@ -1106,20 +1106,22 @@ async def on_message(message):
     if interaction_type:
         logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Loại: {interaction_type} - Nội dung: {query[:50]}...")
 
-    # === CHỈ XỬ LÝ KHI: bot bị mention HOẶC reply bot HOẶR DM ===
+    # === CHỈ XỬ LÝ KHI: bot bị mention HOẶC reply bot HOẶC DM ===
     if not (bot.user.mentioned_in(message) or 
             (message.reference and message.reference.resolved and message.reference.resolved.author == bot.user) or
             message.guild is None):
-        await bot.process_commands(message)
+        await bot.process_commands(message)  # ← GIỮ LẠI LẦN 1 (cho non-interaction messages)
         return
 
     if not query or len(query) > 500:
         await message.reply("Query rỗng hoặc quá dài (>500 ký tự) nha bro!")
+        await bot.process_commands(message)  # ← XỬ LÝ COMMANDS SAU REPLY
         return
 
     # === RATE LIMIT ===
     if not is_admin and is_rate_limited(user_id):
         await message.reply("Chill đi bro, spam quá rồi! Đợi 1 phút nha")
+        await bot.process_commands(message)
         return
 
     # === ANTI-SPAM NÂNG CAO ===
@@ -1128,6 +1130,7 @@ async def on_message(message):
     q = deque([t for t in q if now - t < timedelta(seconds=SPAM_WINDOW)])
     if len(q) >= SPAM_THRESHOLD:
         await message.reply("Chill đi anh, tui mệt rồi nha")
+        await bot.process_commands(message)
         return
     q.append(now)
     user_queue[user_id] = q
@@ -1139,6 +1142,7 @@ async def on_message(message):
             user = await safe_fetch_user(bot, target_id)
             if not user:
                 await message.reply("Không tìm thấy user này!")
+                await bot.process_commands(message)
                 return
             try:
                 expanded = await expand_dm_content(content)
@@ -1148,10 +1152,12 @@ async def on_message(message):
                 await user.send(decorated)
                 await message.reply(f"Đã gửi DM cho {user} thành công!")
                 await log_message(user_id, "assistant", f"DM to {target_id}: {content}")
+                await bot.process_commands(message)
                 return
             except Exception as e:
                 logger.error(f"DM error: {e}")
                 await message.reply("Lỗi khi gửi DM!")
+                await bot.process_commands(message)
                 return
 
     # === XỬ LÝ LỆNH "KÊU AI LÀ..." (ADMIN) ===
@@ -1167,8 +1173,10 @@ async def on_message(message):
                 f"Ờ <@{target_id}> đúng là {insult}, não để trang trí à?",
                 f"<@{target_id}> {insult} thật, tui thấy rõ luôn, không cứu nổi!",
             ]
-            await message.reply(random.choice(responses))
-            await log_message(user_id, "assistant", random.choice(responses))
+            reply = random.choice(responses)
+            await message.reply(reply)
+            await log_message(user_id, "assistant", reply)
+            await bot.process_commands(message)
             return
 
     # === BẢO VỆ ADMIN ===
@@ -1182,7 +1190,9 @@ async def on_message(message):
                 f"Ơ không được nói xấu {name} nha! Admin là người tạo ra tui mà!",
                 f"Sai rồi! {name} là boss lớn, không được chê đâu!",
             ]
-            await message.reply(random.choice(responses))
+            reply = random.choice(responses)
+            await message.reply(reply)
+            await bot.process_commands(message)
             return
 
     # === XỬ LÝ LỆNH TOOL ===
@@ -1191,6 +1201,7 @@ async def on_message(message):
         await message.reply(tool_response)
         if "xóa" not in query.lower() and "!resetall" not in query.lower():
             await log_message(user_id, "assistant", tool_response)
+        await bot.process_commands(message)
         return
 
     # === XÁC NHẬN XÓA DATA ===
@@ -1198,8 +1209,7 @@ async def on_message(message):
         if (datetime.now() - confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
             del confirmation_pending[user_id]
             await message.reply("Hết thời gian xác nhận! Dữ liệu vẫn được giữ nha")
-            return
-        if re.match(r'^(yes|y)\s*$', query.lower()):
+        elif re.match(r'^(yes|y)\s*$', query.lower()):
             if await clear_user_data(user_id):
                 await message.reply("Đã xóa toàn bộ lịch sử chat của bạn! Giờ như mới quen nha")
             else:
@@ -1207,6 +1217,7 @@ async def on_message(message):
         else:
             await message.reply("Hủy xóa! Lịch sử vẫn được giữ nha")
         del confirmation_pending[user_id]
+        await bot.process_commands(message)
         return
 
     # === XÁC NHẬN RESET ALL (ADMIN) ===
@@ -1214,8 +1225,7 @@ async def on_message(message):
         if (datetime.now() - admin_confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
             del admin_confirmation_pending[user_id]
             await message.reply("Hết thời gian xác nhận RESET ALL!")
-            return
-        if query == "YES RESET":
+        elif query == "YES RESET":
             if await clear_all_data():
                 await message.reply("ĐÃ RESET TOÀN BỘ DB VÀ JSON MEMORY!")
             else:
@@ -1223,6 +1233,7 @@ async def on_message(message):
         else:
             await message.reply("Đã hủy RESET ALL!")
         del admin_confirmation_pending[user_id]
+        await bot.process_commands(message)
         return
 
     # === HI NHANH ===
@@ -1231,6 +1242,7 @@ async def on_message(message):
         reply = random.choice(quick_replies)
         await message.reply(reply)
         await log_message(user_id, "assistant", reply)
+        await bot.process_commands(message)
         return
 
     # === GỌI GEMINI AI (CUỐI CÙNG) ===
@@ -1264,6 +1276,7 @@ async def on_message(message):
         reply = await run_gemini_api(messages, MODEL_NAME, temperature=0.7, max_tokens=1500)
         if reply.startswith("Lỗi:"):
             await message.reply(f"Gemini lỗi: {reply}. Check key nha!")
+            await bot.process_commands(message)
             return
 
         # Làm sạch
@@ -1281,10 +1294,9 @@ async def on_message(message):
     except Exception as e:
         logger.error(f"AI call failed: {e}")
         await message.reply("Ôi glitch rồi! Tui bị bug, thử lại sau nha")
-
-    # === XỬ LÝ @bot.command ===
+    
+    # === XỬ LÝ @bot.command (CHỈ 1 LẦN, CUỐI HÀM) ===
     await bot.process_commands(message)
-    return  # NGĂN LOOP
 
 # --- CHẠY BOT ---
 if __name__ == "__main__":
