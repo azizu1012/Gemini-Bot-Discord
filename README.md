@@ -1,106 +1,187 @@
-# 🤖 Discord AI Assistant
+```markdown
+# Discord AI Assistant
 
 <p align="center">
-  <a href="https://github.com/your-username/your-repo-name/blob/main/LICENSE" target="_blank">
-    <img alt="License" src="https://img.shields.io/badge/License-MIT-blue.svg"/>
+  <a href="https://github.com/azizu1012/Gemini-Bot-Discord/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/azizu1012/Gemini-Bot-Discord?style=flat-square"/>
   </a>
-  <a href="https://discord.gg/your-invite" target="_blank">
-    <img alt="Discord" src="https://img.shields.io/discord/123456789012345678?label=Discord%20Server&logo=discord&color=7289DA"/>
+  <a href="https://discord.com/api/oauth2/authorize?client_id=YOUR_BOT_ID&permissions=274878258176&scope=bot%20applications.commands">
+    <img alt="Discord Bot" src="https://img.shields.io/badge/Discord-Add%20Bot-5865F2?style=flat-square&logo=discord&logoColor=white"/>
   </a>
-  <a href="https://www.python.org/" target="_blank">
-    <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-blue?logo=python"/>
+  <a href="https://www.python.org/">
+    <img alt="Python" src="https://img.shields.io/badge/Python-3.13%2B-blue?style=flat-square&logo=python"/>
   </a>
-  <a href="https://render.com/" target="_blank">
-    <img alt="Hosted on Render" src="https://img.shields.io/badge/Hosted%20on-Render-46E3B7?logo=render&logoColor=white"/>
+  <a href="https://render.com/">
+    <img alt="Render" src="https://img.shields.io/badge/Render-Background%20Worker-46E3B7?style=flat-square&logo=render&logoColor=white"/>
   </a>
 </p>
 
-## ✨ Giới thiệu
+---
 
-Đây là một Discord Bot AI hiệu suất cao, được xây dựng trên nền tảng **`discord.py`** và sử dụng mô hình ngôn ngữ **Google Gemini** để xử lý các tác vụ phức tạp. Bot được thiết kế để cung cấp thông tin cập nhật, hỗ trợ tính toán, và tương tác chat đa luồng.
+## Giới thiệu
+
+**Discord AI Assistant** là một bot Discord hiệu suất cao, được phát triển bằng `discord.py` và tích hợp **Google Gemini AI** để xử lý hội thoại tự nhiên, tìm kiếm thông tin thời gian thực và hỗ trợ tính toán toán học.
+
+Bot được thiết kế để hoạt động ổn định trên nền tảng **Render (Background Worker)**, không phụ thuộc vào web server, đảm bảo uptime cao và khả năng mở rộng.
 
 ---
 
-## 🛠️ Công cụ và Khả năng
+## Tính năng chính
 
-Bot tận dụng nhiều API bên ngoài để mở rộng khả năng và đảm bảo thông tin luôn được cập nhật và chính xác:
-
-### 🌐 Khả năng Tìm kiếm Web (Web Search/RAG)
-
-Bot sử dụng nhiều công cụ tìm kiếm đồng thời để thu thập thông tin theo thời gian thực (Real-time Information) trước khi trả lời.
-
-* **Công cụ sử dụng:** Google Custom Search Engine (CSE), SerpAPI, Tavily, Exa.ai, và Ollama Search.
-* **Chức năng:** Hỗ trợ trả lời các câu hỏi về sự kiện, thời tiết, tin tức và dữ liệu mới nhất.
-
-### 💬 Khả năng Tương tác & Xử lý Dữ liệu
-
-* **Tương tác đa kênh:** Phản hồi khi được **Mention** (`@Bot`), **Reply** tin nhắn, hoặc trong **Tin nhắn riêng (DM)**.
-* **Quản lý Chat History:** Lưu trữ lịch sử chat của từng người dùng vào **SQLite Database** để duy trì ngữ cảnh hội thoại.
-* **Tính năng Toán học:** Hỗ trợ giải quyết các bài toán toán học phức tạp bằng thư viện **SymPy**.
-* **Lệnh Command (Slash & Prefix):** Hỗ trợ các lệnh quản trị và tiện ích (ví dụ: `/dm`, `/history`, `/reset-all`).
+| Tính năng | Mô tả |
+|---------|-------|
+| **AI hội thoại thông minh** | Sử dụng Gemini AI với cơ chế failover 5 API key |
+| **Tìm kiếm thời gian thực** | Tích hợp **Google CSE**, **SerpAPI**, **Tavily**, **Exa.ai** (round-robin + cache) |
+| **Giải toán học** | Hỗ trợ biểu thức, phương trình, đạo hàm, tích phân qua **SymPy** |
+| **Quản lý lịch sử chat** | Lưu trữ theo user trong SQLite + bộ nhớ ngắn hạn (JSON) |
+| **Tương tác đa kênh** | Phản hồi khi mention, reply hoặc DM |
+| **Lệnh quản trị** | Slash commands: `/reset-chat`, `/dm`, `/history`, `!resetall` (admin) |
+| **Chống spam** | Rate limit + anti-spam nâng cao |
+| **Tự động backup DB** | Sao lưu tự động khi khởi động |
 
 ---
 
-## 🚀 Hướng dẫn Cài đặt & Triển khai
+## Yêu cầu hệ thống
 
-### 1. Phụ thuộc (Dependencies)
+- Python 3.13+
+- Discord Bot Token
+- Google Gemini API Key(s)
+- API Key cho ít nhất một trong các dịch vụ tìm kiếm (khuyến nghị dùng cả 4)
 
-Cài đặt các thư viện cần thiết thông qua file `requirements.txt`:
+---
+
+## Cài đặt cục bộ
 
 ```bash
+git clone https://github.com/azizu1012/Gemini-Bot-Discord.git
+cd Gemini-Bot-Discord
 pip install -r requirements.txt
-````
+```
 
-| Thư viện chính | Vai trò |
-| :--- | :--- |
-| `discord.py` | Framework Discord Bot |
-| `google-generativeai` | Kết nối API Gemini |
-| `flask` | Tạo Web Server Keep-Alive (24/7) |
-| `sympy` | Hỗ trợ tính toán toán học |
-| `google-search-results` | SerpAPI Integration |
-| `tavily-python` & `exa-py` | Các công cụ tìm kiếm bổ sung |
+Tạo file `.env` tại thư mục gốc:
 
-### 2\. Thiết lập Biến Môi trường (`.env`)
+```env
+DISCORD_TOKEN=your_bot_token
+GEMINI_API_KEY_PROD=your_primary_key
+GEMINI_API_KEY_TEST=key_2
+GEMINI_API_KEY_BACKUP=key_3
+GEMINI_API_KEY_EXTRA1=key_4
+GEMINI_API_KEY_EXTRA2=key_5
 
-Tạo file `.env` và điền các khóa API/token cần thiết.
+MODEL_NAME=gemini-2.0-flash-exp
 
-| Biến Môi Trường | Mô tả |
-| :--- | :--- |
-| `DISCORD_TOKEN` | Token đăng nhập Bot Discord. |
-| `GEMINI_API_KEY_PROD` | Key API chính của Google Gemini. |
-| `GOOGLE_CSE_ID` | ID của Google Custom Search Engine (CSE). |
-| `GOOGLE_CSE_API_KEY` | Key API cho Google CSE. |
-| `OLLAMA_SEARCH_API_KEY` | Key API cho dịch vụ Ollama Search. |
-| `ADMIN_ID` | Discord ID của người quản trị (Admin). |
-| `MODEL_NAME` | Mô hình Gemini được sử dụng (ví dụ: `gemini-2.5-flash`). |
+ADMIN_ID=your_admin_user_id
 
-> ⚠️ **Bảo mật:** KHÔNG bao giờ commit file `.env` chứa các API Key lên GitHub/public repository.
+# Search APIs (tối thiểu 1, khuyến nghị dùng hết)
+SERPAPI_API_KEY=your_serpapi_key
+TAVILY_API_KEY=your_tavily_key
+EXA_API_KEY=your_exa_key
+GOOGLE_CSE_ID=your_cse_id
+GOOGLE_CSE_API_KEY=your_cse_key
 
-### 3\. Khởi động Bot
+# Optional
+WEATHER_API_KEY=your_weather_key
+```
 
-#### 💻 Chạy Local
+Chạy bot:
 
 ```bash
 python bot_run.py
 ```
 
-#### ☁️ Triển khai trên Cloud (Render)
+---
 
-Dự án sử dụng module `keep_alive.py` để tạo một Web Server Flask, giúp giữ cho Bot luôn hoạt động 24/7 trên các nền tảng hosting miễn phí như Render.
+## Triển khai trên Render (Background Worker)
 
-1.  **Cấu hình Biến:** Thêm tất cả các biến từ file `.env` vào phần **Environment** trên Dashboard Render.
-2.  **Start Command:** Thiết lập lệnh khởi chạy dịch vụ là:
-    ```
-    python bot_run.py
-    ```
-3.  **Duy trì 24/7:** Sử dụng dịch vụ giám sát bên ngoài (ví dụ: UptimeRobot) để ping endpoint `/` của Bot, ngăn dịch vụ bị idle/ngủ.
+> **Không sử dụng Flask hoặc Web Service** – chỉ dùng **Background Worker** để tránh restart loop.
 
------
+### 1. Tạo dịch vụ
 
-## 📜 Giấy phép (License)
+1. Truy cập [Render Dashboard](https://dashboard.render.com)
+2. **New** → **Background Worker**
+3. Kết nối repository: `azizu1012/Gemini-Bot-Discord`
 
-Dự án này được phát hành dưới Giấy phép **MIT**.
+### 2. Cấu hình
+
+| Trường | Giá trị |
+|-------|--------|
+| **Name** | `discord-ai-assistant` |
+| **Branch** | `main` |
+| **Runtime** | `Python 3` |
+| **Build Command** | `pip install -r requirements.txt` |
+| **Start Command** | `python bot_run.py` |
+
+### 3. Biến môi trường
+
+Thêm toàn bộ biến từ file `.env` vào phần **Environment** trên Render.
+
+> **Lưu ý**: Không cần biến `PORT`, không cần `keep_alive.py`.
+
+---
+
+## Cấu trúc dự án
 
 ```
-
+/
+├── bot_run.py              # Logic chính
+├── requirements.txt        # Dependencies
+├── chat_history.db         # SQLite DB (tạo tự động)
+├── chat_history_backup.db  # Backup DB
+├── short_term_memory.json  # Bộ nhớ ngắn hạn
+├── bot.log                 # Log hoạt động
+└── README.md
 ```
+
+---
+
+## Dependencies (`requirements.txt`)
+
+```txt
+discord.py
+python-dotenv
+sympy
+google-generativeai
+requests
+google-search-results
+tavily-python
+exa-py
+```
+
+---
+
+## Lệnh Slash (Discord)
+
+| Lệnh | Mô tả | Quyền |
+|------|------|------|
+| `/reset-chat` | Xóa lịch sử chat của người dùng | Mọi người |
+| `/dm` | Gửi tin nhắn riêng (admin) | Admin |
+| `/history` | Xem lịch sử chat (admin) | Admin |
+
+---
+
+## Bảo mật
+
+- **Không commit `.env`** lên repository công khai.
+- Sử dụng **Background Worker** để tránh lộ port và restart loop.
+- Tất cả API key được quản lý qua **Environment Variables** trên Render.
+
+---
+
+## Giấy phép
+
+Dự án được cấp phép theo **[MIT License](LICENSE)**.
+
+---
+
+## Liên hệ & Hỗ trợ
+
+- **Repository**: [github.com/azizu1012/Gemini-Bot-Discord](https://github.com/azizu1012/Gemini-Bot-Discord)
+- **Issues**: Báo lỗi hoặc đề xuất tính năng tại [GitHub Issues](https://github.com/azizu1012/Gemini-Bot-Discord/issues)
+
+---
+
+> **Đã được kiểm thử và triển khai thành công trên Render Free Tier**  
+> **Không cần UptimeRobot nếu bot có tương tác thường xuyên**
+```
+
+---

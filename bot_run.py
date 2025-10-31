@@ -160,6 +160,21 @@ intents.message_content = True
 intents.dm_messages = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
+# --- KEEP-ALIVE WEBHOOK ---
+from flask import Flask, request
+import threading
+
+# Flask app cho webhook keep-alive
+keep_alive_app = Flask(__name__)
+
+@keep_alive_app.route('/', methods=['GET', 'POST'])
+def webhook():
+    return "Bot alive! No sleep pls~ 😴"
+
+def run_keep_alive():
+    port = int(os.environ.get('PORT', 8080))
+    keep_alive_app.run(host='0.0.0.0', port=port, debug=False)
+
 # --- HÀM GEMINI ---
 async def run_gemini_api(messages, model, temperature=0.7, max_tokens=1500):
     global LAST_WORKING_KEY_INDEX
@@ -643,12 +658,7 @@ async def clear_all_data():
 
     return db_cleared and json_cleared
 
-
-# Thêm intents nếu chưa có
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)  
-
+# --- SLASH COMMANDS DISCORD ---
 #Khởi tạo bot
 @bot.tree.command(name="reset-chat", description="Xóa lịch sử chat của bạn")
 async def reset_chat_slash(interaction: discord.Interaction):
@@ -1300,5 +1310,6 @@ async def on_message(message):
 
 # --- CHẠY BOT ---
 if __name__ == "__main__":
-    keep_alive()
+    threading.Thread(target=run_keep_alive, daemon=True).start()
+    print("Máy săn Bot đang khởi động...")
     bot.run(TOKEN)
