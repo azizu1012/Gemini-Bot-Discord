@@ -1,5 +1,4 @@
 <DOCUMENT filename="README.md">
-```markdown
 # Discord AI Assistant
 
 <p align="center">
@@ -206,4 +205,5 @@ Dự án được cấp phép theo **[MIT License](LICENSE)**.
 > **Không cần Background Worker, không cần UptimeRobot nếu có người chat thường xuyên**  
 > **Flask tích hợp → ổn định, không loop, không lỗi**
 ```
+
 </DOCUMENT>
