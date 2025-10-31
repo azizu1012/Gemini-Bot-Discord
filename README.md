@@ -1,4 +1,3 @@
-```markdown
 # Discord AI Assistant
 
 <p align="center">
@@ -183,5 +182,6 @@ Dự án được cấp phép theo **[MIT License](LICENSE)**.
 > **Đã được kiểm thử và triển khai thành công trên Render Free Tier**  
 > **Không cần UptimeRobot nếu bot có tương tác thường xuyên**
 ```
+
 
 ---
