@@ -1,3 +1,5 @@
+<DOCUMENT filename="README.md">
+```markdown
 # Discord AI Assistant
 
 <p align="center">
@@ -29,14 +31,15 @@ Bot được thiết kế để hoạt động **ổn định 24/7 trên Render 
 
 | Tính năng | Mô tả |
 |---------|-------|
-| **AI hội thoại thông minh** | Sử dụng Gemini AI với cơ chế failover 5 API key |
-| **Tìm kiếm thời gian thực** | Tích hợp **Google CSE**, **SerpAPI**, **Tavily**, **Exa.ai** (round-robin + cache) |
-| **Giải toán học** | Hỗ trợ biểu thức, phương trình, đạo hàm, tích phân qua **SymPy** |
+| **AI hội thoại thông minh** | Sử dụng Gemini AI với cơ chế failover 5 API key và tool calling tự động |
+| **Tìm kiếm thời gian thực** | Tích hợp **Google CSE**, **SerpAPI**, **Tavily**, **Exa.ai** (round-robin + cache). AI tự quyết định search nếu kiến thức out-date |
+| **Giải toán học** | Hỗ trợ biểu thức, phương trình, đạo hàm, tích phân qua **SymPy** (tool calling tự động) |
 | **Quản lý lịch sử chat** | Lưu trữ theo user trong SQLite + bộ nhớ ngắn hạn (JSON) |
 | **Tương tác đa kênh** | Phản hồi khi mention, reply hoặc DM |
 | **Lệnh quản trị** | Slash commands: `/reset-chat`, `/dm`, `/history`, `!resetall` (admin) |
 | **Chống spam** | Rate limit + anti-spam nâng cao |
 | **Tự động backup DB** | Sao lưu tự động khi khởi động |
+| **Thời tiết & Ghi chú** | Tool calling cho thời tiết và lưu note |
 
 ---
 
@@ -203,3 +206,4 @@ Dự án được cấp phép theo **[MIT License](LICENSE)**.
 > **Không cần Background Worker, không cần UptimeRobot nếu có người chat thường xuyên**  
 > **Flask tích hợp → ổn định, không loop, không lỗi**
 ```
+</DOCUMENT>
