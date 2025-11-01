@@ -1,11 +1,10 @@
 <DOCUMENT filename="README.md">
-# Discord AI Assistant
 
 <p align="center">
   <a href="https://github.com/azizu1012/Gemini-Bot-Discord/blob/main/LICENSE">
     <img alt="License" src="https://img.shields.io/github/license/azizu1012/Gemini-Bot-Discord?style=flat-square"/>
   </a>
-  <a href="https://discord.com/api/oauth2/authorize?client_id=YOUR_BOT_ID&permissions=274878258176&scope=bot%20applications.commands">
+  <a href="https://discord.com/oauth2/authorize?client_id=1418949883859308594&permissions=8&integration_type=0&scope=bot">
     <img alt="Discord Bot" src="https://img.shields.io/badge/Discord-Add%20Bot-5865F2?style=flat-square&logo=discord&logoColor=white"/>
   </a>
   <a href="https://www.python.org/">
@@ -207,3 +206,4 @@ Dự án được cấp phép theo **[MIT License](LICENSE)**.
 ```
 
 </DOCUMENT>
+
