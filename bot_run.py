@@ -821,15 +821,6 @@ def is_admin():
     return app_commands.check(predicate)
 
 
-# Autocomplete cho channel: Chỉ show text channels mà bot có quyền gửi
-async def channel_autocomplete(interaction: discord.Interaction, current: str):
-    choices = []
-    for channel in interaction.guild.text_channels:
-        if channel.permissions_for(interaction.guild.me).send_messages and current.lower() in channel.name.lower():
-            choices.append(app_commands.Choice(name=channel.name, value=channel.id))
-    return choices[:25]  # Discord limit 25
-
-
 @bot.tree.command(name="reset-chat", description="Xóa lịch sử chat của bạn")
 async def reset_chat_slash(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)  # Defer để tránh timeout
@@ -852,11 +843,8 @@ async def reset_all_slash(interaction: discord.Interaction):
     message="Nội dung tin nhắn",
     channel="Kênh để gửi tin nhắn (tùy chọn, mặc định là DM)"
 )
-
-
-@app_commands.autocomplete(channel=channel_autocomplete)  # Filter channels trong UI
 @is_admin()
-async def message_to_slash(interaction: discord.Interaction, user: discord.User, message: str, channel: discord.abc.GuildChannel = None):  # Thay TextChannel thành GuildChannel để autocomplete work
+async def message_to_slash(interaction: discord.Interaction, user: discord.User, message: str, channel: discord.TextChannel = None):
     await interaction.response.defer(ephemeral=True)
     user_id = str(user.id)
     cleaned_message = ' '.join(message.strip().split())
@@ -869,7 +857,7 @@ async def message_to_slash(interaction: discord.Interaction, user: discord.User,
     
     try:
         if channel:
-            if not isinstance(channel, discord.TextChannel):  # Check type
+            if not isinstance(channel, discord.TextChannel):
                 await interaction.followup.send("Kênh phải là text channel! 😅", ephemeral=True)
                 return
             if channel.guild != interaction.guild:
