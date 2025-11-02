@@ -3,5 +3,8 @@ python-dotenv
 sympy
 google-generativeai
 requests
-duckduckgo-search
+google-search-results
+tavily-python
+exa-py
 flask
+aiofiles
