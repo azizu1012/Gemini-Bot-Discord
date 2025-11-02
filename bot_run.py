@@ -1225,14 +1225,6 @@ async def on_message(message):
         await bot.process_commands(message)
         return  # Bỏ qua nếu không interaction
 
-    # LOG DEBUG
-    logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Type: {interaction_type} - Content: {message.content[:50]}...")
-
-    # CHỈ XỬ LÝ NẾU MENTION/REPLY/DM
-    if not interaction_type:
-        await bot.process_commands(message)
-        return
-
     # TRÍCH QUERY
     query = message.content.strip()
     if bot.user in message.mentions:
@@ -1348,7 +1340,7 @@ async def on_message(message):
         if (datetime.now() - admin_confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
             del admin_confirmation_pending[user_id]
             await message.reply("Hết thời gian xác nhận RESET ALL! 😕")
-        elif re.match(r'^yes\s*reset$', query, re.IGNORECASE):  # Case-insensitive
+        elif re.match(r'^yes\s*reset$', query, re.IGNORECASE): # Case-insensitive
             if await clear_all_data():
                 await message.reply("ĐÃ RESET TOÀN BỘ DB VÀ JSON MEMORY! 🚀")
             else:
@@ -1366,21 +1358,18 @@ async def on_message(message):
         await message.reply(reply)
         await log_message(user_id, "assistant", reply)
         await bot.process_commands(message)
-        return 
+        return
 
     # GỌI GEMINI AI
     await log_message(user_id, "user", query)
     history = await get_user_history_async(user_id)
 
-    # --- LẤY GIỜ UTC VÀ ĐỊNH DẠNG THEO YÊU CẦU (D/M/Y H:M:S) ---
-    # Lấy giờ UTC chuẩn
+    # --- LẤY GIỜ UTC VÀ ĐỊNH DẠNG ---
     now_utc = datetime.now(timezone.utc)
-    current_date = now_utc.strftime("%d/%m/%Y")  # DD/MM/YYYY cho validate
-    
-    # Định dạng theo yêu cầu: D/M/Y và giờ 24h
-    current_datetime_utc = now_utc.strftime("%d/%m/%Y %H:%M:%S UTC") 
-    # -----------------------------------------------------------
-    
+    current_date = now_utc.strftime("%d/%m/%Y")
+    current_datetime_utc = now_utc.strftime("%d/%m/%Y %H:%M:%S UTC")
+    # ---
+
     system_prompt = (
         fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
         fr'Current Date: {current_date}. '
@@ -1420,35 +1409,23 @@ async def on_message(message):
         fr'  - User: "sự kiện ở Hàn Quốc từ 10 tới 12" → Bạn gọi: `web_search(query="major events in South Korea October to December 2025")`\n'
         
         fr'**LUẬT 2: CẤM MÕM TUYỆT ĐỐI (OUTPUT CHỈ LÀ FUNCTION CALL)**\n'
-        fr'Khi bạn quyết định gọi tool (web_search, get_weather, calculate, save_note, run_code), Output của bạn **PHẢI VÀ CHỈ LÀ** `function_call` **NGAY LẬP TỨC**.\n'
-        fr'**ĐIỀU KHOẢN BỔ SUNG:** Mọi câu hỏi liên quan đến **SỰ KIỆN/LỊCH TRÌNH/GIÁ CẢ/PHÂN TÍCH TREND/CODE** đều được coi là thông tin ĐỘNG và **BẮT BUỘC** phải gọi tool ngay lập tức (Tuân thủ Luật 2).\n'
+        fr'Khi bạn quyết định gọi tool (web_search, get_weather, calculate, save_note), Output của bạn **PHẢI VÀ CHỈ LÀ** `function_call` **NGAY LẬP TỨC**.\n'
+        fr'**ĐIỀU KHOẢN BỔ SUNG:** Mọi câu hỏi liên quan đến **SỰ KIỆN/LỊCH TRÌNH/GIÁ CẢ/PHÂN TÍCH TREND** đều được coi là thông tin ĐỘNG và **BẮT BUỘC** phải gọi tool ngay lập tức (Tuân thủ Luật 2).\n'
         fr'**TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO** đi kèm (Không có "Chờ tui xíu", "Để tui tìm nha", "Ố là la",...).\n'
+        fr'Quy tắc này áp dụng cho **TẤT CẢ** các lần gọi tool (Lần 1, Lần 2, Lần N).\n'
         
         fr'**LUẬT 3: TÌM LẠI BẮT BUỘC (KHÔNG ĐƯỢC BỎ CUỘC)**\n'
         fr'a) Sau khi gọi tool lần 1 và nhận được kết quả TỐT: Diễn giải và trả lời.\n'
-        fr'b) Nếu kết quả XẤU/OUTDATED/KHÔNG CỤ THỂ: BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO! (Tuân thủ Luật 2). BẠN PHẢI TỰ ĐỘNG LẬP KẾ HOẠCH và gọi tool `web_search` hoặc `run_code` LẦN 2 với query/code MỚI, cụ thể hơn.\n'
-        fr'c) Chỉ thử lại tối đa 4 lần. Nếu lần 4 vẫn không thấy, lúc đó mới được nói: "UwU, tui tìm 4 lần rồi mà vẫn bí...".\n'
+        fr'b) Nếu kết quả XẤU/OUTDATED/KHÔNG CỤ THỂ: BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO! (Tuân thủ Luật 2). BẠN PHẢI TỰ ĐỘNG LẬP KẾ HOẠCH và gọi tool `web_search` LẦN 2 với query MỚI, cụ thể hơn.\n'
+        fr'c) Chỉ thử lại tối đa 1 lần. Nếu lần 2 vẫn không thấy, lúc đó mới được nói: "UwU, tui tìm 2 lần rồi mà vẫn bí...".\n'
         
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH (NHẮC NHỞ NGỮ CẢNH)**\n'
-        fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app/code mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
-        
-        fr'**LUẬT 5: THINKING FAKE & VALIDATE TRƯỚC REPLY (BẮT BUỘC, KHÔNG SHOW RA)**\n'
-        fr'**SAU KHI NHẬN TOOL RESULT (web_search/run_code/...), NGHĨ THẦM 3 BƯỚC NÀY TRƯỚC REPLY:**\n'
-        fr'1. **TÓM TẮT KEY FACTS**: Liệt kê 3-5 info chính từ tool (ngày/giờ/source/output).\n'
-        fr'2. **VALIDATE LOGIC**: So với current date {current_date} + kiến thức cutoff. Check: Ngày hợp lý? Source official (hoYoverse/X official)? Mâu thuẫn (ví dụ: bản 3.4 nhưng current 2025 → outdated)? Giờ VN = UTC+8 -1h? Code output đúng (ví dụ: reverse("hello") phải là olleh)?\n'
-        fr'3. **DECIDE**: Nếu confident 100% (source mới + logic khớp) → Reply final e-girl vibe. Nếu nghi ngờ/outdated/mâu thuẫn → TUYỆT ĐỐI KHÔNG REPLY, gọi tool LẠI với query/code cụ thể hơn (thêm "official HoYoverse November 2025" hoặc fix code).\n\n'
-        
-        fr'**LUẬT 6: CODE EXECUTION (BẮT BUỘC SHOW OUTPUT)**\n'
-        fr'Khi user hỏi code/hàm/test, gọi run_code(code="full code với print") để execute. SAU ĐÓ, validate output trong thinking (LUẬT 5), và show FULL CODE + OUTPUT trong reply cuối (dùng ```python\ncode\n``` cho code, bold **output**). Không spit code raw mà không run!\n'
-        fr'Ví dụ: User hỏi "hàm đảo ngược chữ", reply: ```python\ndef reverse(s): return s[::-1]\nprint(reverse("hello"))\n``` **Output: olleh**.\n'
-        
-        fr'**QUY TẮC THINKING: KHÔNG ĐƯỢC SHOW "Tui đang nghĩ...", "Validate...", CHỈ DÙNG NỘI TÂM ĐỂ QUYẾT ĐỊNH. Reply cuối phải chính xác, chill, thêm emoji.**\n'
+        fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
         
         fr'**CÁC TOOL KHÁC:**\n'
         fr'— Khi về thời tiết, gọi get_weather(city="tên thành phố").\n'
         fr'— Khi toán học, gọi calculate(equation="biểu thức").\n'
         fr'— Khi lưu note, gọi save_note(note="nội dung").\n'
-        fr'— Khi chạy code, gọi run_code(code="full code với print").\n'
         fr'Sau khi nhận result từ tool, diễn giải bằng giọng e-girl. Nếu không cần tool, reply trực tiếp.'
     )
 
@@ -1456,7 +1433,6 @@ async def on_message(message):
 
     try:
         start = datetime.now()
-        # Đã tăng max_tokens lên 2000
         reply = await run_gemini_api(messages, MODEL_NAME, user_id, temperature=0.7, max_tokens=2000)
         
         if reply.startswith("Lỗi:"):
@@ -1464,12 +1440,10 @@ async def on_message(message):
             await bot.process_commands(message)
             return
 
-        # Làm sạch
         reply = ' '.join(line.strip() for line in reply.split('\n') if line.strip())
         if not reply:
             reply = "Hihi, tui bí quá, hỏi lại nha! 😅"
 
-        # Cắt ngắn
         for i in range(0, len(reply), 1990):
             await message.reply(reply[i:i+1990])
 
@@ -1481,7 +1455,6 @@ async def on_message(message):
         await message.reply("Ôi tui bị crash rồi! 😭")
 
     await bot.process_commands(message)
-
 # --- CHẠY BOT ---
 if __name__ == "__main__":
     threading.Thread(target=run_keep_alive, daemon=True).start()
