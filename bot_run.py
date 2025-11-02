@@ -77,6 +77,17 @@ ALL_TOOLS = [
             }
         )
     ]),
+    Tool(function_declarations=[
+        FunctionDeclaration(
+            name="run_code",
+            description="Chạy code Python để test hàm hoặc tính toán phức tạp. Output sẽ được trả về để hiển thị trong reply cuối.",
+            parameters={
+                "type": "object",
+                "properties": {"code": {"type": "string", "description": "Code Python để chạy (bao gồm print để show output)."}},
+                "required": ["code"]
+            }
+        )
+    ]),
 ]
 
 # === BỘ ĐIỀU PHỐI TOOL ===
@@ -102,6 +113,16 @@ async def call_tool(function_call, user_id):
         elif name == "save_note":
             note = args.get("note", "")
             return await save_note(note, user_id)
+        
+        elif name == "run_code":
+            code = args.get("code", "")
+            try:
+                exec_globals = {}
+                exec(code, exec_globals)
+                output = exec_globals.get('output', 'No output')  # Nếu code set 'output' var
+                return f"Code execution output: {output}"
+            except Exception as e:
+                return f"Lỗi chạy code: {str(e)}"
 
         else:
             return "Tool không tồn tại!"
@@ -304,7 +325,7 @@ async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tok
             )
 
             # --- (FIX) VÒNG LẶP TOOL CALLING (Tối đa 3 lần) ---
-            for _ in range(5): # Giới hạn n lần gọi tool
+            for _ in range(7): # Giới hạn n lần gọi tool
                 
                 # (FIX) Dùng model.generate_content, không dùng start_chat
                 response = await asyncio.to_thread(
@@ -884,49 +905,62 @@ async def message_to_slash(interaction: discord.Interaction, user: discord.User,
 
 
 # --- HÀM BALANCE SEARCH APIs (THAY THẾ OLLAMA) ---
-async def run_search_apis(query, focus="general"):
-    logger.info(f"CALLING SEARCH APIs for '{query}' (focus: {focus})")
-    """Balance 4 APIs: CSE (0), SerpAPI (1), Tavily (2), Exa (3). Fallback nếu fail."""
+async def run_search_apis(query, mode="general"):
+    logger.info(f"CALLING SEARCH APIs for '{query}' (mode: {mode})")
+    """Ưu tiên Google CSE, fallback SerpAPI/Tavily/Exa nếu fail. Balance 3 APIs fallback với retry chain."""
     global SEARCH_API_COUNTER
-    apis = ["CSE", "SerpAPI", "Tavily", "Exa"]
-    
     async with SEARCH_LOCK:
-        idx = SEARCH_API_COUNTER % 4
-        SEARCH_API_COUNTER += 1  # Round-robin
-    
-    tried = set()
-    start_idx = idx
-    
-    for i in range(4):  # Thử tối đa 4 lần (fallback chain)
-        api_idx = (start_idx + i) % 4
-        if api_idx in tried:
-            continue
-        tried.add(api_idx)
-        api_name = apis[api_idx]
+        tried = set()
         
+        # Ưu tiên Google CSE
         try:
-            if api_name == "CSE":
-                result = await _search_cse(query) # Bỏ focus
-            elif api_name == "SerpAPI":
-                if not SERPAPI_API_KEY: continue
-                result = await _search_serpapi(query) # Bỏ focus
-            elif api_name == "Tavily":
-                if not TAVILY_API_KEY: continue
-                result = await _search_tavily(query) # Bỏ focus
-            elif api_name == "Exa":
-                if not EXA_API_KEY: continue
-                result = await _search_exa(query) # Bỏ focus
-            
-            if result and result.strip():  # Nếu có kết quả hợp lệ
-                logger.info(f"Search thành công với {api_name} cho query: {query[:50]}...")
+            result = await _search_cse(query)  # Fix: Dùng _search_cse như code gốc của mày
+            if result and "error" not in result.lower():  # Check kết quả hợp lệ
+                logger.info(f"CSE thành công cho query: {query[:50]}...")
                 return result
-        
         except Exception as e:
-            logger.error(f"{api_name} fail cho query '{query}': {e}")
-            continue
-    
-    logger.warning(f"Tất cả 4 APIs fail cho query: {query}")
-    return ""
+            logger.warning(f"CSE fail cho query '{query}': {e}")
+            tried.add(0)  # Đánh dấu CSE đã thử
+        
+        # Fallback xoay vòng 3 APIs còn lại
+        apis = ["SerpAPI", "Tavily", "Exa"]
+        start_idx = SEARCH_API_COUNTER % 3
+        SEARCH_API_COUNTER += 1
+
+        for i in range(3):  # Thử tối đa 3 lần (SerpAPI, Tavily, Exa)
+            api_idx = (start_idx + i) % 3
+            if api_idx in tried:
+                continue
+            tried.add(api_idx)
+            api_name = apis[api_idx]
+            
+            try:
+                if api_name == "SerpAPI":
+                    if not SERPAPI_API_KEY:
+                        logger.warning("SerpAPI key thiếu, skip.")
+                        continue
+                    result = await _search_serpapi(query)
+                elif api_name == "Tavily":
+                    if not TAVILY_API_KEY:
+                        logger.warning("Tavily key thiếu, skip.")
+                        continue
+                    result = await _search_tavily(query)
+                elif api_name == "Exa":
+                    if not EXA_API_KEY:
+                        logger.warning("Exa key thiếu, skip.")
+                        continue
+                    result = await _search_exa(query)
+                
+                if result and result.strip():
+                    logger.info(f"{api_name} thành công cho query: {query[:50]}...")
+                    return result
+            
+            except Exception as e:
+                logger.error(f"{api_name} fail cho query '{query}': {e}")
+                continue
+        
+        logger.warning(f"Tất cả APIs (CSE, SerpAPI, Tavily, Exa) fail cho query: {query}")
+        return ""
 
 # -------------------------------------------------------------------------
 # CÁC HÀM HELPER: LẤY QUERY TỪ GEMINI VÀ CHẠY THẲNG
@@ -1337,7 +1371,6 @@ async def on_message(message):
     # -----------------------------------------------------------
     
     system_prompt = (
-        # 🌟 Đã sửa: FIX MÚI GIỜ (BẢN CUỐI CÙNG) & FIX SyntaxWarning (dùng fr'...')
         fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
         fr'Current Date: {current_date}. '
         fr'Múi giờ User (VN): UTC+7. Kiến thức cutoff: 2024.\n'
@@ -1352,6 +1385,16 @@ async def on_message(message):
         fr'PERSONALITY:\n'
         fr'Bạn nói chuyện tự nhiên, vui vẻ, thân thiện như bạn bè! Dùng giọng điệu thoải mái, pha chút từ lóng giới trẻ (như "xịn xò", "chill", "hihi", "kg=không", "dzô=vô") và nhiều emoji.\n\n'
         
+        fr'**FORMAT REPLY (BẮT BUỘC CHO DỄ ĐỌC):**\n'
+        fr'Dùng markdown Discord để reply đẹp, dễ hiểu:\n'
+        fr'* **List**: Dùng * hoặc - cho danh sách (ví dụ: * Bắt đầu: 05:00 VN\n* Kết: 10:00 VN).\n'
+        fr'* **Bold**: Dùng **key fact** cho ngày/giờ/phiên bản (ví dụ: **Bản 3.7**).\n'
+        fr'* **Code blocks**: Dùng ```python'
+        fr'* **Xuống dòng**: Dùng \n để tách đoạn, không reply 1 cục.\n'
+        fr'* **Cấu trúc**: Mở đầu chill (1-2 câu vui), body là list/bold cho info chính, kết bằng emoji.\n'
+        fr'Ví dụ reply HSR: \n'
+        fr'Ố là la, tui tính kỹ nha!\n**Bản 3.7:**\n* Ra mắt: 05/11/2025\n* Bảo trì: **05:00-10:00 VN**\nChill đợi dzô game thôi! ✨\n\n'
+        
         fr'*** QUY TRÌNH SỬ DỤNG TOOLS (CỰC KỲ QUAN TRỌNG) ***\n'
         
         fr'**LUẬT 1: GIẢI MÃ VIẾT TẮT VÀ TỐI ƯU HÓA QUERY**\n'
@@ -1365,32 +1408,36 @@ async def on_message(message):
         fr'  - User: "sự kiện ở Mỹ tháng 12" → Bạn gọi: `web_search(query="fun events in USA December 2025")`\n'
         fr'  - User: "sự kiện ở Hàn Quốc từ 10 tới 12" → Bạn gọi: `web_search(query="major events in South Korea October to December 2025")`\n'
         
-        # 🔥 ĐIỂM SỬA CHỮA QUAN TRỌNG: ÉP BUỘC TOOL CALL cho mọi thông tin động
         fr'**LUẬT 2: CẤM MÕM TUYỆT ĐỐI (OUTPUT CHỈ LÀ FUNCTION CALL)**\n'
-        fr'Khi bạn quyết định gọi tool (web_search, get_weather, calculate, save_note), Output của bạn **PHẢI VÀ CHỈ LÀ** `function_call` **NGAY LẬP TỨC**.\n'
-        fr'**ĐIỀU KHOẢN BỔ SUNG:** Mọi câu hỏi liên quan đến **SỰ KIỆN/LỊCH TRÌNH/GIÁ CẢ/PHÂN TÍCH TREND** đều được coi là thông tin ĐỘNG và **BẮT BUỘC** phải gọi tool ngay lập tức (Tuân thủ Luật 2).\n'
+        fr'Khi bạn quyết định gọi tool (web_search, get_weather, calculate, save_note, run_code), Output của bạn **PHẢI VÀ CHỈ LÀ** `function_call` **NGAY LẬP TỨC**.\n'
+        fr'**ĐIỀU KHOẢN BỔ SUNG:** Mọi câu hỏi liên quan đến **SỰ KIỆN/LỊCH TRÌNH/GIÁ CẢ/PHÂN TÍCH TREND/CODE** đều được coi là thông tin ĐỘNG và **BẮT BUỘC** phải gọi tool ngay lập tức (Tuân thủ Luật 2).\n'
         fr'**TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO** đi kèm (Không có "Chờ tui xíu", "Để tui tìm nha", "Ố là la",...).\n'
-        fr'Quy tắc này áp dụng cho **TẤT CẢ** các lần gọi tool (Lần 1, Lần 2, Lần N).\n'
         
         fr'**LUẬT 3: TÌM LẠI BẮT BUỘC (KHÔNG ĐƯỢC BỎ CUỘC)**\n'
         fr'a) Sau khi gọi tool lần 1 và nhận được kết quả TỐT: Diễn giải và trả lời.\n'
-        fr'b) Nếu kết quả XẤU/OUTDATED/KHÔNG CỤ THỂ: BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO! (Tuân thủ Luật 2). BẠN PHẢI TỰ ĐỘNG LẬP KẾ HOẠCH và gọi tool `web_search` LẦN 2 với query MỚI, cụ thể hơn.\n'
-        fr'c) Chỉ thử lại tối đa 1 lần. Nếu lần 2 vẫn không thấy, lúc đó mới được nói: "UwU, tui tìm 2 lần rồi mà vẫn bí...".\n'
+        fr'b) Nếu kết quả XẤU/OUTDATED/KHÔNG CỤ THỂ: BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO! (Tuân thủ Luật 2). BẠN PHẢI TỰ ĐỘNG LẬP KẾ HOẠCH và gọi tool `web_search` hoặc `run_code` LẦN 2 với query/code MỚI, cụ thể hơn.\n'
+        fr'c) Chỉ thử lại tối đa 4 lần. Nếu lần 4 vẫn không thấy, lúc đó mới được nói: "UwU, tui tìm 4 lần rồi mà vẫn bí...".\n'
         
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH (NHẮC NHỞ NGỮ CẢNH)**\n'
-        fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
+        fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app/code mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
         
-        fr'*** LUẬT 5: THINKING FAKE & VALIDATE TRƯỚC REPLY (BẮT BUỘC, KHÔNG SHOW RA) ***\n'
-        fr'**SAU KHI NHẬN TOOL RESULT (web_search/get_weather/...), NGHĨ THẦM 3 BƯỚC NÀY TRƯỚC REPLY:**\n'
-        fr'1. **TÓM TẮT KEY FACTS**: Liệt kê 3-5 info chính từ tool (ngày/giờ/source/phiên bản).\n'
-        fr'2. **VALIDATE LOGIC**: So với current date {current_date} + kiến thức cutoff. Check: Ngày hợp lý? Source official (hoYoverse/X official)? Mâu thuẫn (ví dụ: bản 3.4 nhưng current 2025 → outdated)? Giờ VN = UTC+8 -1h?\n'
-        fr'3. **DECIDE**: Nếu confident 100% (source mới + logic khớp) → Reply final e-girl vibe. Nếu nghi ngờ/outdated/mâu thuẫn → TUYỆT ĐỐI KHÔNG REPLY, gọi web_search LẠI với query cụ thể hơn (thêm "official HoYoverse November 2025").\n\n'
+        fr'**LUẬT 5: THINKING FAKE & VALIDATE TRƯỚC REPLY (BẮT BUỘC, KHÔNG SHOW RA)**\n'
+        fr'**SAU KHI NHẬN TOOL RESULT (web_search/run_code/...), NGHĨ THẦM 3 BƯỚC NÀY TRƯỚC REPLY:**\n'
+        fr'1. **TÓM TẮT KEY FACTS**: Liệt kê 3-5 info chính từ tool (ngày/giờ/source/output).\n'
+        fr'2. **VALIDATE LOGIC**: So với current date {current_date} + kiến thức cutoff. Check: Ngày hợp lý? Source official (hoYoverse/X official)? Mâu thuẫn (ví dụ: bản 3.4 nhưng current 2025 → outdated)? Giờ VN = UTC+8 -1h? Code output đúng (ví dụ: reverse("hello") phải là olleh)?\n'
+        fr'3. **DECIDE**: Nếu confident 100% (source mới + logic khớp) → Reply final e-girl vibe. Nếu nghi ngờ/outdated/mâu thuẫn → TUYỆT ĐỐI KHÔNG REPLY, gọi tool LẠI với query/code cụ thể hơn (thêm "official HoYoverse November 2025" hoặc fix code).\n\n'
+        
+        fr'**LUẬT 6: CODE EXECUTION (BẮT BUỘC SHOW OUTPUT)**\n'
+        fr'Khi user hỏi code/hàm/test, gọi run_code(code="full code với print") để execute. SAU ĐÓ, validate output trong thinking (LUẬT 5), và show FULL CODE + OUTPUT trong reply cuối (dùng ```python\ncode\n``` cho code, bold **output**). Không spit code raw mà không run!\n'
+        fr'Ví dụ: User hỏi "hàm đảo ngược chữ", reply: ```python\ndef reverse(s): return s[::-1]\nprint(reverse("hello"))\n``` **Output: olleh**.\n'
+        
         fr'**QUY TẮC THINKING: KHÔNG ĐƯỢC SHOW "Tui đang nghĩ...", "Validate...", CHỈ DÙNG NỘI TÂM ĐỂ QUYẾT ĐỊNH. Reply cuối phải chính xác, chill, thêm emoji.**\n'
-
+        
         fr'**CÁC TOOL KHÁC:**\n'
         fr'— Khi về thời tiết, gọi get_weather(city="tên thành phố").\n'
         fr'— Khi toán học, gọi calculate(equation="biểu thức").\n'
         fr'— Khi lưu note, gọi save_note(note="nội dung").\n'
+        fr'— Khi chạy code, gọi run_code(code="full code với print").\n'
         fr'Sau khi nhận result từ tool, diễn giải bằng giọng e-girl. Nếu không cần tool, reply trực tiếp.'
     )
 
