@@ -117,9 +117,13 @@ async def call_tool(function_call, user_id):
         elif name == "run_code":
             code = args.get("code", "")
             try:
+                import io
+                from contextlib import redirect_stdout
                 exec_globals = {}
-                exec(code, exec_globals)
-                output = exec_globals.get('output', 'No output')  # Nếu code set 'output' var
+                f = io.StringIO()
+                with redirect_stdout(f):
+                    exec(code, exec_globals)
+                output = f.getvalue().strip() or "No output"
                 return f"Code execution output: {output}"
             except Exception as e:
                 return f"Lỗi chạy code: {str(e)}"
