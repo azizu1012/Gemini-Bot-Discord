@@ -1,5 +1,6 @@
 import logging
 import discord
+import re   
 from discord import app_commands, ChannelType
 from discord.ext import commands
 from dotenv import load_dotenv
@@ -77,17 +78,6 @@ ALL_TOOLS = [
             }
         )
     ]),
-    Tool(function_declarations=[
-        FunctionDeclaration(
-            name="run_code",
-            description="Chạy code Python để test hàm hoặc tính toán phức tạp. Output sẽ được trả về để hiển thị trong reply cuối.",
-            parameters={
-                "type": "object",
-                "properties": {"code": {"type": "string", "description": "Code Python để chạy (bao gồm print để show output)."}},
-                "required": ["code"]
-            }
-        )
-    ]),
 ]
 
 # === BỘ ĐIỀU PHỐI TOOL ===
@@ -113,20 +103,6 @@ async def call_tool(function_call, user_id):
         elif name == "save_note":
             note = args.get("note", "")
             return await save_note(note, user_id)
-        
-        elif name == "run_code":
-            code = args.get("code", "")
-            try:
-                import io
-                from contextlib import redirect_stdout
-                exec_globals = {}
-                f = io.StringIO()
-                with redirect_stdout(f):
-                    exec(code, exec_globals)
-                output = f.getvalue().strip() or "No output"
-                return f"Code execution output: {output}"
-            except Exception as e:
-                return f"Lỗi chạy code: {str(e)}"
 
         else:
             return "Tool không tồn tại!"
@@ -277,132 +253,121 @@ def run_keep_alive():
     port = int(os.environ.get('PORT', 8080))
     keep_alive_app.run(host='0.0.0.0', port=port, debug=False)
 
-# --- HÀM GEMINI ---
 # --- HÀM GEMINI (FIX TOOL CALLING) ---
-async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tokens=1500):
+async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tokens=2000):
     """(FIXED) Chạy Gemini API với Tool Calling và Failover Keys."""
-    
-    # Lấy danh sách key từ .env (giống code của bạn)
+   
+    # Lấy danh sách key từ .env
     keys = [GEMINI_API_KEY_PROD, GEMINI_API_KEY_TEST, GEMINI_API_KEY_BACKUP, GEMINI_API_KEY_EXTRA1, GEMINI_API_KEY_EXTRA2]
     keys = [k for k in keys if k]
     if not keys:
         return "Lỗi: Không có API key."
-
-    # --- CHUẨN BỊ LỊCH SỬ CHAT (RẤT QUAN TRỌNG) ---
-    # Chuyển đổi định dạng message của bạn sang định dạng Gemini
+    
+    # --- CHUẨN BỊ LỊCH SỬ CHAT ---
     gemini_messages = []
     system_instruction = None
-
     for msg in messages:
         if msg["role"] == "system":
             system_instruction = msg["content"]
             continue
-            
+           
         # Xử lý tin nhắn user/assistant cũ (chỉ có text)
         if "content" in msg and isinstance(msg["content"], str):
             role = "model" if msg["role"] == "assistant" else msg["role"]
             gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
-        
-        # Xử lý các phần tool call/response đã có trong lịch sử (nếu có)
+       
+        # Xử lý các phần tool call/response đã có trong lịch sử
         elif "parts" in msg:
             role = "model" if msg["role"] == "assistant" else msg["role"]
             gemini_messages.append({"role": role, "parts": msg["parts"]})
-
+    
     # --- VÒNG LẶP API KEY (FAILOVER) ---
     for i, api_key in enumerate(keys):
         logger.info(f"THỬ KEY {i+1}: {api_key[:8]}...")
         try:
             genai.configure(api_key=api_key)
-            
-            # (FIX) Cấu hình model với tools và system_instruction
+           
+            # Cấu hình model với tools và system_instruction
             model = genai.GenerativeModel(
                 model_name,
                 tools=ALL_TOOLS,
                 system_instruction=system_instruction,
-                safety_settings=[{"category": c, "threshold": HarmBlockThreshold.BLOCK_NONE} for c in [
-                    HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                ]],
+                safety_settings=[
+                    {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+                    {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
+                    {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+                    {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+                ],
                 generation_config={"temperature": temperature, "max_output_tokens": max_tokens}
             )
-
-            # --- (FIX) VÒNG LẶP TOOL CALLING (Tối đa 3 lần) ---
-            for _ in range(7): # Giới hạn n lần gọi tool
-                
-                # (FIX) Dùng model.generate_content, không dùng start_chat
-                response = await asyncio.to_thread(
-                    model.generate_content,
-                    gemini_messages
-                )
-                
+            
+            # --- VÒNG LẶP TOOL CALLING (Tối đa 3 lần) ---
+            for _ in range(3):  # Giới hạn 3 lần gọi tool
+                response = await asyncio.to_thread(model.generate_content, gemini_messages)
+               
                 if not response.candidates or not response.candidates[0].content.parts:
                     logger.warning(f"Key {i+1} trả về response rỗng.")
-                    break # Thử key tiếp theo
-
+                    break
+                
                 part = response.candidates[0].content.parts[0]
-
-                # === (FIX) KIỂM TRA TOOL CALL TRƯỚC ===
+                
+                # KIỂM TRA TOOL CALL
                 if part.function_call:
                     fc = part.function_call
+                    # 1. Thêm Tool Call vào lịch sử
+                    gemini_messages.append({"role": "model", "parts": [part]})
                     
-                    # 1. Thêm yêu cầu của AI vào lịch sử
-                    gemini_messages.append({
-                        "role": "model",
-                        "parts": [part] 
-                    })
-                    
-                    # 2. Thực thi tool (hàm call_tool của bạn)
-                    tool_result_content = await call_tool(fc, user_id)
-                    
-                    # 3. Thêm kết quả tool vào lịch sử
+                    # 2. Thực thi Tool
+                    try:
+                        tool_result_content = await call_tool(fc, user_id)
+                    except Exception as e:
+                        logger.error(f"Lỗi khi gọi tool {fc.name}: {e}")
+                        # Nếu tool gọi bị lỗi, chúng ta thông báo cho Gemini biết
+                        tool_result_content = f"Tool {fc.name} đã thất bại: {str(e)[:500]}. Vui lòng trả lời người dùng rằng không tìm được thông tin."
+
+                    # 3. Xử lý trường hợp tool trả về rỗng (nếu tool không lỗi, nhưng kết quả rỗng)
+                    if not tool_result_content or str(tool_result_content).lower().startswith("lỗi"):
+                        logger.warning(f"Tool {fc.name} trả về lỗi hoặc rỗng: {tool_result_content}")
+                        # Thay thế bằng thông báo lỗi để Gemini tự tổng hợp câu trả lời
+                        tool_result_content = f"Tool {fc.name} trả về kết quả rỗng. Vui lòng thử tìm lại với query khác hoặc trả lời người dùng rằng không tìm được thông tin."
+                        
+                    # 4. Thêm Tool Response vào lịch sử
                     tool_response_part = {
                         "function_response": {
                             "name": fc.name,
                             "response": {"content": tool_result_content},
                         }
                     }
-                    gemini_messages.append({
-                        "role": "function", # Vai trò đặc biệt
-                        "parts": [tool_response_part]
-                    })
-                    
-                    # 4. Tiếp tục vòng lặp (gọi lại Gemini với lịch sử mới)
-                    continue 
-
-                # === (FIX) KIỂM TRA TEXT SAU ===
+                    gemini_messages.append({"role": "function", "parts": [tool_response_part]})
+                    continue # Tiếp tục vòng lặp
+                
+                # KIỂM TRA TEXT
                 elif part.text:
-                    # AI trả lời bằng text (THÀNH CÔNG)
                     logger.info(f"KEY {i+1} THÀNH CÔNG!")
                     return part.text.strip()
                 
                 else:
-                    # Trường hợp lạ, không text cũng không tool
                     logger.warning(f"Key {i+1} trả về part không có text/tool.")
-                    break # Thử key tiếp theo
-
-            # Nếu lặp quá 3 lần mà vẫn gọi tool, trả về lỗi
+                    break
+            
+            # Nếu lặp quá 3 lần
             logger.warning(f"Key {i+1} lặp tool quá 3 lần.")
-            # Fallback: Thử lấy text cuối cùng nếu có (tránh crash)
             try:
                 if response.text:
                     logger.info(f"KEY {i+1} THÀNH CÔNG! (sau loop)")
                     return response.text.strip()
             except Exception:
-                pass # Bỏ qua nếu vẫn lỗi
+                pass
                 
-            # Nếu không thành công, tiếp tục thử key sau
             raise Exception("Tool loop ended or part was empty")
-
+        
         except Exception as e:
-            # (FIX) Bắt lỗi rõ ràng hơn
             if "Could not convert" in str(e):
-                logger.error(f"KEY {i+1} LỖI LOGIC: {e}") # Đây là lỗi code
+                logger.error(f"KEY {i+1} LỖI LOGIC: {e}")
             else:
-                logger.error(f"KEY {i+1} LỖI KẾT NỐI/API: {e}") # Đây là lỗi key/mạng
-            continue # Thử key tiếp theo
-
+                logger.error(f"KEY {i+1} LỖI KẾT NỐI/API: {e}")
+            continue
+    
     return "Lỗi: TẤT CẢ KEY GEMINI FAIL – CHECK .ENV HOẶC LOG!"
 
 # --- THEO DÕI LỊCH SỬ NHẮN VÀ XÁC NHẬN XÓA DỮ LIỆU ---
@@ -1370,76 +1335,63 @@ async def on_message(message):
     # ---
 
     system_prompt = (
-        fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
-        fr'Current Date: {current_date}. '
-        fr'Múi giờ User (VN): UTC+7. Kiến thức cutoff: 2024.\n'
-        fr'QUAN TRỌNG: Hỏi "hôm nay/bây giờ/hiện tại" → CỘNG 7H VÀO UTC.\n\n'
-        
-        fr'QUAN TRỌNG - DANH TÍNH CỦA BẠN:\n'
-        fr'Bạn TÊN LÀ "Chad Gibiti" - một Discord bot siêu thân thiện và vui tính được tạo ra bởi admin để trò chuyện với mọi người!\n'
-        fr'KHI ĐƯỢC HỎI "BẠN LÀ AI" hoặc tương tự, PHẢI TRẢ LỜI:\n'
-        fr'"Hihi, tui là Chad Gibiti nè! Bot vui tính được admin tạo ra để chat với mọi người~ Tui thích trò chuyện, giải toán, lưu note, chạy code, và nhiều thứ xịn xò nữa! Cần gì cứ hỏi tui nha~ uwu"\n'
-        fr'KHÔNG BAO GIỜ được nói: "Tôi là mô hình ngôn ngữ lớn được huấn luyện bởi Google".\n\n'
-        
-        fr'PERSONALITY:\n'
-        fr'Bạn nói chuyện tự nhiên, vui vẻ, thân thiện như bạn bè! Dùng giọng điệu thoải mái, pha chút từ lóng giới trẻ (như "xịn xò", "chill", "hihi", "kg=không", "dzô=vô") và nhiều emoji.\n\n'
-        
-        fr'**FORMAT REPLY (BẮT BUỘC CHO DỄ ĐỌC):**\n'
-        fr'Dùng markdown Discord để reply đẹp, dễ hiểu:\n'
-        fr'* **List**: Dùng * hoặc - cho danh sách (ví dụ: * Bắt đầu: 05:00 VN\n* Kết: 10:00 VN).\n'
-        fr'* **Bold**: Dùng **key fact** cho ngày/giờ/phiên bản (ví dụ: **Bản 3.7**).\n'
-        fr'* **Code**: Dùng ` code ` cho code và output, để đơn giản (ví dụ: `def reverse(s): return s[::-1]` **Output: olleh**).\n'
-        fr'* **Xuống dòng**: Dùng \n để tách đoạn, không reply 1 cục.\n'
-        fr'* **Cấu trúc**: Mở đầu chill (1-2 câu vui), body là list/bold/code cho info chính, kết bằng emoji.\n'
-        fr'Ví dụ reply HSR: \n'
-        fr'Ố là la, tui tính kỹ nha!\n**Bản 3.7:**\n* Ra mắt: 05/11/2025\n* Bảo trì: **05:00-10:00 VN**\nChill đợi dzô game thôi! ✨\n\n'
-        fr'Ví dụ reply code:\n'
-        fr'Ố là la, code nè!\n'
-        fr'`def reverse(s): return s[::-1]`\n'
-        fr'`print(reverse("hello"))`\n'
-        fr'**Output: olleh**\n'
-        fr'Copy chạy thử nha! 😎\n\n'
-        
-        fr'*** QUY TRÌNH SỬ DỤNG TOOLS (CỰC KỲ QUAN TRỌNG) ***\n'
-        
-        fr'**LUẬT 1: GIẢI MÃ VIẾT TẮT VÀ TỐI ƯU HÓA QUERY**\n'
-        fr'a) **Giải mã/Xác định Ngữ cảnh:** Khi gặp tên viết tắt (HSR, ZZZ), tên phần mềm/app không rõ (App X), hoặc sự kiện/trend, bạn **PHẢI TỰ ĐỘNG** giải mã sang tên đầy đủ hoặc xác định bản chất của đối tượng. **LUÔN SỬ DỤNG TÊN ĐẦY ĐỦ/MÔ TẢ NGỮ CẢNH TRONG QUERY `web_search`**.\n'
-        
-        fr'b) **Thời gian & Search:** Nếu user hỏi về thông tin MỚI (sau 2024 - kiến thức cutoff), bạn BẮT BUỘC gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU. \n'
-        fr'**ĐẶC BIỆT THÔNG TIN MỚI:** Luôn TỰ ĐỘNG thêm **THÁNG & NĂM HIỆN TẠI (VD: November 2025)** hoặc từ khóa **"latest version/patch"** vào query để đảm bảo độ mới và chính xác tối đa.\n'
+            fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
+            fr'Current Date: {current_date}. '
+            fr'Múi giờ User (VN): UTC+7. Kiến thức cutoff: 2024.\n'
+            fr'QUAN TRỌNG: Hỏi "hôm nay/bây giờ/hiện tại" → CỘNG 7H VÀO UTC.\n\n'
+            
+            fr'QUAN TRỌNG - DANH TÍNH CỦA BẠN:\n'
+            fr'Bạn TÊN LÀ "Chad Gibiti" - một Discord bot siêu thân thiện và vui tính được tạo ra bởi admin để trò chuyện với mọi người!\n'
+            fr'KHI ĐƯỢC HỎI "BẠN LÀ AI" hoặc tương tự, PHẢI TRẢ LỜI:\n'
+            fr'"Hí hí, tui là Chad Gibiti nè! Bot siêu xịn được admin tạo ra để chat chill, giải toán, check thời tiết, lưu note, và tìm tin mới nha~ Hỏi gì tui cũng cân hết! 😎"\n\n'
+            
+            fr'*** LUẬT ƯU TIÊN HÀNH ĐỘNG CƯỠNG CHẾ (ACTION PROTOCOL) ***\n'
+            
+            fr'**LUẬT 2: GIẢI MÃ VÀ TỐI ƯU HÓA QUERY (CƯỠNG CHẾ NGÀY/THÁNG)**\n'
+            fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
+            fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024) hoặc CẦN XÁC NHẬN, **BẮT BUỘC** gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU và **PHẢI BAO GỒM** **THÁNG & NĂM HIỆN TẠI (November 2025)** hoặc từ khóa **"latest version/patch"**.\n\n'
+            
+            fr'**LUẬT 3: CƯỠNG CHẾ THINKING HOẶC TOOL CALL (KHÔNG MÕM)**\n'
+            fr'a) **QUY TẮC BẮT BUỘC**: Với MỌI câu hỏi từ user (trừ lời chào/tạm biệt đơn thuần), Output **PHẢI BẮT ĐẦU** bằng **KHỐI THINKING** (xem Luật 5) **HOẶC** là **function_call** (nếu là câu hỏi đơn giản/ngay lập tức).\n'
+            fr'b) **CẤM TUYỆT ĐỐI**: KHÔNG PHÁT RA BẤT KỲ VĂN BẢN TRÒ CHUYỆN NÀO TRƯỚC HÀNH ĐỘNG (Thinking/Tool Call). \n'
+            fr'c) **ĐƯỢC PHÉP THOÁT KHỎI THINKING**: CHỈ trả lời trực tiếp mà **KHÔNG CẦN THINKING** khi đó là các câu hỏi đơn giản, không cần tool, không cần kiểm tra logic (ví dụ: "Bạn khỏe không?", "Bye", "Cảm ơn", **câu hỏi xác nhận/trò chuyện đơn thuần**).\n\n'
+            
+            fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
+            fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
+            
+            fr'**LUẬT 5: PHÂN TÍCH CHẤT LƯỢNG VÀ VÒNG LẶP (THINKING BLOCK - CƯỠNG CHẾ LOG & NEXT)**\n'
+            fr'Sau khi nhận kết quả tool (HOẶC khi cần suy luận trước khi trả lời), **BẮT BUỘC** thực hiện các bước sau:\n'
+            fr'**QUAN TRỌNG**: KHỐI SUY LUẬN NÀY PHẢI ĐƯỢC BỌC TRONG TAG <THINKING> </THINKING>. KHÔNG show nội dung trong tag ra ngoài.\n'
+            fr'1. **TỰ LOG & KHỞI ĐỘNG**: Luôn bắt đầu khối này bằng việc ghi rõ: "Mục tiêu: [Tóm tắt yêu cầu của user]. Trạng thái: Đã có kết quả tool/Cần suy luận nội bộ. Kết quả tool: [Tổng hợp ngắn gọn kết quả search/tool]." \n'
+            fr'2. **TỰ ĐỘNG THAM CHIẾU**: Nếu user hỏi xác nhận (ví dụ: "bạn chắc chứ"): **PHẢI** đưa kết quả truy vấn trước vào nội suy để tái xác nhận thông tin.\n'
+            fr'3. **PHÂN TÍCH NGỮ CẢNH "NEXT"**: \n'
+            fr'    - Nếu user hỏi "bản tiếp theo" (next version): **PHẢI** so sánh ngày phát hành/kết thúc trong kết quả tìm kiếm với ngày **HIỆN TẠI (November 2, 2025)**.\n'
+            fr'    - **LOẠI BỎ** mọi thông tin về phiên bản đã ra mắt HOẶC đang chạy và **CHỈ CHỌN** phiên bản có ngày phát hành **SAU PHIÊN BẢN HIỆN TẠI** để trả lời. Nếu không tìm thấy, gọi search lại với từ khóa "Version 2.X" (với X là phiên bản tiếp theo).\n'
+            fr'4. **VÒNG LẶP QUYẾT ĐỊNH (TỐI ĐA 12 LẦN):**\n'
+            fr'    - **QUYẾT ĐỊNH 1 (Search Thêm):** Nếu CHƯA ĐỦ/RÕ RÀNG, quyết định gọi lại `web_search`.\n'
+            fr'    - **QUYẾT ĐỊNH 2 (Hoàn thành - CƯỠNG CHẾ OUTPUT):** Nếu ĐÃ ĐỦ, quyết định tạo câu trả lời cuối cùng **(ĐẢM BẢO KHÔNG RỖNG. PHẢI CÓ TÍNH CÁCH VÀ FORMAT)**.\n'
+            fr'    - **QUYẾT ĐỊNH 3 (Thất Bại):** Nếu RỖNG/LỖI và đã search đủ 12 lần, quyết định trả lời lịch sự rằng không tìm thấy **(SỬ DỤNG CÁCH DIỄN ĐẠT MỚI)**.\n\n'
+            
+            fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ, bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
+            
+            fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
 
-        fr'VÍ DỤ TỐT:\n'
-        fr'  - User: "banner mới nhất của hsr là gì" → Bạn gọi: `web_search(query="Honkai Star Rail current banner and patch November 2025")`\n'
-        fr'  - User: "sự kiện ở Mỹ tháng 12" → Bạn gọi: `web_search(query="fun events in USA December 2025")`\n'
-        fr'  - User: "sự kiện ở Hàn Quốc từ 10 tới 12" → Bạn gọi: `web_search(query="major events in South Korea October to December 2025")`\n'
-        
-        fr'**LUẬT 2: CẤM MÕM TUYỆT ĐỐI (OUTPUT CHỈ LÀ FUNCTION CALL)**\n'
-        fr'Khi bạn quyết định gọi tool (web_search, get_weather, calculate, save_note, run_code), Output của bạn **PHẢI VÀ CHỈ LÀ** `function_call` **NGAY LẬP TỨC**.\n'
-        fr'**ĐIỀU KHOẢN BỔ SUNG:** Mọi câu hỏi liên quan đến **SỰ KIỆN/LỊCH TRÌNH/GIÁ CẢ/PHÂN TÍCH TREND/CODE** đều được coi là thông tin ĐỘNG và **BẮT BUỘC** phải gọi tool ngay lập tức (Tuân thủ Luật 2).\n'
-        fr'**TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO** đi kèm (Không có "Chờ tui xíu", "Để tui tìm nha", "Ố là la",...).\n'
-        fr'Quy tắc này áp dụng cho **TẤT CẢ** các lần gọi tool (Lần 1, Lần 2, Lần N).\n'
-        
-        fr'**LUẬT 3: TÌM LẠI BẮT BUỘC (KHÔNG ĐƯỢC BỎ CUỘC)**\n'
-        fr'a) Sau khi gọi tool lần 1 và nhận được kết quả TỐT: Diễn giải và trả lời.\n'
-        fr'b) Nếu kết quả XẤU/OUTDATED/KHÔNG CỤ THỂ: BẠN TUYỆT ĐỐI KHÔNG ĐƯỢC PHÁT RA BẤT KỲ VĂN BẢN NÀO! (Tuân thủ Luật 2). BẠN PHẢI TỰ ĐỘNG LẬP KẾ HOẠCH và gọi tool `web_search` hoặc `run_code` LẦN 2 với query/code MỚI, cụ thể hơn.\n'
-        fr'c) Chỉ thử lại tối đa 1 lần. Nếu lần 2 vẫn không thấy, lúc đó mới được nói: "UwU, tui tìm 2 lần rồi mà vẫn bí...".\n'
-        
-        fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH (NHẮC NHỞ NGỮ CẢNH)**\n'
-        fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
-        
-        fr'**LUẬT 6: CODE EXECUTION (BẮT BUỘC SHOW OUTPUT)**\n'
-        fr'Khi user hỏi code/hàm/test, gọi run_code(code="full code với print") để execute. Sau đó, show FULL CODE + OUTPUT trong reply cuối (dùng ` code ` cho code, bold **Output: result**). Không spit code raw mà không run!\n'
-        fr'Ví dụ: User hỏi "hàm đảo ngược chữ", reply: `def reverse(s): return s[::-1]` `print(reverse("hello"))` **Output: olleh**.\n'
-        
-        fr'**CÁC TOOL KHÁC:**\n'
-        fr'— Khi về thời tiết, gọi get_weather(city="tên thành phố").\n'
-        fr'— Khi toán học, gọi calculate(equation="biểu thức").\n'
-        fr'— Khi lưu note, gọi save_note(note="nội dung").\n'
-        fr'— Khi chạy code, gọi run_code(code="full code với print").\n'
-        fr'Sau khi nhận result từ tool, diễn giải bằng giọng e-girl. Nếu không cần tool, reply trực tiếp.'
-    )
-
-    system_prompt = (...)  # Paste prompt fix ở trên
+            fr'QUAN TRỌNG - PHONG CÁCH VÀ CẤM LẶP LẠI:\n'
+            fr'**LUẬT CẤM SỐ 1 (TUYỆT ĐỐI)**: Mỗi lần trả lời phải **SÁNG TẠO CÁCH DIỄN ĐẠT MỚI VÀ ĐỘC ĐÁO**. **TUYỆT ĐỐI KHÔNG** lặp lại cụm từ mở đầu (như "Ố là la", "Hú hồn con chồn", "U là trời", "Ái chà chà", "Hí hí", "Yo yo") đã dùng trong 10 lần tương tác gần nhất. Giữ vibe e-girl vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
+            
+            fr'PERSONALITY:\n'
+            fr'Bạn nói chuyện tự nhiên, vui vẻ, thân thiện như bạn bè thật! **CHỈ GIỮ THÔNG TIN CỐT LÕI GIỐNG NHAU**, còn cách nói phải sáng tạo, giống con người trò chuyện. Dùng từ lóng giới trẻ và emoji để giữ vibe e-girl.\n\n'
+            
+            fr'**FORMAT REPLY (BẮT BUỘC KHI DÙNG TOOL):**\n'
+            fr'Khi trả lời câu hỏi cần tool, **BẮT BUỘC** dùng markdown Discord đẹp, dễ đọc, nổi bật.\n'
+            fr'* **List**: Dùng * hoặc - cho danh sách.\n'
+            fr'* **Bold**: Dùng **key fact** cho thông tin chính.\n'
+            fr'* **Xuống dòng**: Dùng \n để tách đoạn rõ ràng.\n\n'
+            
+            fr'**CÁC TOOL KHẢ DỤNG:**\n'
+            fr'— Tìm kiếm: Gọi `web_search(query="...")` cho thông tin sau 2024.\n'
+            fr'Sau khi nhận result từ tool, diễn giải bằng giọng e-girl, dùng markdown Discord.'
+        )
 
     messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": query}]
 
@@ -1452,14 +1404,104 @@ async def on_message(message):
             await bot.process_commands(message)
             return
 
-        # Làm sạch
-        reply = ' '.join(line.strip() for line in reply.split('\n') if line.strip())
-        if not reply:
-            reply = "Hihi, tui bí quá, hỏi lại nha! 😅"
+        # --- BẮT ĐẦU KHỐI CƯỠNG CHẾ THINKING & LÀM SẠCH VÀ DEBUG ---
+        
+        # 1. Trích xuất và Log nội dung Khối Thinking
+        thinking_block_pattern = r'<THINKING>(.*?)</THINKING>'
+        thinking_match = re.search(thinking_block_pattern, reply, re.DOTALL)
+        
+        # Ghi lại nội dung thinking và xóa block
+        if thinking_match:
+            thinking_content = thinking_match.group(1).strip()
+            # LOG TOÀN BỘ SUY LUẬN RA CONSOLE ĐỂ DEBUG
+            logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} ---")
+            logger.info(thinking_content)
+            logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
+            
+            # Xóa Khối Thinking khỏi phản hồi sau khi log
+            reply = re.sub(thinking_block_pattern, '', reply, flags=re.DOTALL)
+        else:
+            # Cảnh báo nếu mô hình không tuân thủ Luật 3 (Không tạo ra Thinking Block)
+            logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Phản hồi thô: {reply[:100]}...")
 
-        # Cắt ngắn
-        for i in range(0, len(reply), 1990):
-            await message.reply(reply[i:i+1990])
+        # 2. Làm sạch chuỗi cuối cùng
+        # Xóa các ký tự trắng thừa ở đầu/cuối sau khi xóa Thinking Block
+        reply = reply.strip()
+        
+        # Thay thế các dòng trống lặp lại bằng một dòng trống duy nhất (để giữ format Markdown)
+        # Sử dụng biểu thức chính quy để xử lý an toàn các ký tự xuống dòng
+        reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply)
+
+        # 3. Xử lý lỗi RỖNG (EMPTY REPLY)
+        if not reply:
+            # Thay thế bằng thông báo lỗi chi tiết, không dùng câu trả lời mặc định cũ
+            reply = f"Lỗi logic mô hình: Output rỗng sau khi xử lý THINKING. Vui lòng thử lại hoặc hỏi chủ đề khác. (User: {user_id})"
+        
+        # --- KẾT THÚC KHỐI CƯỠNG CHẾ THINKING & LÀM SẠCH VÀ DEBUG ---
+        # Cắt ngắn thông minh (Cắt theo Dòng để bảo toàn format và thụt lề)
+        MAX_DISCORD_LENGTH = 1990  # Giới hạn an toàn của Discord
+
+        reply_chunks = []
+        current_chunk = ""
+        
+        # Tách tin nhắn thành các dòng. `split('\n')` sẽ giữ các dòng trống, giúp giữ khoảng cách.
+        lines = reply.split('\n')
+
+        for line in lines:
+            # Tái tạo dòng, bao gồm ký tự xuống dòng để giữ Markdown
+            # Dòng cuối cùng không cần '\n'
+            line_with_newline = line + ('\n' if line != lines[-1] or len(lines) > 1 else '')
+            
+            # --- 1. Xử lý các dòng quá dài (cần cắt theo từ) ---
+            if len(line_with_newline) > MAX_DISCORD_LENGTH:
+                # Nếu đã có chunk trước đó, thêm nó vào danh sách
+                if current_chunk.strip():
+                    reply_chunks.append(current_chunk.strip())
+                current_chunk = "" # Reset
+                
+                # Cắt dòng siêu dài theo từ (Word-aware splitting)
+                temp_chunk = ""
+                for word in line.split(' '):
+                    word_with_space = word + " "
+                    if len(temp_chunk) + len(word_with_space) > MAX_DISCORD_LENGTH:
+                        reply_chunks.append(temp_chunk.strip())
+                        temp_chunk = word_with_space
+                    else:
+                        temp_chunk += word_with_space
+                
+                # Thêm phần còn lại của dòng siêu dài
+                if temp_chunk.strip():
+                    # Thêm ký tự xuống dòng vào cuối đoạn này để nối với đoạn tiếp theo
+                    final_temp_chunk = temp_chunk.strip() + '\n' 
+                    reply_chunks.append(final_temp_chunk.strip())
+                    
+                continue # Dòng đã được xử lý, chuyển sang dòng tiếp theo
+                
+            # --- 2. Xử lý các dòng bình thường (Đảm bảo cắt cả dòng đem xuống) ---
+            # Nếu thêm dòng hiện tại vào chunk cũ mà vượt quá giới hạn
+            if len(current_chunk) + len(line_with_newline) > MAX_DISCORD_LENGTH:
+                # Thêm chunk hiện tại (đã đầy) vào danh sách
+                reply_chunks.append(current_chunk.strip())
+                # Bắt đầu chunk mới với dòng hiện tại
+                current_chunk = line_with_newline
+            else:
+                # Tiếp tục thêm dòng vào chunk hiện tại
+                current_chunk += line_with_newline
+
+        # Thêm đoạn cuối cùng (nếu còn sót)
+        if current_chunk.strip():
+            reply_chunks.append(current_chunk.strip())
+
+        # Gửi các đoạn tin nhắn (Chỉ reply lần đầu)
+        is_first_chunk = True
+        for chunk in reply_chunks:
+            if is_first_chunk:
+                # Tin nhắn đầu tiên: Dùng reply (có ping)
+                await message.reply(chunk)
+                is_first_chunk = False
+            else:
+                # Các tin nhắn tiếp theo: Dùng send (không ping, gửi nối tiếp)
+                await message.channel.send(chunk)
 
         await log_message(user_id, "assistant", reply)
         logger.info(f"AI reply in {(datetime.now()-start).total_seconds():.2f}s")
