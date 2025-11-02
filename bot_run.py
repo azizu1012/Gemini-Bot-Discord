@@ -1,6 +1,6 @@
 import logging
 import discord
-from discord.ext import commands
+from discord.ext import commands, app_commands, ChannelType
 from dotenv import load_dotenv
 import os
 import sqlite3
@@ -24,7 +24,7 @@ import json
 import os
 from discord import app_commands
 from collections import defaultdict, deque
-
+import aiofiles
 # --- ĐỊNH NGHĨA TOOLS CHO GEMINI (TỐI GIẢN) ---
 from google.generativeai.types import Tool, FunctionDeclaration
 
@@ -304,7 +304,7 @@ async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tok
             )
 
             # --- (FIX) VÒNG LẶP TOOL CALLING (Tối đa 3 lần) ---
-            for _ in range(3): # Giới hạn 3 lần gọi tool
+            for _ in range(5): # Giới hạn n lần gọi tool
                 
                 # (FIX) Dùng model.generate_content, không dùng start_chat
                 response = await asyncio.to_thread(
@@ -690,11 +690,10 @@ def get_current_time():
 # --- CÁC TOOL CƠ BẢN (KHÔNG ĐỔI) ---
 
 
-# Tool: Calculator
-def run_calculator(query):
+# Tool: Calculator (giữ sync vì sympy nhanh, không I/O)
+def run_calculator(query):  # Không cần async vì pure compute
     try:
-        query = query.lower().replace("tính ", "").replace("calculate ",
-                                                           "").strip()
+        query = query.lower().replace("tính ", "").replace("calculate ", "").strip()
         if not re.match(r'^[\d\s+\-*/^()sin|cos|tan|sqrt|log|exp]*$', query):
             return None
         expr = sp.sympify(query, evaluate=False)
@@ -704,15 +703,14 @@ def run_calculator(query):
         return None
     except Exception as e:
         return f"Lỗi tính toán: {str(e)}"
+    
 
-
-# Tool: Save Note
-def save_note(query):
+# Tool: Save Note (async cho I/O)
+async def save_note(query):  # Thay def thành async def
     try:
-        note = query.lower().replace("ghi note: ",
-                                     "").replace("save note: ", "").strip()
-        with open(NOTE_PATH, 'a', encoding='utf-8') as f:
-            f.write(f"[{datetime.now().isoformat()}] {note}\n")
+        note = query.lower().replace("ghi note: ", "").replace("save note: ", "").strip()
+        async with aiofiles.open(NOTE_PATH, 'a', encoding='utf-8') as f:
+            await f.write(f"[{datetime.now().isoformat()}] {note}\n")
         return f"Đã ghi note: {note}"
     except PermissionError:
         return "Lỗi: Không có quyền ghi file notes.txt!"
@@ -720,17 +718,16 @@ def save_note(query):
         return f"Lỗi ghi note: {str(e)}"
 
 
-# Tool: Read Note
-def read_note():
+# Tool: Read Note (async cho I/O)
+async def read_note():  # Thay def thành async def
     try:
         if not os.path.exists(NOTE_PATH):
             return "Chưa có note nào bro! Ghi note đi nha! 😎"
-        with open(NOTE_PATH, 'r', encoding='utf-8') as f:
-            notes = f.readlines()
+        async with aiofiles.open(NOTE_PATH, 'r', encoding='utf-8') as f:
+            notes = await f.readlines()
         if not notes:
             return "Chưa có note nào bro! Ghi note đi nha! 😎"
-        return "Danh sách note:\n" + "".join(
-            notes[-5:])  # Lấy tối đa 5 note mới nhất
+        return "Danh sách note:\n" + "".join(notes[-5:])  # Lấy tối đa 5 note mới nhất
     except PermissionError:
         return "Lỗi: Không có quyền đọc file notes.txt!"
     except Exception as e:
@@ -817,33 +814,86 @@ async def clear_all_data():
     return db_cleared and json_cleared
 
 # --- SLASH COMMANDS DISCORD ---
-#Khởi tạo bot
+
+def is_admin():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return str(interaction.user.id) == ADMIN_ID
+    return app_commands.check(predicate)
+
+
+# Autocomplete cho channel: Chỉ show text channels mà bot có quyền gửi
+async def channel_autocomplete(interaction: discord.Interaction, current: str):
+    choices = []
+    for channel in interaction.guild.text_channels:
+        if channel.permissions_for(interaction.guild.me).send_messages and current.lower() in channel.name.lower():
+            choices.append(app_commands.Choice(name=channel.name, value=channel.id))
+    return choices[:25]  # Discord limit 25
+
+
 @bot.tree.command(name="reset-chat", description="Xóa lịch sử chat của bạn")
 async def reset_chat_slash(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)  # Defer để tránh timeout
     user_id = str(interaction.user.id)
     confirmation_pending[user_id] = {'timestamp': datetime.now(), 'awaiting': True}
-    await interaction.response.send_message("Chắc chắn xóa lịch sử chat? Reply **yes** hoặc **y** trong 60 giây! 😳", ephemeral=True)
+    await interaction.followup.send("Chắc chắn xóa lịch sử chat? Reply **yes** hoặc **y** trong 60 giây! 😳", ephemeral=True)
+
 
 @bot.tree.command(name="reset-all", description="Xóa toàn bộ DB (CHỈ ADMIN)")
+@is_admin()
 async def reset_all_slash(interaction: discord.Interaction):
-    if str(interaction.user.id) != ADMIN_ID:
-        await interaction.response.send_message("Chỉ admin mới được dùng! 😝", ephemeral=True)
-        return
+    await interaction.response.defer(ephemeral=True)
     admin_confirmation_pending[str(interaction.user.id)] = {'timestamp': datetime.now(), 'awaiting': True}
-    await interaction.response.send_message("⚠️ **ADMIN CONFIRM**: Reply **YES RESET** trong 60 giây để xóa toàn bộ DB + Memory!", ephemeral=True)
+    await interaction.followup.send("⚠️ **ADMIN CONFIRM**: Reply **YES RESET** trong 60 giây để xóa toàn bộ DB + Memory!", ephemeral=True)
 
-@bot.tree.command(name="dm", description="Gửi DM (CHỈ ADMIN)")
-@app_commands.describe(user_id="ID user nhận DM", message="Nội dung DM")
-async def dm_slash(interaction: discord.Interaction, user_id: str, message: str):
-    if str(interaction.user.id) != ADMIN_ID:
-        await interaction.response.send_message("Chỉ admin! 😝", ephemeral=True)
-        return
+
+@bot.tree.command(name="message_to", description="Gửi tin nhắn tới user hoặc kênh (CHỈ ADMIN)")
+@app_commands.describe(
+    user="User nhận tin nhắn (chọn hoặc nhập ID)",
+    message="Nội dung tin nhắn",
+    channel="Kênh để gửi tin nhắn (tùy chọn, mặc định là DM)"
+)
+
+
+@app_commands.autocomplete(channel=channel_autocomplete)  # Filter channels trong UI
+@is_admin()
+async def message_to_slash(interaction: discord.Interaction, user: discord.User, message: str, channel: discord.abc.GuildChannel = None):  # Thay TextChannel thành GuildChannel để autocomplete work
+    await interaction.response.defer(ephemeral=True)
+    user_id = str(user.id)
+    cleaned_message = ' '.join(message.strip().split())
+    
     try:
-        user = await bot.fetch_user(int(user_id))
-        await user.send(f"💌 Từ admin: {message}")
-        await interaction.response.send_message(f"Đã gửi DM cho {user}! ✨", ephemeral=True)
-    except:
-        await interaction.response.send_message("Lỗi gửi DM! 😢", ephemeral=True)
+        target_user = await bot.fetch_user(int(user_id))
+    except (ValueError, discord.NotFound):
+        await interaction.followup.send("ID user không hợp lệ hoặc không tìm thấy! 😕", ephemeral=True)
+        return
+    
+    try:
+        if channel:
+            if not isinstance(channel, discord.TextChannel):  # Check type
+                await interaction.followup.send("Kênh phải là text channel! 😅", ephemeral=True)
+                return
+            if channel.guild != interaction.guild:
+                await interaction.followup.send("Kênh phải cùng server! 😢", ephemeral=True)
+                return
+            if not channel.permissions_for(interaction.guild.me).send_messages:
+                await interaction.followup.send("Bot không có quyền gửi tin nhắn trong kênh này! 😓", ephemeral=True)
+                return
+            await channel.send(f"💌 Từ admin tới {target_user.mention}: {cleaned_message}")
+            await interaction.followup.send(f"Đã gửi tin nhắn tới {target_user.display_name} trong {channel.mention}! ✨", ephemeral=True)
+        else:
+            decorated = f"━━━━━━━━━━━━━━━━━━━━━━\nTin nhắn từ admin:\n\n{cleaned_message}\n\n━━━━━━━━━━━━━━━━━━━━━━"
+            if len(decorated) > 1500:
+                decorated = cleaned_message[:1450] + "\n...(cắt bớt)"
+            await target_user.send(decorated)
+            await interaction.followup.send(f"Đã gửi DM cho {target_user.display_name}! ✨", ephemeral=True)
+        
+        await log_message(str(interaction.user.id), "assistant", f"Sent message to {user_id}: {cleaned_message} {'in channel ' + str(channel.id) if channel else 'via DM'}")
+    except discord.Forbidden:
+        await interaction.followup.send(f"Không gửi được tin nhắn cho {target_user.display_name}! 😢 Có thể họ chặn bot hoặc không cùng server.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Lỗi gửi tin nhắn! 😓 Lỗi: {str(e)}", ephemeral=True)
+        logger.error(f"Error sending message to {user_id}: {e}")
+
 
 # --- HÀM BALANCE SEARCH APIs (THAY THẾ OLLAMA) ---
 async def run_search_apis(query, focus="general"):
@@ -1022,41 +1072,6 @@ async def who(ctx, user_id: str):
         await ctx.send(f"Không tìm thấy user {user_id} trong server nè! 😢")
 
 
-@bot.command(name='dm')
-async def send_dm(ctx, user_id: int, *, message: str):
-    if str(ctx.author.id) != ADMIN_ID:
-        await ctx.send("Hihi, chỉ admin mới được dùng lệnh này nha~ 😝",
-                       reference=ctx.message)
-        logger.info(
-            f"User {ctx.author.id} attempted to use !dm but is not ADMIN_ID")
-        return
-    user = bot.get_user(user_id)
-    if user is None:
-        await ctx.send(
-            f"Ôi, không tìm thấy user với ID {user_id} đâu nè! 😢 Check lại đi bro~",
-            reference=ctx.message)
-        logger.warning(
-            f"User {user_id} not found for DM attempt by {ctx.author.id}")
-        return
-    try:
-        await user.send(f"Psst! Tin nhắn từ admin nè: {message} 💌")
-        await ctx.send(
-            f"Đã gửi DM cho {user.display_name} ({user.id}) thành công rùi! ✨ Nội dung: {message}"
-        )
-        await log_message(str(ctx.author.id), "assistant",
-                          f"Sent DM to {user.id}: {message}")
-        logger.info(f"DM sent to {user.id} by {ctx.author.id}: {message}")
-    except discord.Forbidden:
-        await ctx.send(
-            f"Không gửi được DM cho {user.display_name} đâu! 😢 Có thể họ chặn tui hoặc không cùng server nè~"
-        )
-        logger.warning(f"Forbidden: Cannot send DM to {user.id}")
-    except Exception as e:
-        await ctx.send(f"Glitch rồi bro! 😫 Lỗi: {str(e)}")
-        logger.error(
-            f"Error sending DM to {user.id} by {ctx.author.id}: {str(e)}")
-
-
 # --- SỰ KIỆN BOT ---
 
 @bot.event
@@ -1174,26 +1189,25 @@ async def on_message(message):
         interaction_type = "DM"
     elif message.reference and message.reference.resolved and message.reference.resolved.author == bot.user:
         interaction_type = "REPLY"
-    elif not message.mention_everyone and bot.user in message.mentions:  # CHỈ NHẬN @MENTION CHÍNH BOT
+    elif not message.mention_everyone and bot.user in message.mentions:
         interaction_type = "MENTION"
 
-    # TRÍCH QUERY
-    query = message.content.strip()
-    if bot.user in message.mentions:
-        query = re.sub(rf'<@!?{bot.user.id}>', '', query).strip()
-
-    # LOG
-    if interaction_type:
-        logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Loại: {interaction_type} - Nội dung: {query[:50]}...")
+    # LOG DEBUG
+    logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Type: {interaction_type} - Content: {message.content[:50]}...")
 
     # CHỈ XỬ LÝ NẾU MENTION/REPLY/DM
     if not interaction_type:
         await bot.process_commands(message)
         return
 
+    # TRÍCH QUERY
+    query = message.content.strip()
+    if bot.user in message.mentions:
+        query = re.sub(rf'<@!?{bot.user.id}>', '', query).strip()
+
     # KIỂM TRA QUERY RỖNG HOẶC QUÁ DÀI
-    if not query:  # NẾU QUERY RỖNG
-        query = "Hihi, anh ping tui có chuyện gì hông? Tag nhầm hả? uwu"  # GỬI CÂU HỎI CHO GEMINI
+    if not query:
+        query = "Hihi, anh ping tui có chuyện gì hông? Tag nhầm hả? uwu"
     elif len(query) > 500:
         await message.reply("Ôi, query dài quá (>500 ký tự), tui chịu hông nổi đâu! 😅")
         await bot.process_commands(message)
@@ -1219,6 +1233,7 @@ async def on_message(message):
     # XỬ LÝ DM ADMIN
     if is_admin and re.search(r'\b(nhắn|dm|dms|ib|inbox|trực tiếp|gửi|kêu)\b', query, re.IGNORECASE):
         target_id, content = extract_dm_target_and_content(query)
+        logger.info(f"[DM ADMIN] Target: {target_id}, Content: {content}")
         if target_id and content:
             user = await safe_fetch_user(bot, target_id)
             if not user:
@@ -1231,7 +1246,7 @@ async def on_message(message):
                 if len(decorated) > 1500:
                     decorated = content[:1450] + "\n...(cắt bớt)"
                 await user.send(decorated)
-                await message.reply(f"Đã gửi DM cho {user} thành công! 🎉")
+                await message.reply(f"Đã gửi DM cho {user.display_name} thành công! 🎉")
                 await log_message(user_id, "assistant", f"DM to {target_id}: {content}")
                 await bot.process_commands(message)
                 return
@@ -1240,6 +1255,8 @@ async def on_message(message):
                 await message.reply("Lỗi khi gửi DM! 😓")
                 await bot.process_commands(message)
                 return
+        else:
+            logger.warning(f"[DM ADMIN] Failed to parse target/content: {query}")
 
     # XỬ LỆNH "KÊU AI LÀ..."
     if is_admin:
@@ -1265,8 +1282,7 @@ async def on_message(message):
         mentioned_ids = re.findall(r'<@!?(\d+)>', query)
         for mid in mentioned_ids:
             if mid == str(bot.user.id): continue
-            # Giả định is_negative_comment() tồn tại
-            if mid == ADMIN_ID and is_negative_comment(query): 
+            if mid == ADMIN_ID and is_negative_comment(query):
                 member = message.guild.get_member(int(mid)) if message.guild else None
                 name = member.display_name if member else "admin"
                 responses = [
@@ -1299,7 +1315,7 @@ async def on_message(message):
         if (datetime.now() - admin_confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
             del admin_confirmation_pending[user_id]
             await message.reply("Hết thời gian xác nhận RESET ALL! 😕")
-        elif query == "YES RESET":
+        elif re.match(r'^yes\s*reset$', query, re.IGNORECASE):  # Case-insensitive
             if await clear_all_data():
                 await message.reply("ĐÃ RESET TOÀN BỘ DB VÀ JSON MEMORY! 🚀")
             else:
@@ -1317,7 +1333,7 @@ async def on_message(message):
         await message.reply(reply)
         await log_message(user_id, "assistant", reply)
         await bot.process_commands(message)
-        return
+        return 
 
     # GỌI GEMINI AI
     await log_message(user_id, "user", query)
@@ -1326,6 +1342,7 @@ async def on_message(message):
     # --- LẤY GIỜ UTC VÀ ĐỊNH DẠNG THEO YÊU CẦU (D/M/Y H:M:S) ---
     # Lấy giờ UTC chuẩn
     now_utc = datetime.now(timezone.utc)
+    current_date = now_utc.strftime("%d/%m/%Y")  # DD/MM/YYYY cho validate
     
     # Định dạng theo yêu cầu: D/M/Y và giờ 24h
     current_datetime_utc = now_utc.strftime("%d/%m/%Y %H:%M:%S UTC") 
@@ -1334,10 +1351,9 @@ async def on_message(message):
     system_prompt = (
         # 🌟 Đã sửa: FIX MÚI GIỜ (BẢN CUỐI CÙNG) & FIX SyntaxWarning (dùng fr'...')
         fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
-        fr'Múi giờ của User (Việt Nam): UTC+7. '
-        fr'Kiến thức cutoff của bạn là 2024.\n'
-        fr'QUAN TRỌNG: Khi user hỏi về "hôm nay", "bây giờ", "hiện tại", '
-        fr'bạn PHẢI TỰ ĐỘNG CỘNG 7 GIỜ vào giờ UTC để trả lời theo múi giờ Việt Nam (UTC+7).\n\n'
+        fr'Current Date: {current_date}. '
+        fr'Múi giờ User (VN): UTC+7. Kiến thức cutoff: 2024.\n'
+        fr'QUAN TRỌNG: Hỏi "hôm nay/bây giờ/hiện tại" → CỘNG 7H VÀO UTC.\n\n'
         
         fr'QUAN TRỌNG - DANH TÍNH CỦA BẠN:\n'
         fr'Bạn TÊN LÀ "Chad Gibiti" - một Discord bot siêu thân thiện và vui tính được tạo ra bởi admin để trò chuyện với mọi người!\n'
@@ -1376,6 +1392,13 @@ async def on_message(message):
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH (NHẮC NHỞ NGỮ CẢNH)**\n'
         fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
         
+        fr'*** LUẬT 5: THINKING & VALIDATE TRƯỚC REPLY (BẮT BUỘC, KHÔNG SHOW RA) ***\n'
+        fr'**SAU KHI NHẬN TOOL RESULT (web_search/get_weather/...), NGHĨ THẦM 3 BƯỚC NÀY TRƯỚC REPLY:**\n'
+        fr'1. **TÓM TẮT KEY FACTS**: Liệt kê 3-5 info chính từ tool (ngày/giờ/source/phiên bản).\n'
+        fr'2. **VALIDATE LOGIC**: So với current date {current_date} + kiến thức cutoff. Check: Ngày hợp lý? Source official (hoYoverse/X official)? Mâu thuẫn (ví dụ: bản 3.4 nhưng current 2025 → outdated)? Giờ VN = UTC+8 -1h?\n'
+        fr'3. **DECIDE**: Nếu confident 100% (source mới + logic khớp) → Reply final e-girl vibe. Nếu nghi ngờ/outdated/mâu thuẫn → TUYỆT ĐỐI KHÔNG REPLY, gọi web_search LẠI với query cụ thể hơn (thêm "official HoYoverse November 2025").\n\n'
+        fr'**QUY TẮC THINKING: KHÔNG ĐƯỢC SHOW "Tui đang nghĩ...", "Validate...", CHỈ DÙNG NỘI TÂM ĐỂ QUYẾT ĐỊNH. Reply cuối phải chính xác, chill, thêm emoji.**\n'
+
         fr'**CÁC TOOL KHÁC:**\n'
         fr'— Khi về thời tiết, gọi get_weather(city="tên thành phố").\n'
         fr'— Khi toán học, gọi calculate(equation="biểu thức").\n'
@@ -1401,8 +1424,8 @@ async def on_message(message):
             reply = "Hihi, tui bí quá, hỏi lại nha! 😅"
 
         # Cắt ngắn
-        for i in range(0, len(reply), 1900):
-            await message.reply(reply[i:i+1900])
+        for i in range(0, len(reply), 1990):
+            await message.reply(reply[i:i+1990])
 
         await log_message(user_id, "assistant", reply)
         logger.info(f"AI reply in {(datetime.now()-start).total_seconds():.2f}s")
