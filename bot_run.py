@@ -1,6 +1,7 @@
 import logging
 import discord
-from discord.ext import commands, app_commands, ChannelType
+from discord import app_commands, ChannelType
+from discord.ext import commands
 from dotenv import load_dotenv
 import os
 import sqlite3
@@ -22,7 +23,6 @@ import exa_py  # Exa.ai (exa-py package)
 from datetime import datetime, timedelta, timezone
 import json
 import os
-from discord import app_commands
 from collections import defaultdict, deque
 import aiofiles
 # --- ĐỊNH NGHĨA TOOLS CHO GEMINI (TỐI GIẢN) ---
@@ -1392,7 +1392,7 @@ async def on_message(message):
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH (NHẮC NHỞ NGỮ CẢNH)**\n'
         fr'Luôn đọc kỹ câu hỏi cuối cùng của user và KHÔNG BỊ NHẦM LẪN với các đối tượng khác trong lịch sử chat (Genshin, HSR). CHỈ search/trả lời về đối tượng mà user đang hỏi. Nếu có sự kiện/app mới được hỏi, LUÔN search tên đầy đủ/giải mã (Tuân thủ Luật 1).\n'
         
-        fr'*** LUẬT 5: THINKING & VALIDATE TRƯỚC REPLY (BẮT BUỘC, KHÔNG SHOW RA) ***\n'
+        fr'*** LUẬT 5: THINKING FAKE & VALIDATE TRƯỚC REPLY (BẮT BUỘC, KHÔNG SHOW RA) ***\n'
         fr'**SAU KHI NHẬN TOOL RESULT (web_search/get_weather/...), NGHĨ THẦM 3 BƯỚC NÀY TRƯỚC REPLY:**\n'
         fr'1. **TÓM TẮT KEY FACTS**: Liệt kê 3-5 info chính từ tool (ngày/giờ/source/phiên bản).\n'
         fr'2. **VALIDATE LOGIC**: So với current date {current_date} + kiến thức cutoff. Check: Ngày hợp lý? Source official (hoYoverse/X official)? Mâu thuẫn (ví dụ: bản 3.4 nhưng current 2025 → outdated)? Giờ VN = UTC+8 -1h?\n'
