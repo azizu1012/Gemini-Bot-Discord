@@ -1218,6 +1218,13 @@ async def on_message(message):
     elif not message.mention_everyone and bot.user in message.mentions:
         interaction_type = "MENTION"
 
+    # Chỉ log nếu là interaction với bot
+    if interaction_type:
+        logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Type: {interaction_type} - Content: {message.content[:50]}...")
+    else:
+        await bot.process_commands(message)
+        return  # Bỏ qua nếu không interaction
+
     # LOG DEBUG
     logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Type: {interaction_type} - Content: {message.content[:50]}...")
 
