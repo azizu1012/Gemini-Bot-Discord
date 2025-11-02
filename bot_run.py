@@ -98,7 +98,9 @@ async def call_tool(function_call, user_id):
 
         elif name == "calculate":
             eq = args.get("equation", "")
-            return await run_calculator(eq)
+            # --- FIX: Bọc hàm đồng bộ bằng asyncio.to_thread ---
+            # Điều này cho phép gọi hàm run_calculator (synchronous) mà không chặn event loop
+            return await asyncio.to_thread(run_calculator, eq)
 
         elif name == "save_note":
             note = args.get("note", "")
@@ -681,18 +683,41 @@ def get_current_time():
 
 
 # Tool: Calculator (giữ sync vì sympy nhanh, không I/O)
-def run_calculator(query):  # Không cần async vì pure compute
+def run_calculator(equation_str: str) -> str:
+    """Sử dụng SymPy để giải biểu thức toán học."""
+    # 1. Làm sạch ký tự không chuẩn (ví dụ: 'x' thành '*')
+    cleaned_eq = equation_str.strip().lower().replace('x', '*').replace(',', '.')
+    
+    # 2. Xử lý trường hợp đặc biệt: 1+1=
+    if cleaned_eq.endswith('='):
+        cleaned_eq = cleaned_eq[:-1]
+
     try:
-        query = query.lower().replace("tính ", "").replace("calculate ", "").strip()
-        if not re.match(r'^[\d\s+\-*/^()sin|cos|tan|sqrt|log|exp]*$', query):
-            return None
-        expr = sp.sympify(query, evaluate=False)
-        result = sp.N(expr)
-        return f"Kết quả: {result}"
-    except sp.SympifyError:
-        return None
-    except Exception as e:
-        return f"Lỗi tính toán: {str(e)}"
+        # 3. Sử dụng SymPy để phân tích và đánh giá biểu thức (an toàn hơn eval)
+        expr = sp.sympify(cleaned_eq, evaluate=False)
+        result = sp.N(expr) # sp.N tính toán giá trị số học (nếu cần)
+        
+        # 4. Format kết quả
+        result_str = str(result)
+        
+        # Nếu kết quả là số nguyên hoặc thập phân đẹp
+        if result_str.endswith('.0'):
+            result_str = result_str[:-2]
+            
+        # 5. Trả về kết quả dưới dạng JSON string để Gemini xử lý
+        return json.dumps({
+            "equation": equation_str,
+            "result": result_str,
+            "success": True
+        }, ensure_ascii=False)
+    
+    except (sp.SympifyError, TypeError, ZeroDivisionError, Exception) as e:
+        # Xử lý các lỗi toán học như chia cho 0, lỗi cú pháp
+        return json.dumps({
+            "equation": equation_str,
+            "result": f"Lỗi biểu thức: {str(e)}",
+            "success": False
+        }, ensure_ascii=False)
     
 
 # Tool: Save Note (async cho I/O)
@@ -1351,10 +1376,10 @@ async def on_message(message):
             fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
             fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024) hoặc CẦN XÁC NHẬN, **BẮT BUỘC** gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU và **PHẢI BAO GỒM** **THÁNG & NĂM HIỆN TẠI (November 2025)** hoặc từ khóa **"latest version/patch"**.\n\n'
             
-            fr'**LUẬT 3: CƯỠNG CHẾ THINKING HOẶC TOOL CALL (KHÔNG MÕM)**\n'
-            fr'a) **QUY TẮC BẮT BUỘC**: Với MỌI câu hỏi từ user (trừ lời chào/tạm biệt đơn thuần), Output **PHẢI BẮT ĐẦU** bằng **KHỐI THINKING** (xem Luật 5) **HOẶC** là **function_call** (nếu là câu hỏi đơn giản/ngay lập tức).\n'
-            fr'b) **CẤM TUYỆT ĐỐI**: KHÔNG PHÁT RA BẤT KỲ VĂN BẢN TRÒ CHUYỆN NÀO TRƯỚC HÀNH ĐỘNG (Thinking/Tool Call). \n'
-            fr'c) **ĐƯỢC PHÉP THOÁT KHỎI THINKING**: CHỈ trả lời trực tiếp mà **KHÔNG CẦN THINKING** khi đó là các câu hỏi đơn giản, không cần tool, không cần kiểm tra logic (ví dụ: "Bạn khỏe không?", "Bye", "Cảm ơn", **câu hỏi xác nhận/trò chuyện đơn thuần**).\n\n'
+            fr'**LUẬT 3: CƯỠNG CHẾ THINKING HOẶC TOOL CALL (CƯỠNG CHẾ 100%)**\n'
+            fr'a) **QUY TẮC BẮT BUỘC**: Với MỌI câu hỏi từ user, Output **PHẢI BẮT ĐẦU** bằng **KHỐI THINKING** (xem Luật 5) **HOẶC** là **function_call**. **ĐẶC BIỆT**: Bất kỳ phản hồi nào sau khi có kết quả từ `web_search` HOẶC khi sửa sai, **BẮT BUỘC PHẢI DÙNG KHỐI THINKING**.\n'
+            fr'b) **CẤM TUYỆT ĐỐI**: KHÔNG PHÁT RA BẤT KỲ VĂN BẢN TRÒ CHUYỆN NÀO TRƯỚC HÀNH ĐỘNG (Thinking/Tool Call).\n'
+            fr'c) **NGOẠI LỆ DUY NHẤT**: CHỈ trả lời trực tiếp mà KHÔNG CẦN THINKING khi đó là **lời chào/tạm biệt đơn thuần**, **lời cảm ơn**, hoặc **câu hỏi không liên quan đến logic, không cần tool** (VD: "Bạn khỏe không?"). Mọi câu hỏi có logic/sửa lỗi/cần tool **PHẢI DÙNG THINKING**.\n\n'
             
             fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
             fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
