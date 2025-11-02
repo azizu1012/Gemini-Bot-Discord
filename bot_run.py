@@ -1393,7 +1393,7 @@ async def on_message(message):
         fr'Dùng markdown Discord để reply đẹp, dễ hiểu:\n'
         fr'* **List**: Dùng * hoặc - cho danh sách (ví dụ: * Bắt đầu: 05:00 VN\n* Kết: 10:00 VN).\n'
         fr'* **Bold**: Dùng **key fact** cho ngày/giờ/phiên bản (ví dụ: **Bản 3.7**).\n'
-        fr'* **Code blocks**: Dùng ```python'
+        fr'* **Code blocks**: Dùng ```python\ncode\n``` cho code.\n'
         fr'* **Xuống dòng**: Dùng \n để tách đoạn, không reply 1 cục.\n'
         fr'* **Cấu trúc**: Mở đầu chill (1-2 câu vui), body là list/bold cho info chính, kết bằng emoji.\n'
         fr'Ví dụ reply HSR: \n'
