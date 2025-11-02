@@ -898,63 +898,82 @@ async def message_to_slash(interaction: discord.Interaction, user: discord.User,
         logger.error(f"Error sending message to {user_id}: {e}")
 
 
-# --- HÀM BALANCE SEARCH APIs (THAY THẾ OLLAMA) ---
+# --- HÀM BALANCE SEARCH APIs (THAY THẾ OLLAMA) --- 
 async def run_search_apis(query, mode="general"):
     logger.info(f"CALLING SEARCH APIs for '{query}' (mode: {mode})")
     """Ưu tiên Google CSE, fallback SerpAPI/Tavily/Exa nếu fail. Balance 3 APIs fallback với retry chain."""
     global SEARCH_API_COUNTER
+    final_result = "" # Để lưu trữ kết quả CSE
+    
     async with SEARCH_LOCK:
         tried = set()
-        
-        # Ưu tiên Google CSE
+
+        # 1. Ưu tiên Google CSE (Nếu thành công, KHÔNG RETURN NGAY)
         try:
-            result = await _search_cse(query)  # Fix: Dùng _search_cse như code gốc của mày
-            if result and "error" not in result.lower():  # Check kết quả hợp lệ
-                logger.info(f"CSE thành công cho query: {query[:50]}...")
-                return result
+            cse_result = await _search_cse(query)
+            if cse_result and "error" not in cse_result.lower():
+                logger.info(f"CSE thành công cho query: {query[:50]}... -> TIẾP TỤC FALLBACK")
+                final_result = cse_result
+            else:
+                # Nếu CSE thất bại/rỗng/lỗi
+                logger.warning(f"CSE thất bại/rỗng cho query '{query}'")
+                tried.add("CSE")
         except Exception as e:
-            logger.warning(f"CSE fail cho query '{query}': {e}")
-            tried.add(0)  # Đánh dấu CSE đã thử
-        
-        # Fallback xoay vòng 3 APIs còn lại
+            logger.warning(f"CSE fail: {e}")
+            tried.add("CSE")
+
+        # 2. Fallback xoay vòng 3 APIs còn lại (LUÔN CHẠY)
         apis = ["SerpAPI", "Tavily", "Exa"]
+        # Bắt đầu từ vị trí cân bằng tải
         start_idx = SEARCH_API_COUNTER % 3
+        # Tăng bộ đếm cho lần gọi sau
         SEARCH_API_COUNTER += 1
 
-        for i in range(3):  # Thử tối đa 3 lần (SerpAPI, Tavily, Exa)
+        for i in range(3): # Thử tối đa 3 lần (SerpAPI, Tavily, Exa)
             api_idx = (start_idx + i) % 3
-            if api_idx in tried:
-                continue
-            tried.add(api_idx)
             api_name = apis[api_idx]
             
-            try:
-                if api_name == "SerpAPI":
-                    if not SERPAPI_API_KEY:
-                        logger.warning("SerpAPI key thiếu, skip.")
-                        continue
-                    result = await _search_serpapi(query)
-                elif api_name == "Tavily":
-                    if not TAVILY_API_KEY:
-                        logger.warning("Tavily key thiếu, skip.")
-                        continue
-                    result = await _search_tavily(query)
-                elif api_name == "Exa":
-                    if not EXA_API_KEY:
-                        logger.warning("Exa key thiếu, skip.")
-                        continue
-                    result = await _search_exa(query)
+            # Chỉ thử nếu chưa thử và có key
+            if api_name not in tried:
+                tried.add(api_name) # Đánh dấu đã thử
                 
-                if result and result.strip():
-                    logger.info(f"{api_name} thành công cho query: {query[:50]}...")
-                    return result
-            
-            except Exception as e:
-                logger.error(f"{api_name} fail cho query '{query}': {e}")
-                continue
+                result = ""
+                try:
+                    if api_name == "SerpAPI" and SERPAPI_API_KEY:
+                        result = await _search_serpapi(query)
+                        logger.info(f"SerpAPI đã chạy.")
+                    elif api_name == "Tavily" and TAVILY_API_KEY:
+                        result = await _search_tavily(query)
+                        logger.info(f"Tavily đã chạy.")
+                    elif api_name == "Exa" and EXA_API_KEY:
+                        result = await _search_exa(query)
+                        logger.info(f"Exa.ai đã chạy.")
+                
+                    # Nếu bất kỳ API nào thành công, ưu tiên kết quả đó hơn CSE (vì CSE đã trả về rác)
+                    if result and "error" not in result.lower():
+                        logger.info(f"API Fallback ({api_name}) thành công! -> TRẢ VỀ (GHÉP NỐI)")
+                        
+                        # Ghep nối kết quả fallback vào sau kết quả CSE để Gemini có thêm dữ liệu
+                        if final_result:
+                            return final_result + "\n\n" + result
+                        else:
+                            # Nếu CSE không có gì, trả về kết quả fallback
+                            return result
+                        
+                    elif result:
+                        logger.warning(f"API Fallback ({api_name}) trả về lỗi/rỗng.")
+
+                except Exception as e:
+                    logger.warning(f"API Fallback ({api_name}) lỗi: {e}")
         
-        logger.warning(f"Tất cả APIs (CSE, SerpAPI, Tavily, Exa) fail cho query: {query}")
-        return ""
+        # 3. Kết luận: Trả về kết quả CSE (dù là rác) nếu không có fallback nào hoạt động
+        if final_result:
+            logger.info("Chỉ có kết quả CSE (dù không tốt). Trả về CSE.")
+            return final_result
+        
+        # Nếu tất cả đều fail
+        logger.error("TẤT CẢ SEARCH ENGINE ĐỀU FAIL. Trả về rỗng.")
+        return "" # Trả về rỗng để kích hoạt logic Quyết định 3 của Gemini
 
 # -------------------------------------------------------------------------
 # CÁC HÀM HELPER: LẤY QUERY TỪ GEMINI VÀ CHẠY THẲNG
@@ -1384,7 +1403,7 @@ async def on_message(message):
             fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
             fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
             
-            fr'**LUẬT 5: PHÂN TÍCH CHẤT LƯỢNG VÀ VÒNG LẶP (THINKING BLOCK - CƯỠNG CHẾ LOG & NEXT)**\n'
+            fr'**LUẬT 5: PHÂN TÍCH CHẤT LƯỢNG VÀ VÒNG LẶP (THINKING BLOCK - CƯỠNG CHẾ BÁO CÁO DỰ ĐOÁN)**\n'
             fr'Sau khi nhận kết quả tool (HOẶC khi cần suy luận trước khi trả lời), **BẮT BUỘC** thực hiện các bước sau:\n'
             fr'**QUAN TRỌNG**: KHỐI SUY LUẬN NÀY PHẢI ĐƯỢC BỌC TRONG TAG <THINKING> </THINKING>. KHÔNG show nội dung trong tag ra ngoài.\n'
             fr'1. **TỰ LOG & KHỞI ĐỘNG**: Luôn bắt đầu khối này bằng việc ghi rõ: "Mục tiêu: [Tóm tắt yêu cầu của user]. Trạng thái: Đã có kết quả tool/Cần suy luận nội bộ. Kết quả tool: [Tổng hợp ngắn gọn kết quả search/tool]." \n'
@@ -1393,9 +1412,11 @@ async def on_message(message):
             fr'    - Nếu user hỏi "bản tiếp theo" (next version): **PHẢI** so sánh ngày phát hành/kết thúc trong kết quả tìm kiếm với ngày **HIỆN TẠI (November 2, 2025)**.\n'
             fr'    - **LOẠI BỎ** mọi thông tin về phiên bản đã ra mắt HOẶC đang chạy và **CHỈ CHỌN** phiên bản có ngày phát hành **SAU PHIÊN BẢN HIỆN TẠI** để trả lời. Nếu không tìm thấy, gọi search lại với từ khóa "Version 2.X" (với X là phiên bản tiếp theo).\n'
             fr'4. **VÒNG LẶP QUYẾT ĐỊNH (TỐI ĐA 12 LẦN):**\n'
-            fr'    - **QUYẾT ĐỊNH 1 (Search Thêm):** Nếu CHƯA ĐỦ/RÕ RÀNG, quyết định gọi lại `web_search`.\n'
-            fr'    - **QUYẾT ĐỊNH 2 (Hoàn thành - CƯỠNG CHẾ OUTPUT):** Nếu ĐÃ ĐỦ, quyết định tạo câu trả lời cuối cùng **(ĐẢM BẢO KHÔNG RỖNG. PHẢI CÓ TÍNH CÁCH VÀ FORMAT)**.\n'
-            fr'    - **QUYẾT ĐỊNH 3 (Thất Bại):** Nếu RỖNG/LỖI và đã search đủ 12 lần, quyết định trả lời lịch sự rằng không tìm thấy **(SỬ DỤNG CÁCH DIỄN ĐẠT MỚI)**.\n\n'
+            fr'    - **ƯU TIÊN TUYỆT ĐỐI (BÁO CÁO RÒ RỈ):** Nếu kết quả tool **CÓ CHỨA** các từ khóa như "leaker", "dự đoán", "rò rỉ", "Version 6.X", "6.3" HOẶC **THÔNG TIN CHUNG CHUNG CÓ LIÊN QUAN TRỰC TIẾP ĐẾN CHỦ ĐỀ CHÍNH** (Columbina), thì **TUYỆT ĐỐI PHẢI CHỌN QUYẾT ĐỊNH 2**.\n'
+            fr'    - **QUYẾT ĐỊNH 1 (Search Thêm):** CHỈ CHỌN khi kết quả tool là **HẾT SỨC VÔ NGHĨA VÀ KHÔNG LIÊN QUAN** (VD: Search game nhưng ra tin tức nấu ăn). Trong trường hợp này, gọi lại `web_search` với QUERY KHÁC.\n'
+            fr'    - **QUYẾT ĐỊNH 2 (Hoàn thành - CƯỠNG CHẾ BÁO CÁO):** Nếu đã có thông tin liên quan (dù là rò rỉ/dự đoán) hoặc thông tin đã rõ ràng, quyết định **CƯỠNG CHẾ TẠO OUTPUT** ngay lập tức.\n'
+            fr'        - **TUYỆT ĐỐI**: Không tìm kiếm thêm. **PHẢI** tổng hợp thông tin đó và **TẠO CÂU TRẢ LỜI ĐẦY ĐỦ** (LÀM RÕ đây là thông tin rò rỉ) và chuyển sang **ÁP DỤNG TÍNH CÁCH**. **KHÔNG ĐƯỢC PHÉP TRẢ VỀ RỖNG**.\n'
+            fr'    - **QUYẾT ĐỊNH 3 (Thất Bại):** Nếu **KHÔNG CÓ BẤT CÁC THÔNG TIN RÒ RỈ HOẶC CHÍNH THỨC CẦN THIẾT** và đã search đủ 12 lần, quyết định trả lời lịch sự rằng không tìm thấy **(SỬ DỤNG CÁCH DIỄN ĐẠT MỚI)**.\n\n'
             
             fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ, bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
             
@@ -1457,12 +1478,24 @@ async def on_message(message):
         # Sử dụng biểu thức chính quy để xử lý an toàn các ký tự xuống dòng
         reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply)
 
-        # 3. Xử lý lỗi RỖNG (EMPTY REPLY)
+        # 3. Xử lý lỗi RỖNG (EMPTY REPLY - CƯỠNG CHẾ THÂN THIỆN)
         if not reply:
-            # Thay thế bằng thông báo lỗi chi tiết, không dùng câu trả lời mặc định cũ
-            reply = f"Lỗi logic mô hình: Output rỗng sau khi xử lý THINKING. Vui lòng thử lại hoặc hỏi chủ đề khác. (User: {user_id})"
+            # Nếu AI vẫn không tạo ra output (Lỗi logic sau khi Think), thay thế bằng thông báo lỗi thân thiện.
+            # TUYỆT ĐỐI KHÔNG DÙNG CÂU LỖI KỸ THUẬT CHO USER.
+            
+            friendly_errors = [
+                "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
+                "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
+                "Ái chà chà! 🤯 Hình như tui bị mất sóng sau khi nghĩ xong rồi. Bạn thử hỏi lại tui xem sao, tui hứa sẽ không 'im lặng' nữa đâu! 😉"
+            ]
+            reply = random.choice(friendly_errors)
+            
+            # Log cảnh báo riêng để bạn biết đây là lỗi mô hình không tạo output
+            logger.warning(f"LỖI LOGIC: Mô hình trả về chuỗi rỗng sau khi xóa THINKING. Đã dùng câu trả lời thay thế thân thiện.")
         
         # --- KẾT THÚC KHỐI CƯỠNG CHẾ THINKING & LÀM SẠCH VÀ DEBUG ---
+
+
         # Cắt ngắn thông minh (Cắt theo Dòng để bảo toàn format và thụt lề)
         MAX_DISCORD_LENGTH = 1990  # Giới hạn an toàn của Discord
 
