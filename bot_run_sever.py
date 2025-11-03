@@ -26,6 +26,8 @@ import json
 import os
 from collections import defaultdict, deque
 import aiofiles
+import locale
+from datetime import datetime, timedelta, timezone
 # --- ĐỊNH NGHĨA TOOLS CHO GEMINI (TỐI GIẢN) ---
 from google.generativeai.types import Tool, FunctionDeclaration
 
@@ -904,27 +906,37 @@ async def message_to_slash(interaction: discord.Interaction, user: discord.User,
 
 
 # -------------------------------------------------------------------------
-# SEARCH API: 3x CSE song song + 1 fallback + query thông minh
+# SEARCH API: 3x CSE (Mặc định) HOẶC CSE2 bị thay thế bằng Fallback (theo lệnh AI)
 # -------------------------------------------------------------------------
 async def run_search_apis(query, mode="general"):
     logger.info(f"CALLING 3x CSE SMART SEARCH for '{query}' (mode: {mode})")
     global SEARCH_API_COUNTER
 
     # --- [1] Làm sạch & tách query ---
+    # Kiểm tra mã khóa ẩn [FORCE FALLBACK] ngay từ đầu
+    FORCE_FALLBACK_REQUEST = "[FORCE FALLBACK]" in query.upper()
+    
+    # Dùng query gốc (hoặc đã làm sạch) để tách sub_queries
+    q_base = query.replace("[FORCE FALLBACK]", "").strip()
+    
     sub_queries = []
-    # Nếu người dùng hỏi nhiều chủ đề (vd: "genshin và wuwa")
-    if " và " in query or " and " in query.lower() or "," in query:
-        splitters = re.split(r"\s*(?:và|and|,)\s*", query, flags=re.IGNORECASE)
+    if " và " in q_base or " and " in q_base.lower() or "," in q_base:
+        splitters = re.split(r"\s*(?:và|and|,)\s*", q_base, flags=re.IGNORECASE)
         sub_queries = [q.strip() for q in splitters if q.strip()]
     else:
-        sub_queries = [query.strip()]
+        sub_queries = [q_base.strip()]
 
     # --- [2] Mở rộng query thông minh ---
     enriched_queries = []
     for q in sub_queries:
+        # Thêm lại logic FORCE_FALLBACK vào query nếu có, để nó được kiểm tra lại ở bước 3
         q_enhanced = (
             f"{q} official update release date patch notes roadmap leaks OR speculation"
         )
+        if FORCE_FALLBACK_REQUEST:
+             # Nếu AI yêu cầu, thêm tag vào enhanced query
+            q_enhanced += " [FORCE FALLBACK]" 
+        
         enriched_queries.append(q_enhanced)
 
     final_results = []
@@ -932,17 +944,19 @@ async def run_search_apis(query, mode="general"):
     # --- [3] Chạy từng subquery ---
     for q in enriched_queries:
         async with SEARCH_LOCK:
-            logger.info(f"Running parallel search for subquery: '{q}'")
+            # Log chỉ hiện thị query đã được làm sạch để log đẹp hơn
+            log_q = q.replace(" [FORCE FALLBACK]", "")
+            logger.info(f"Running parallel search for subquery: '{log_q}'")
 
-            # 3 CSE chạy song song, mỗi cái offset khác nhau để tránh trùng trang
+            # 3 CSE chạy song song
             cse0_task = asyncio.create_task(
-                _search_cse(q, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1)
+                _search_cse(log_q, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1)
             )
             cse1_task = asyncio.create_task(
-                _search_cse(q, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=4)
+                _search_cse(log_q, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=4)
             )
             cse2_task = asyncio.create_task(
-                _search_cse(q, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=7)
+                _search_cse(log_q, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=7)
             )
 
             cse0_result, cse1_result, cse2_result = await asyncio.gather(
@@ -959,17 +973,26 @@ async def run_search_apis(query, mode="general"):
             cse1_result = safe_result(cse1_result, "CSE1")
             cse2_result = safe_result(cse2_result, "CSE2")
 
-            # --- fallback cho CSE2 ---
-            if not cse2_result:
+            # --- DÒNG BỔ SUNG: Kiểm tra AI có yêu cầu FORCE FALLBACK hay không ---
+            if "[FORCE FALLBACK]" in q.upper() and cse2_result:
+                # Logic mới: CSE2 có dữ liệu (không rỗng), nhưng AI đánh giá là RÁC (yêu cầu fallback)
+                logger.warning(
+                    f"AI yêu cầu [FORCE FALLBACK] → Bỏ qua CSE2 (có dữ liệu rác), chạy Fallback thay thế."
+                )
+                # Chạy fallback với query đã làm sạch
+                cse2_result = await _run_fallback_search(log_q)
+                
+            # --- Logic cũ: fallback cho CSE2 nếu rỗng ---
+            elif not cse2_result:
                 logger.warning("CSE2 rỗng/lỗi → fallback qua SerpAPI/Tavily/Exa")
-                cse2_result = await _run_fallback_search(q)
+                cse2_result = await _run_fallback_search(log_q)
 
             # --- Gộp & lọc trùng ---
             parts = [x for x in [cse0_result, cse1_result, cse2_result] if x]
             if parts:
                 merged = "\n\n".join(parts)
 
-                # Lọc trùng link
+                # Lọc trùng link (Giữ nguyên)
                 unique_lines = []
                 seen_links = set()
                 for line in merged.splitlines():
@@ -984,7 +1007,7 @@ async def run_search_apis(query, mode="general"):
 
                 final_text = "\n".join(unique_lines)
                 final_results.append(
-                    f"### 🔍 Kết quả cho truy vấn phụ: {q}\n{final_text.strip()}"
+                    f"### 🔍 Kết quả cho truy vấn phụ: {log_q}\n{final_text.strip()}"
                 )
 
     # --- [4] Gộp toàn bộ subquery lại ---
@@ -994,7 +1017,6 @@ async def run_search_apis(query, mode="general"):
 
     logger.error("TẤT CẢ 3 CSE + fallback FAIL.")
     return ""
-
 
 # -------------------------------------------------------------------------
 # CSE ĐỘNG: mỗi CSE có ID/API riêng + offset khác nhau để tránh trùng trang
@@ -1450,17 +1472,39 @@ async def on_message(message):
     await log_message(user_id, "user", query)
     history = await get_user_history_async(user_id)
 
-    # --- LẤY GIỜ UTC VÀ ĐỊNH DẠNG ---
+# --- (SỬA ĐỔI) LẤY GIỜ VÀ ĐỊNH DẠNG ---
+    
+    # 1. Lấy giờ UTC (cho máy chủ)
     now_utc = datetime.now(timezone.utc)
-    current_date = now_utc.strftime("%d/%m/%Y")
     current_datetime_utc = now_utc.strftime("%d/%m/%Y %H:%M:%S UTC")
-    # ---
 
+    # 2. Thiết lập locale tiếng Việt (Giữ nguyên code của bạn)
+    try:
+        locale.setlocale(locale.LC_TIME, 'vi_VN.utf8')
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_TIME, 'vi_VN')
+        except locale.Error:
+            pass # Fallback
+            
+    # 3. Lấy giờ Việt Nam (UTC+7) (Cho bối cảnh của AI)
+    current_time_gmt7 = datetime.now(timezone(timedelta(hours=7)))
+
+    # 4. TẠO BIẾN DYNAMIC CHO PROMPT
+    # Dùng cho Luật 2 (VD: "November 2025")
+    month_year_for_search = current_time_gmt7.strftime("%B %Y") 
+    # Dùng cho Luật 5 (VD: "November 03, 2025")
+    date_for_comparison = current_time_gmt7.strftime("%B %d, %Y")
+    # Dùng để thông báo thời gian VN (VD: "Thứ Hai, ngày 03 tháng 11 năm 2025")
+    current_date_vi = current_time_gmt7.strftime("%A, ngày %d tháng %m năm %Y")
+
+    # --- (SỬA ĐỔI) SYSTEM PROMPT (Tích hợp biến ngày + Sửa Luật 5) ---
     system_prompt = (
+            # THAY THẾ: Dùng biến thời gian VN
             fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
-            fr'Current Date: {current_date}. '
-            fr'Múi giờ User (VN): UTC+7. Kiến thức cutoff: 2024.\n'
-            fr'QUAN TRỌNG: Hỏi "hôm nay/bây giờ/hiện tại" → CỘNG 7H VÀO UTC.\n\n'
+            fr'Current User Time (VN): {current_date_vi}. '
+            fr'Kiến thức cutoff: 2024.\n'
+            fr'QUAN TRỌNG: Mọi thông tin về thời gian (hôm nay, bây giờ) PHẢI dựa trên thời gian VN ({date_for_comparison}).\n\n'
             
             fr'QUAN TRỌNG - DANH TÍNH CỦA BẠN:\n'
             fr'Bạn TÊN LÀ "Chad Gibiti" - một Discord bot siêu thân thiện và vui tính được tạo ra bởi admin để trò chuyện với mọi người!\n'
@@ -1471,32 +1515,39 @@ async def on_message(message):
             
             fr'**LUẬT 2: GIẢI MÃ VÀ TỐI ƯU HÓA QUERY (CƯỠNG CHẾ NGÀY/THÁNG)**\n'
             fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
-            fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024) hoặc CẦN XÁC NHẬN, **BẮT BUỘC** gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU và **PHẢI BAO GỒM** **THÁNG & NĂM HIỆN TẠI (November 2025)** hoặc từ khóa **"latest version/patch"**.\n\n'
+            # THAY THẾ: Dùng biến tháng/năm
+            fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024) hoặc CẦN XÁC NHẬN, **BẮT BUỘC** gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU và **PHẢI BAO GỒM** **THÁNG & NĂM HIỆN TẠI ({month_year_for_search})** hoặc từ khóa **"latest version/patch"**.\n\n'
             
-            fr'**LUẬT 3: CƯỠNG CHẾ THINKING HOẶC TOOL CALL (CƯỠNG CHẾ 100%)**\n'
-            fr'a) **QUY TẮC BẮT BUỘC**: Với MỌI câu hỏi từ user, Output **PHẢI BẮT ĐẦU** bằng **KHỐI THINKING** (xem Luật 5) **HOẶC** là **function_call**. **ĐẶC BIỆT**: Bất kỳ phản hồi nào sau khi có kết quả từ `web_search` HOẶC khi sửa sai, **BẮT BUỘC PHẢI DÙNG KHỐI THINKING**.\n'
-            fr'b) **CẤM TUYỆT ĐỐI**: KHÔNG PHÁT RA BẤT KỲ VĂN BẢN TRÒ CHUYỆN NÀO TRƯỚC HÀNH ĐỘNG (Thinking/Tool Call).\n'
-            fr'c) **NGOẠI LỆ DUY NHẤT**: CHỈ trả lời trực tiếp mà KHÔNG CẦN THINKING khi đó là **lời chào/tạm biệt đơn thuần**, **lời cảm ơn**, hoặc **câu hỏi không liên quan đến logic, không cần tool** (VD: "Bạn khỏe không?"). Mọi câu hỏi có logic/sửa lỗi/cần tool **PHẢI DÙNG THINKING**.\n\n'
-            
+            fr'**LUẬT 3: CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI)**\n'
+            fr'Mọi output (phản hồi) của bạn **PHẢI** bắt đầu bằng MỘT trong hai cách sau:\n'
+            fr'1. **function_call**: Nếu bạn cần gọi tool (theo Luật 5).\n'
+            fr'2. **<THINKING>**: Nếu bạn trả lời bằng text (trò chuyện với user).\n'
+            fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó (Ngoại lệ: chào/cảm ơn đơn giản).\n\n'
+
             fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
             fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
             
-            fr'**LUẬT 5: PHÂN TÍCH CHẤT LƯỢNG VÀ VÒNG LẶP (THINKING BLOCK - CƯỠNG CHẾ BÁO CÁO DỰ ĐOÁN)**\n'
-            fr'Sau khi nhận kết quả tool (HOẶC khi cần suy luận trước khi trả lời), **BẮT BUỘC** thực hiện các bước sau:\n'
-            fr'**QUAN TRỌNG**: KHỐI SUY LUẬN NÀY PHẢI ĐƯỢC BỌC TRONG TAG <THINKING> </THINKING>. KHÔNG show nội dung trong tag ra ngoài.\n'
-            fr'1. **TỰ LOG & KHỞI ĐỘNG**: Luôn bắt đầu khối này bằng việc ghi rõ: "Mục tiêu: [Tóm tắt yêu cầu của user]. Trạng thái: Đã có kết quả tool/Cần suy luận nội bộ. Kết quả tool: [Tổng hợp ngắn gọn kết quả search/tool]." \n'
-            fr'2. **TỰ ĐỘNG THAM CHIẾU**: Nếu user hỏi xác nhận (ví dụ: "bạn chắc chứ"): **PHẢI** đưa kết quả truy vấn trước vào nội suy để tái xác nhận thông tin.\n'
-            fr'3. **PHÂN TÍCH NGỮ CẢNH "NEXT"**: \n'
-            fr'    - Nếu user hỏi "bản tiếp theo" (next version): **PHẢI** so sánh ngày phát hành/kết thúc trong kết quả tìm kiếm với ngày **HIỆN TẠI (November 2, 2025)**.\n'
-            fr'    - **LOẠI BỎ** mọi thông tin về phiên bản đã ra mắt HOẶC đang chạy và **CHỈ CHỌN** phiên bản có ngày phát hành **SAU PHIÊN BẢN HIỆN TẠI** để trả lời. Nếu không tìm thấy, gọi search lại với từ khóa "Version 2.X" (với X là phiên bản tiếp theo).\n'
-            fr'4. **VÒNG LẶP QUYẾT ĐỊNH (TỐI ĐA 12 LẦN):**\n'
-            fr'    - **ƯU TIÊN TUYỆT ĐỐI (BÁO CÁO RÒ RỈ):** Nếu kết quả tool **CÓ CHỨA** các từ khóa như "leaker", "dự đoán", "rò rỉ", "Version 6.X", "6.3" HOẶC **THÔNG TIN CHUNG CHUNG CÓ LIÊN QUAN TRỰC TIẾP ĐẾN CHỦ ĐỀ CHÍNH** (Columbina), thì **TUYỆT ĐỐI PHẢI CHỌN QUYẾT ĐỊNH 2**.\n'
-            fr'    - **QUYẾT ĐỊNH 1 (Search Thêm):** CHỈ CHỌN khi kết quả tool là **HẾT SỨC VÔ NGHĨA VÀ KHÔNG LIÊN QUAN** (VD: Search game nhưng ra tin tức nấu ăn). Trong trường hợp này, gọi lại `web_search` với QUERY KHÁC.\n'
-            fr'    - **QUYẾT ĐỊNH 2 (Hoàn thành - CƯỠNG CHẾ BÁO CÁO):** Nếu đã có thông tin liên quan (dù là rò rỉ/dự đoán) hoặc thông tin đã rõ ràng, quyết định **CƯỠNG CHẾ TẠO OUTPUT** ngay lập tức.\n'
-            fr'        - **TUYỆT ĐỐI**: Không tìm kiếm thêm. **PHẢI** tổng hợp thông tin đó và **TẠO CÂU TRẢ LỜI ĐẦY ĐỦ** (LÀM RÕ đây là thông tin rò rỉ) và chuyển sang **ÁP DỤNG TÍNH CÁCH**. **KHÔNG ĐƯỢC PHÉP TRẢ VỀ RỖNG**.\n'
-            fr'    - **QUYẾT ĐỊNH 3 (Thất Bại):** Nếu **KHÔNG CÓ BẤT CÁC THÔNG TIN RÒ RỈ HOẶC CHÍNH THỨC CẦN THIẾT** và đã search đủ 12 lần, quyết định trả lời lịch sự rằng không tìm thấy **(SỬ DỤNG CÁCH DIỄN ĐẠT MỚI)**.\n\n'
+            fr'**LUẬT 5: PHÂN TÍCH KẾT QUẢ TOOL VÀ HÀNH ĐỘNG (CƯỠNG CHẾ - TUYỆT ĐỐI)**\n'
+            fr'Sau khi nhận kết quả từ tool (ví dụ: `function_response`), bạn **BẮT BUỘC** phải đánh giá chất lượng của nó.\n'
+            fr'1. **ĐÁNH GIÁ CHẤT LƯỢNG KẾT QUẢ:**\n'
+            fr'    - **KẾT QUẢ TỐT:** Nếu kết quả tool có thông tin liên quan đến TẤT CẢ các chủ đề user hỏi.\n'
+            fr'    - **KẾT QUẢ XẤU/THIẾU:** Nếu kết quả RỖNG, HOẶC sai chủ đề (VD: **hỏi Honkai Impact 3 lại ra Star Rail**), HOẶC thiếu thông tin cho 1 trong các chủ đề user hỏi.\n\n'
             
-            fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ, bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
+            fr'2. **HÀNH ĐỘNG TUYỆT ĐỐI (KHÔNG CÓ NGOẠI LỆ):**\n'
+            fr'    - **NẾU KẾT QUẢ XẤU/THIẾU:** **HÀNH ĐỘNG DUY NHẤT LÀ GỌI `web_search` LẠI NGAY LẬP TỨC.** Bạn **TUYỆT ĐỐI KHÔNG** được tạo khối `<THINKING>` và **KHÔNG** được trả lời user.\n'
+            fr'        - **NGUYÊN TẮC FALLBACK:** Nếu đây là lần gọi tool thứ 2 trở đi cho cùng một chủ đề (hoặc bạn đã nhận kết quả rác/sai ngữ nghĩa như ví dụ trên) thì **BẮT BUỘC** thêm từ khóa **`[FORCE FALLBACK]`** vào query mới.\n'
+            fr'        - **Ví dụ gọi lại:** `Honkai Impact 3rd current banner November 2025 [FORCE FALLBACK]`\n'
+            fr'    - **NẾU KẾT QUẢ TỐT:** **HÀNH ĐỘNG DUY NHẤT LÀ TẠO KHỐI `<THINKING>`** và sau đó là CÂU TRẢ LỜI CUỐI CÙNG cho user.\n\n'
+            
+            fr'**QUY TRÌNH KHI TRẢ LỜI (CHỈ KHI TỐT):**\n'
+            fr'**CẤU TRÚC OUTPUT CƯỠNG CHẾ:** Câu trả lời text cuối cùng cho user **BẮT BUỘC** phải có cấu trúc chính xác như sau:\n'
+            fr'<THINKING>\n'
+            fr'1. **TỰ LOG**: Mục tiêu: [Tóm tắt yêu cầu]. Trạng thái: Đã có đủ kết quả tool. Kết quả: [Tổng hợp ngắn gọn tất cả kết quả tool].\n'
+            fr'2. **PHÂN TÍCH "NEXT"**: [Phân tích nếu có]. Nếu hỏi "bản tiếp theo", so sánh với ngày **HIỆN TẠI ({date_for_comparison})** và chỉ chọn phiên bản SAU NGÀY HIỆN TẠI.\n'
+            fr'</THINKING>\n'
+            fr'[NỘI DUNG TRẢ LỜI BẮT ĐẦU TẠI ĐÂY - Áp dụng TÍNH CÁCH và FORMAT]\n\n'
+
+            fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
             
             fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
 
