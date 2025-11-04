@@ -1,10 +1,10 @@
-discord.py
+discord.py==2.6.4
 python-dotenv
 sympy
-google-generativeai
-requests
+google-genai
 google-search-results
 tavily-python
 exa-py
-flask
+flask==3.1.2
 aiofiles
+httpx
