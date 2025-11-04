@@ -2,9 +2,10 @@ discord.py
 python-dotenv
 sympy
 google-generativeai
-requests
+google-api-core
 google-search-results
 tavily-python
 exa-py
 flask
 aiofiles
+httpx

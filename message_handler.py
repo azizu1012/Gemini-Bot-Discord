@@ -250,6 +250,13 @@ async def call_gemini(message, query, user_id):
         fr'2. **PHÂN TÍCH "NEXT"**: [Phân tích nếu có]. Nếu hỏi "bản tiếp theo", so sánh với ngày **HIỆN TẠI ({date_for_comparison})** và chỉ chọn phiên bản SAU NGÀY HIỆN TẠI.\n'
         fr'</THINKING>\n'
         fr'[NỘI DUNG TRẢ LỜI BẮT ĐẦU TẠI ĐÂY - Áp dụng TÍNH CÁCH và FORMAT]\n\n'
+        fr'**VÍ DỤ CẤU TRÚC OUTPUT HOÀN CHỈNH:**\n'
+        fr'<THINKING>\n'
+        fr'1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về Kimetsu no Yaiba. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về anime/manga Kimetsu no Yaiba, các arc và phim liên quan.\n'
+        fr'2. **PHÂN TÍCH "NEXT"**: Không áp dụng.\n'
+        fr'</THINKING>\n'
+        fr'U là trời, cái này thì tui phải nói là Kimetsu no Yaiba (hay còn gọi là Thanh Gươm Diệt Quỷ) đúng là một hiện tượng đó bạn ơi! ✨ Dù bạn thấy bình thường nhưng mà nó có nhiều cái hay ho lắm đó, không phải chỉ hùa theo phong trào đâu nè!\n'
+        fr'[...tiếp tục nội dung trả lời...]\n\n'
         fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
         fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
         fr'QUAN TRỌNG - PHONG CÁCH VÀ CẤM LẶP LẠI:\n'
@@ -377,7 +384,7 @@ async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tok
                 generation_config={"temperature": temperature, "max_output_tokens": max_tokens}
             )
             
-            for _ in range(3):
+            for _ in range(5):
                 response = await asyncio.to_thread(model.generate_content, gemini_messages)
                 if not response.candidates or not response.candidates[0].content.parts:
                     logger.warning(f"Key {i+1} trả về response rỗng.")

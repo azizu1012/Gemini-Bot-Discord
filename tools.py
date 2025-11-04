@@ -281,7 +281,7 @@ async def run_search_apis(query, mode="general"):
 
     enriched_queries = []
     for q in sub_queries:
-        q_enhanced = f"{q} official update release date patch notes roadmap leaks OR speculation"
+        q_enhanced = q
         if FORCE_FALLBACK_REQUEST:
             q_enhanced += " [FORCE FALLBACK]"
         enriched_queries.append(q_enhanced)

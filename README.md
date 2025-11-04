@@ -1,4 +1,3 @@
-
 # Discord AI Assistant (Modularized)
 <p align="center">
   <a href="https://github.com/azizu1012/Gemini-Bot-Discord/blob/main/LICENSE">
