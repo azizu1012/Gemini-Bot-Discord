@@ -1,4 +1,3 @@
---- 
 
 # Discord AI Assistant (Modularized)
 <p align="center">
