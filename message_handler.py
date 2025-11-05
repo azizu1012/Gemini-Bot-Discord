@@ -4,8 +4,10 @@ import random
 from datetime import datetime, timedelta, timezone
 import locale
 import asyncio
-import google.generativeai as genai
+from google.generativeai.client import configure
+from google.generativeai.generative_models import GenerativeModel
 from collections import defaultdict, deque
+from typing import Dict, Deque, Any, Tuple, Optional
 
 from config import (
     logger, MODEL_NAME, ADMIN_ID, HABE_USER_ID, MIRA_USER_ID, ADO_FAT_USER_ID,
@@ -21,7 +23,7 @@ from memory import (
 from tools import ALL_TOOLS, call_tool
 from logger import log_message
 
-async def handle_message(message, bot, mention_history, confirmation_pending, admin_confirmation_pending, user_queue):
+async def handle_message(message: discord.Message, bot: Any, mention_history: Dict[str, list], confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any], user_queue: defaultdict) -> None:
     if message.author == bot.user:
         return
 
@@ -61,22 +63,22 @@ async def handle_message(message, bot, mention_history, confirmation_pending, ad
 
     await call_gemini(message, query, user_id)
 
-def get_interaction_type(message, bot):
+def get_interaction_type(message: discord.Message, bot: Any) -> Optional[str]:
     if message.guild is None:
         return "DM"
-    if message.reference and message.reference.resolved and message.reference.resolved.author == bot.user:
+    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == bot.user:
         return "REPLY"
     if not message.mention_everyone and bot.user in message.mentions:
         return "MENTION"
     return None
 
-def get_query(message, bot):
+def get_query(message: discord.Message, bot: Any) -> str:
     query = message.content.strip()
     if bot.user in message.mentions:
         query = re.sub(rf'<@!?{bot.user.id}>', '', query).strip()
     return query
 
-def is_rate_limited(user_id, mention_history):
+def is_rate_limited(user_id: str, mention_history: Dict[str, list]) -> bool:
     now = datetime.now()
     if user_id not in mention_history:
         mention_history[user_id] = []
@@ -86,7 +88,7 @@ def is_rate_limited(user_id, mention_history):
     mention_history[user_id].append(now)
     return False
 
-def is_spam(user_id, user_queue):
+def is_spam(user_id: str, user_queue: defaultdict) -> bool:
     q = user_queue[user_id]
     now = datetime.now()
     q = deque([t for t in q if now - t < timedelta(seconds=SPAM_WINDOW)])
@@ -96,7 +98,7 @@ def is_spam(user_id, user_queue):
     user_queue[user_id] = q
     return False
 
-async def handle_admin_commands(message, query, user_id, is_admin, bot):
+async def handle_admin_commands(message: discord.Message, query: str, user_id: str, is_admin: bool, bot: Any) -> bool:
     if is_admin and re.search(r'\b(nhắn|dm|dms|ib|inbox|trực tiếp|gửi|kêu)\b', query, re.IGNORECASE):
         target_id, content = extract_dm_target_and_content(query)
         logger.info(f"[DM ADMIN] Target: {target_id}, Content: {content}")
@@ -139,7 +141,7 @@ async def handle_admin_commands(message, query, user_id, is_admin, bot):
             return True
     return False
 
-async def handle_confirmation(message, query, user_id, is_admin, confirmation_pending, admin_confirmation_pending):
+async def handle_confirmation(message: discord.Message, query: str, user_id: str, is_admin: bool, confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any]) -> bool:
     if user_id in confirmation_pending and confirmation_pending[user_id]['awaiting']:
         if (datetime.now() - confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
             del confirmation_pending[user_id]
@@ -169,7 +171,7 @@ async def handle_confirmation(message, query, user_id, is_admin, confirmation_pe
         return True
     return False
 
-async def handle_quick_replies(message, query, user_id):
+async def handle_quick_replies(message: discord.Message, query: str, user_id: str) -> bool:
     if query.lower() in ["hi", "hello", "chào", "hí", "hey"]:
         quick_replies = ["Hí anh!", "Chào anh yêu!", "Hi hi!", "Hí hí!", "Chào anh!"]
         reply = random.choice(quick_replies)
@@ -178,7 +180,7 @@ async def handle_quick_replies(message, query, user_id):
         return True
     return False
 
-def sanitize_query(query):
+def sanitize_query(query: str) -> str:
     dangerous = [
         r'\bignore\s+(previous|all|earlier|instructions)\b',
         r'\bforget\s+(everything|previous|all)\b',
@@ -192,7 +194,7 @@ def sanitize_query(query):
             query = re.sub(pattern, '[REDACTED]', query, flags=re.IGNORECASE)
     return query
 
-async def call_gemini(message, query, user_id):
+async def call_gemini(message: discord.Message, query: str, user_id: str) -> None:
     query = sanitize_query(query)
     await log_message(user_id, "user", query)
     history = await get_user_history_async(user_id)
@@ -227,10 +229,10 @@ async def call_gemini(message, query, user_id):
         fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
         fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về nhiều chủ đề, hãy dùng ' and ' để nối các chủ đề lại. Nếu user hỏi về thông tin MỚI (sau 2024) hoặc CẦN XÁC NHẬN, **BẮT BUỘC** gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU và **PHẢI BAO GỒM** **THÁNG & NĂM HIỆN TẠI ({month_year_for_search})** hoặc từ khóa **"latest version/patch"**.\n\n'
         fr'**LUẬT 3: CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI)**\n'
-        fr'Mọi output (phản hồi) của bạn **PHẢI** bắt đầu bằng MỘT trong hai cách sau:\n'
-        fr'1. **function_call**: Nếu bạn cần gọi tool (theo Luật 5).\n'
-        fr'2. **<THINKING>**: Nếu bạn trả lời bằng text (trò chuyện với user).\n'
-        fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó (Ngoại lệ: chào/cảm ơn đơn giản).\n\n'
+        fr'Mọi output (phản hồi) của bạn **PHẢI** là MỘT trong hai dạng sau:\n'
+        fr'1. **Gọi tool**: Nếu bạn cần sử dụng tool (theo Luật 5), hãy dùng tính năng gọi tool của hệ thống.\n'
+        fr'2. **Trả lời bằng text**: Nếu bạn trả lời bằng text (trò chuyện với user), câu trả lời **PHẢI** bắt đầu bằng khối `<THINKING>`.\n'
+        fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó. **KHÔNG CÓ NGOẠI LỆ**.\n\n'
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
         fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
         fr'**LUẬT 5: PHÂN TÍCH KẾT QUẢ TOOL VÀ HÀNH ĐỘNG (CƯỠNG CHẾ - TUYỆT ĐỐI)**\n'
@@ -354,7 +356,7 @@ async def call_gemini(message, query, user_id):
         logger.error(f"AI call failed: {e}")
         await message.reply("Ôi tui bị crash rồi! 😭")
 
-async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tokens=2000):
+async def run_gemini_api(messages: list, model_name: str, user_id: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
     keys = GEMINI_API_KEYS
     if not keys:
         return "Lỗi: Không có API key."
@@ -375,8 +377,8 @@ async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tok
     for i, api_key in enumerate(keys):
         logger.info(f"THỬ KEY {i+1}: {api_key[:8]}...")
         try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel(
+            configure(api_key=api_key)
+            model = GenerativeModel(
                 model_name,
                 tools=ALL_TOOLS,
                 system_instruction=system_instruction,
@@ -441,17 +443,17 @@ async def run_gemini_api(messages, model_name, user_id, temperature=0.7, max_tok
     
     return "Lỗi: TẤT CẢ KEY GEMINI FAIL – CHECK .ENV HOẶC LOG!"
 
-async def clear_user_data(user_id):
+async def clear_user_data(user_id: str) -> bool:
     db_cleared = await clear_user_data_db(user_id)
     json_cleared = await clear_user_data_memory(user_id)
     return db_cleared and json_cleared
 
-async def clear_all_data():
+async def clear_all_data() -> bool:
     db_cleared = await clear_all_data_db()
     json_cleared = await clear_all_data_memory()
     return db_cleared and json_cleared
 
-async def expand_dm_content(content, user_id):
+async def expand_dm_content(content: str, user_id: str) -> str:
     prompt = f"Mở rộng tin nhắn sau thành câu dài hơn, giữ nguyên ý nghĩa, thêm chút dễ thương:\n{content}"
     try:
         messages = [{"role": "system", "content": prompt}]
@@ -460,13 +462,13 @@ async def expand_dm_content(content, user_id):
     except:
         return content
 
-async def safe_fetch_user(bot, user_id):
+async def safe_fetch_user(bot: Any, user_id: str) -> Optional[discord.User]:
     try:
         return await bot.fetch_user(int(user_id))
     except:
         return None
 
-def extract_dm_target_and_content(query):
+def extract_dm_target_and_content(query: str) -> Tuple[Optional[str], Optional[str]]:
     query_lower = query.lower()
     special_map = {
         "bé hà": HABE_USER_ID,

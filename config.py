@@ -24,6 +24,9 @@ logger.propagate = False
 # --- DISCORD & BOT ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 MODEL_NAME = os.getenv('MODEL_NAME')
+if not MODEL_NAME:
+    logger.warning("MODEL_NAME environment variable not set. Using default 'gemini-pro'.")
+    MODEL_NAME = 'gemini-pro'
 ADMIN_ID = os.getenv('ADMIN_ID', '')
 HABE_USER_ID = os.getenv('HABE_USER_ID', '')
 MIRA_USER_ID = os.getenv('MIRA_USER_ID', '')

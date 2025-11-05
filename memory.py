@@ -3,10 +3,11 @@ import json
 import os
 import asyncio
 from config import MEMORY_PATH, logger
+from typing import Dict, Any
 
 memory_lock = asyncio.Lock()
 
-def init_json_memory():
+def init_json_memory() -> None:
     """Khởi tạo file JSON nếu chưa tồn tại."""
     if not os.path.exists(MEMORY_PATH):
         try:
@@ -16,7 +17,7 @@ def init_json_memory():
         except Exception as e:
             logger.error(f"Failed to create memory file: {e}")
 
-async def load_json_memory():
+async def load_json_memory() -> Dict[str, Any]:
     """Tải bộ nhớ từ file JSON (an toàn với Lock)."""
     async with memory_lock:
         if not os.path.exists(MEMORY_PATH):
@@ -33,7 +34,7 @@ async def load_json_memory():
             logger.error(f"Failed to load memory file: {e}")
             return {}
 
-async def save_json_memory(data):
+async def save_json_memory(data: Dict[str, Any]) -> None:
     """Lưu bộ nhớ vào file JSON (an toàn với Lock)."""
     async with memory_lock:
         try:
@@ -42,7 +43,7 @@ async def save_json_memory(data):
         except Exception as e:
             logger.error(f"Failed to save memory file: {e}")
 
-async def log_message_memory(user_id, role, content):
+async def log_message_memory(user_id: str, role: str, content: str) -> None:
     try:
         memory = await load_json_memory()
         if user_id not in memory:
@@ -55,11 +56,11 @@ async def log_message_memory(user_id, role, content):
     except Exception as e:
         logger.error(f"Failed to update JSON memory for {user_id}: {e}")
 
-async def get_user_history_async(user_id):
+async def get_user_history_async(user_id: str) -> list:
     memory = await load_json_memory()
     return memory.get(user_id, [])
 
-async def clear_user_data_memory(user_id):
+async def clear_user_data_memory(user_id: str) -> bool:
     try:
         memory = await load_json_memory()
         if user_id in memory:
@@ -73,7 +74,7 @@ async def clear_user_data_memory(user_id):
         logger.error(f"Failed to clear JSON memory for {user_id}: {e}")
         return False
 
-async def clear_all_data_memory():
+async def clear_all_data_memory() -> bool:
     try:
         await save_json_memory({})
         logger.info("ADMIN: Reset JSON memory file.")

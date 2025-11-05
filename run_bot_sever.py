@@ -7,4 +7,7 @@ from config import TOKEN, logger
 if __name__ == "__main__":
     threading.Thread(target=run_keep_alive, daemon=True).start()
     logger.info("Máy săn Bot đang khởi động...")
-    bot.run(TOKEN)
+    if TOKEN:
+        bot.run(TOKEN)
+    else:
+        logger.error("DISCORD_TOKEN environment variable not set.")

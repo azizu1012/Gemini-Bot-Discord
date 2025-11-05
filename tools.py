@@ -11,6 +11,7 @@ from google.generativeai.types import Tool, FunctionDeclaration
 from serpapi import GoogleSearch
 from tavily import TavilyClient
 import exa_py
+from typing import Any, Dict, Tuple, Optional
 from config import (
     logger,
     NOTE_PATH,
@@ -81,7 +82,7 @@ ALL_TOOLS = [
 ]
 
 # === BỘ ĐIỀU PHỐI TOOL ===
-async def call_tool(function_call, user_id):
+async def call_tool(function_call: Any, user_id: str) -> str:
     name = function_call.name
     args = dict(function_call.args)
     logger.info(f"TOOL GỌI: {name} | Args: {args} | User: {user_id}")
@@ -125,7 +126,7 @@ CITY_NAME_MAP = {
     "da nang": ("Da Nang", "Đà Nẵng"),
 }
 
-def normalize_city_name(city_query):
+def normalize_city_name(city_query: str) -> Tuple[str, str]:
     if not city_query:
         return ("Ho Chi Minh City", "Thành phố Hồ Chí Minh")
     city_key = city_query.strip().lower()
@@ -136,15 +137,15 @@ def normalize_city_name(city_query):
 
 weather_lock = asyncio.Lock()
 
-async def get_weather(city_query=None):
+async def get_weather(city_query: Optional[str] = None) -> Dict[str, Any]:
     async with weather_lock:
-        city_env = CITY or "Ho Chi Minh City"
-        city_query = city_query or city_env
+        if city_query is None:
+            city_query = CITY or "Ho Chi Minh City"
         city_en, city_vi = normalize_city_name(city_query)
 
         cache_path = WEATHER_CACHE_PATH.replace(".json", f"_{city_en.replace(' ', '_').lower()}.json")
 
-        if await aiofiles.os.path.exists(cache_path):
+        if await asyncio.to_thread(os.path.exists, cache_path):
             try:
                 async with aiofiles.open(cache_path, 'r') as f:
                     cache = json.loads(await f.read())
@@ -227,7 +228,7 @@ def run_calculator(equation_str: str) -> str:
             "success": False
         }, ensure_ascii=False)
 
-async def save_note(query):
+async def save_note(query: str) -> str:
     try:
         note = query.lower().replace("ghi note: ", "").replace("save note: ", "").strip()
         async with aiofiles.open(NOTE_PATH, 'a', encoding='utf-8') as f:
@@ -238,7 +239,7 @@ async def save_note(query):
     except Exception as e:
         return f"Lỗi ghi note: {str(e)}"
 
-async def read_note():
+async def read_note() -> str:
     try:
         if not os.path.exists(NOTE_PATH):
             return "Chưa có note nào bro! Ghi note đi nha! 😎"
@@ -257,7 +258,7 @@ SEARCH_LOCK = asyncio.Lock()
 SEARCH_CACHE = {}
 CACHE_LOCK = asyncio.Lock()
 
-async def cached_search(key, func, *args):
+async def cached_search(key: str, func: Any, *args: Any) -> Any:
     async with CACHE_LOCK:
         if key in SEARCH_CACHE and datetime.now() - SEARCH_CACHE[key]['time'] < timedelta(hours=6):
             return SEARCH_CACHE[key]['result']
@@ -265,7 +266,7 @@ async def cached_search(key, func, *args):
         SEARCH_CACHE[key] = {'result': result, 'time': datetime.now()}
         return result
 
-async def run_search_apis(query, mode="general"):
+async def run_search_apis(query: str, mode: str = "general") -> str:
     logger.info(f"CALLING 3x CSE SMART SEARCH for '{query}' (mode: {mode})")
     global SEARCH_API_COUNTER
 
@@ -318,7 +319,7 @@ async def run_search_apis(query, mode="general"):
                 logger.warning("CSE2 rỗng/lỗi → fallback qua SerpAPI/Tavily/Exa")
                 cse2_result = await _run_fallback_search(log_q)
 
-            parts = [x for x in [cse0_result, cse1_result, cse2_result] if x]
+            parts: list[str] = [str(x) for x in [cse0_result, cse1_result, cse2_result] if x]
             if parts:
                 merged = "\n\n".join(parts)
                 unique_lines = []
@@ -342,7 +343,7 @@ async def run_search_apis(query, mode="general"):
     logger.error("TẤT CẢ 3 CSE + fallback FAIL.")
     return ""
 
-async def _search_cse(query, cse_id, api_key, index=0, start_idx=1):
+async def _search_cse(query: str, cse_id: str | None, api_key: str | None, index: int = 0, start_idx: int = 1) -> str:
     if not cse_id or not api_key:
         logger.warning(f"CSE{index} chưa cấu hình ID/API key.")
         return ""
@@ -389,7 +390,7 @@ async def _search_cse(query, cse_id, api_key, index=0, start_idx=1):
         logger.error(f"CSE{index} lỗi khi gọi API: {e}")
         return ""
 
-async def _run_fallback_search(query):
+async def _run_fallback_search(query: str) -> str:
     apis = ["SerpAPI", "Tavily", "Exa"]
     global SEARCH_API_COUNTER
     start_idx = SEARCH_API_COUNTER % 3
@@ -418,7 +419,7 @@ async def _run_fallback_search(query):
     logger.error("TẤT CẢ fallback APIs đều thất bại.")
     return ""
 
-async def _search_serpapi(query):
+async def _search_serpapi(query: str) -> str:
     if not SERPAPI_API_KEY: return ""
     
     params = {
@@ -446,7 +447,7 @@ async def _search_serpapi(query):
     
     return "**Search SerpAPI (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
 
-async def _search_tavily(query):
+async def _search_tavily(query: str) -> str:
     if not TAVILY_API_KEY: return ""
     
     tavily = TavilyClient(api_key=TAVILY_API_KEY)
@@ -472,7 +473,7 @@ async def _search_tavily(query):
     
     return "**Search Tavily (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
 
-async def _search_exa(query):
+async def _search_exa(query: str) -> str:
     if not EXA_API_KEY: return ""
     
     exa = exa_py.Exa(api_key=EXA_API_KEY)
@@ -491,7 +492,8 @@ async def _search_exa(query):
     relevant = []
     for item in results.results[:3]:
         title = item.title or 'Không có tiêu đề'
-        snippet = item.text[:330] + "..." if len(item.text or '') > 130 else item.text or ''
+        text = item.text or ''
+        snippet = text[:330] + "..." if len(text) > 130 else text
         link = item.url
         if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']): continue
         relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")

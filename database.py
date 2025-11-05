@@ -4,11 +4,12 @@ import shutil
 from datetime import datetime, timedelta
 from config import DB_PATH, DB_BACKUP_PATH, logger
 import asyncio
+from typing import Any, Coroutine
 
-async def init_db():
+async def init_db() -> None:
     await asyncio.to_thread(_init_db_sync)
 
-def _init_db_sync():
+def _init_db_sync() -> None:
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -31,10 +32,10 @@ def _init_db_sync():
         if conn:
             conn.close()
 
-async def backup_db():
+async def backup_db() -> None:
     await asyncio.to_thread(_backup_db_sync)
 
-def _backup_db_sync():
+def _backup_db_sync() -> None:
     if os.path.exists(DB_PATH):
         try:
             conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -48,10 +49,10 @@ def _backup_db_sync():
             logger.error(f"Cannot backup DB: {str(e)}. Creating new DB.")
             _init_db_sync()
 
-async def cleanup_db():
+async def cleanup_db() -> None:
     await asyncio.to_thread(_cleanup_db_sync)
 
-def _cleanup_db_sync():
+def _cleanup_db_sync() -> None:
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -71,7 +72,7 @@ def _cleanup_db_sync():
         if conn:
             conn.close()
 
-async def log_message_db(user_id, role, content):
+async def log_message_db(user_id: str, role: str, content: str) -> None:
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)
@@ -81,7 +82,7 @@ async def log_message_db(user_id, role, content):
             "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
         )
         if not c.fetchone():
-            init_db() # This will call the async init_db
+            await init_db() # This will call the async init_db
             conn.close()
             conn = sqlite3.connect(DB_PATH, timeout=10)
             c = conn.cursor()
@@ -92,12 +93,12 @@ async def log_message_db(user_id, role, content):
         conn.commit()
     except sqlite3.DatabaseError as e:
         logger.error(f"Database error while logging: {str(e)}")
-        init_db() # This will call the async init_db
+        await init_db() # This will call the async init_db
     finally:
         if conn:
             conn.close()
 
-async def clear_user_data_db(user_id):
+async def clear_user_data_db(user_id: str) -> bool:
     conn = None
     for attempt in range(3):
         try:
@@ -122,7 +123,7 @@ async def clear_user_data_db(user_id):
                 conn.close()
     return False
 
-async def clear_all_data_db():
+async def clear_all_data_db() -> bool:
     conn = None
     try:
         conn = sqlite3.connect(DB_PATH, timeout=10)

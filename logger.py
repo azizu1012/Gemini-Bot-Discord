@@ -3,7 +3,7 @@ from config import logger
 from database import log_message_db
 from memory import log_message_memory
 
-async def log_message(user_id, role, content):
+async def log_message(user_id: str, role: str, content: str) -> None:
     await log_message_db(user_id, role, content)
     await log_message_memory(user_id, role, content)
     if role == "user":

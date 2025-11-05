@@ -3,6 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 from collections import defaultdict, deque
 from datetime import datetime
+from typing import Dict, Deque, Any, Optional
 
 from config import logger, ADMIN_ID
 from database import init_db, backup_db, cleanup_db
@@ -17,14 +18,14 @@ intents.dm_messages = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # --- GLOBAL VARS ---
-mention_history = {}
-confirmation_pending = {}
-admin_confirmation_pending = {}
-user_queue = defaultdict(deque)
+mention_history: Dict[str, list] = {}
+confirmation_pending: Dict[str, Dict[str, Any]] = {}
+admin_confirmation_pending: Dict[str, Dict[str, Any]] = {}
+user_queue: defaultdict[str, Deque[datetime]] = defaultdict(deque)
 
 # --- EVENTS ---
 @bot.event
-async def on_ready():
+async def on_ready() -> None:
     try:
         synced = await bot.tree.sync()
         logger.info(f"Đã sync {len(synced)} slash commands!")
@@ -37,7 +38,7 @@ async def on_ready():
     logger.info(f'{bot.user} online!')
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message) -> None:
     await handle_message(message, bot, mention_history, confirmation_pending, admin_confirmation_pending, user_queue)
 
 
@@ -49,7 +50,7 @@ def is_admin():
     return app_commands.check(predicate)
 
 @bot.tree.command(name="reset-chat", description="Xóa lịch sử chat của bạn")
-async def reset_chat_slash(interaction: discord.Interaction):
+async def reset_chat_slash(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
     user_id = str(interaction.user.id)
     confirmation_pending[user_id] = {'timestamp': datetime.now(), 'awaiting': True}
@@ -57,7 +58,7 @@ async def reset_chat_slash(interaction: discord.Interaction):
 
 @bot.tree.command(name="reset-all", description="Xóa toàn bộ DB (CHỈ ADMIN)")
 @is_admin()
-async def reset_all_slash(interaction: discord.Interaction):
+async def reset_all_slash(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
     admin_confirmation_pending[str(interaction.user.id)] = {'timestamp': datetime.now(), 'awaiting': True}
     await interaction.followup.send("⚠️ **ADMIN CONFIRM**: Reply **YES RESET** trong 60 giây để xóa toàn bộ DB + Memory!", ephemeral=True)
@@ -69,7 +70,7 @@ async def reset_all_slash(interaction: discord.Interaction):
     channel="Kênh để gửi tin nhắn (tùy chọn, mặc định là DM)"
 )
 @is_admin()
-async def message_to_slash(interaction: discord.Interaction, user: discord.User, message: str, channel: discord.TextChannel = None):
+async def message_to_slash(interaction: discord.Interaction, user: discord.User, message: str, channel: Optional[discord.TextChannel] = None) -> None:
     await interaction.response.defer(ephemeral=True)
     user_id = str(user.id)
     cleaned_message = ' '.join(message.strip().split())
@@ -84,6 +85,9 @@ async def message_to_slash(interaction: discord.Interaction, user: discord.User,
         if channel:
             if not isinstance(channel, discord.TextChannel):
                 await interaction.followup.send("Kênh phải là text channel! 😅", ephemeral=True)
+                return
+            if not interaction.guild:
+                await interaction.followup.send("Lệnh này không thể dùng trong DM khi có kênh.", ephemeral=True)
                 return
             if channel.guild != interaction.guild:
                 await interaction.followup.send("Kênh phải cùng server! 😢", ephemeral=True)
@@ -106,3 +110,13 @@ async def message_to_slash(interaction: discord.Interaction, user: discord.User,
     except Exception as e:
         await interaction.followup.send(f"Lỗi gửi tin nhắn! 😓 Lỗi: {str(e)}", ephemeral=True)
         logger.error(f"Error sending message to {user_id}: {e}")
+
+# --- COMMAND ERROR HANDLER ---
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    if isinstance(error, commands.CommandNotFound):
+        logger.warning(f"Lệnh không tồn tại: '{ctx.message.content}' từ User: {ctx.author}")
+        return
+    logger.error(f"Lỗi command: {error}")
+    # Nếu muốn bot báo lỗi cho user, bỏ comment dòng dưới
+    # await ctx.send(f"Lỗi command: {error}")

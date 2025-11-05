@@ -5,7 +5,7 @@ import os
 keep_alive_app = Flask(__name__)
 
 @keep_alive_app.route('/', methods=['GET', 'POST'])
-def webhook():
+def webhook() -> str:
     return "Bot alive! No sleep pls~ 😴"
 
 def run_keep_alive():
