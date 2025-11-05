@@ -24,7 +24,7 @@ Bot đã được tái cấu trúc thành các module nhỏ hơn để dễ qu�
 ## Tính năng chính
 
 | Tính năng | Mô tả |
-|----------|-------||
+|----------|-------|
 | **AI hội thoại thông minh** | Sử dụng Google Gemini với cơ chế **failover 5 API key** và **tool calling tự động** |
 | **Tìm kiếm thời gian thực** | Tích hợp **Google CSE**, **SerpAPI**, **Tavily**, **Exa.ai** (round-robin + cache 6h). AI **tự động gọi search** khi kiến thức đã cũ (sau 2024) |
 | **Giải toán học** | Hỗ trợ biểu thức, phương trình, đạo hàm, tích phân qua **SymPy** (tool calling tự động) |
