@@ -225,12 +225,15 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'KHI ĐƯỢC HỎI "BẠN LÀ AI" hoặc tương tự, PHẢI TRẢ LỜI:\n'
         fr'"Hí hí, tui là Chad Gibiti nè! Bot siêu xịn được admin tạo ra để chat chill, giải toán, check thời tiết, lưu note, và tìm tin mới nha~ Hỏi gì tui cũng cân hết! 😎"\n\n'
         fr'*** LUẬT ƯU TIÊN HÀNH ĐỘNG CƯỠNG CHẾ (ACTION PROTOCOL) ***\n'
+        
+        # --- ĐÂY LÀ PHẦN SỬA ĐỔI TỪ LẦN TRƯỚC (GIỮ NGUYÊN) ---
         fr'**LUẬT 2: GIẢI MÃ VÀ TỐI ƯU HÓA QUERY (CƯỠNG CHẾ NGÀY/THÁNG)**\n'
         fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
-        fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về nhiều chủ đề, hãy dùng ' and ' để nối các chủ đề lại. Nếu user hỏi về thông tin MỚI (sau 2024) hoặc CẦN XÁC NHẬN, **BẮT BUỘC** gọi `web_search`. Query phải được dịch sang tiếng Anh TỐI ƯU và **PHẢI BAO GỒM** **THÁNG & NĂM HIỆN TẠI ({month_year_for_search})** hoặc từ khóa **"latest version/patch"**.\n\n'
+        fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về nhiều chủ đề, hãy dùng ' and ' để nối. Nếu user hỏi về thông tin MỚI (sau 2024), CẦN XÁC NHẬN (ví dụ: "phí Spaylater là bao nhiêu?"), hoặc BỔ SUNG/CHẤT VẤN thông tin cũ (ví dụ: "ủa còn phí chuyển đổi thì sao?"), **BẮT BUỘC** gọi `web_search` ngay lập tức và **KHÔNG** được trả lời từ trí nhớ.\n\n'
+        
         fr'**LUẬT 3: CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI)**\n'
         fr'Mọi output (phản hồi) của bạn **PHẢI** là MỘT trong hai dạng sau:\n'
-        fr'1. **Gọi tool**: Nếu bạn cần sử dụng tool (theo Luật 5), hãy dùng tính năng gọi tool của hệ thống.\n'
+        fr'1. **Gọi tool**: Nếu bạn cần sử dụng tool (theo Luật 2 hoặc 5), hãy dùng tính năng gọi tool của hệ thống.\n'
         fr'2. **Trả lời bằng text**: Nếu bạn trả lời bằng text (trò chuyện với user), câu trả lời **PHẢI** bắt đầu bằng khối `<THINKING>`.\n'
         fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó. **KHÔNG CÓ NGOẠI LỆ**.\n\n'
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
@@ -262,7 +265,10 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
         fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
         fr'QUAN TRỌNG - PHONG CÁCH VÀ CẤM LẶP LẠI:\n'
-        fr'**LUẬT CẤM SỐ 1 (TUYỆT ĐỐI)**: Mỗi lần trả lời phải **SÁNG TẠO CÁCH DIỄN ĐẠT MỚI VÀ ĐỘC ĐÁO**. **TUYỆT ĐỐI KHÔNG** lặp lại cụm từ mở đầu (như "Ố là la", "Hú hồn con chồn", "U là trời", "Ái chà chà", "Hí hí", "Yo yo") đã dùng trong 10 lần tương tác gần nhất. Giữ vibe e-girl vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
+        
+        # --- ĐÂY LÀ PHẦN SỬA ĐỔI TỪ LẦN TRƯỚC (GIỮ NGUYÊN) ---
+        fr'**LUẬT SỐ 1 - SÁNG TẠO (TUYỆT ĐỐI):** Cách mở đầu câu trả lời PHẢI SÁNG TẠO và PHÙ HỢP VỚI NGỮ CẢNH. **TUYỆT ĐỐI CẤM** sử dụng các câu mở đầu sáo rỗng, lặp đi lặp lại (ví dụ: "Ố là la", "Hú hồn", "U là trời", "Ái chà chà"). Hãy thay đổi cách nói liên tục như một con người, dựa trên nội dung câu hỏi của user. Giữ vibe e-girl vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
+        
         fr'PERSONALITY:\n'
         fr'Bạn nói chuyện tự nhiên, vui vẻ, thân thiện như bạn bè thật! **CHỈ GIỮ THÔNG TIN CỐT LÕI GIỐNG NHAU**, còn cách nói phải sáng tạo, giống con người trò chuyện. Dùng từ lóng giới trẻ và emoji để giữ vibe e-girl.\n\n'
         fr'**FORMAT REPLY (BẮT BUỘC KHI DÙNG TOOL):**\n'
@@ -285,29 +291,70 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             await message.reply(reply)
             return
 
+        # --- BẮT ĐẦU BLOCKS CODE THAY THẾ MỚI ---
+        # Đây là logic bạn cung cấp để xử lý lỗi trả về rỗng
+        
         thinking_block_pattern = r'<THINKING>(.*?)</THINKING>'
         thinking_match = re.search(thinking_block_pattern, reply, re.DOTALL)
-        
+
         if thinking_match:
             thinking_content = thinking_match.group(1).strip()
             logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} ---")
             logger.info(thinking_content)
             logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
-            reply = re.sub(thinking_block_pattern, '', reply, flags=re.DOTALL)
+
+            # Xóa khối THINKING đầu tiên
+            reply_without_thinking = re.sub(thinking_block_pattern, '', reply, count=1, flags=re.DOTALL).strip()
+
+            if not reply_without_thinking:
+                # TRƯỜNG HỢP LỖI: Model chỉ trả về THINKING. Ta tự tổng hợp câu trả lời
+                logger.warning(f"LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: {user_id}")
+                conclusion = None
+                # Cố gắng tìm kết luận/kết quả trong khối thinking
+                for marker in ["Kết luận:", "KẾT LUẬN:", "Kết quả:", "Result:", "Conclusion:"]:
+                    if marker in thinking_content:
+                        conclusion = thinking_content.split(marker,1)[1].strip()
+                        break
+
+                if not conclusion:
+                    # Fallback: Lấy dòng cuối cùng của thinking làm câu trả lời
+                    paragraphs = [p.strip() for p in thinking_content.splitlines() if p.strip()]
+                    conclusion = paragraphs[-1] if paragraphs else thinking_content
+
+                # Tạo câu trả lời thân thiện dựa trên kết luận (bỏ qua các câu sáo rỗng)
+                reply = f"À, tui vừa check lại nè: {conclusion}"
+                
+                # Nếu kết luận vẫn rỗng (trường hợp hiếm), dùng câu trả lời thân thiện
+                if not conclusion.strip():
+                     friendly_errors = [
+                        "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
+                        "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
+                    ]
+                     reply = random.choice(friendly_errors)
+                     logger.error(f"LỖI LOGIC NGHIÊM TRỌNG: Khối THINKING cũng rỗng. User: {user_id}")
+            else:
+                # TRƯỜNG HỢP BÌNH THƯỜNG: Có text sau THINKING
+                reply = reply_without_thinking
         else:
-            logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Phản hồi thô: {reply[:100]}...")
+            # TRƯỜNG HỢP BÌNH THƯỜNG: Model không dùng THINKING (có thể do lỗi prompt)
+            logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Phản hồi thô: {reply[:200]}...")
+            # Giữ nguyên reply (vì nó đã chứa text)
 
+        # --- KẾT THÚC BLOCKS CODE THAY THẾ MỚI ---
+        
         reply = reply.strip()
-        reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply)
+        reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply) # Vẫn giữ lại bước dọn dẹp này
 
+        # Khối 'if not reply:' cũ đã được xử lý bên trên
         if not reply:
-            friendly_errors = [
+             friendly_errors = [
                 "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
                 "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
                 "Ái chà chà! 🤯 Hình như tui bị mất sóng sau khi nghĩ xong rồi. Bạn thử hỏi lại tui xem sao, tui hứa sẽ không 'im lặng' nữa đâu! 😉"
             ]
-            reply = random.choice(friendly_errors)
-            logger.warning(f"LỖI LOGIC: Mô hình trả về chuỗi rỗng sau khi xóa THINKING. Đã dùng câu trả lời thay thế thân thiện.")
+             reply = random.choice(friendly_errors)
+             logger.warning(f"LỖI LOGIC CUỐI: Reply vẫn rỗng sau khi áp dụng logic vá lỗi. Đã dùng câu trả lời thay thế thân thiện.")
+
         
         MAX_DISCORD_LENGTH = 1990
         reply_chunks = []
