@@ -274,29 +274,59 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
     q_base = query.replace("[FORCE FALLBACK]", "").strip()
     
     sub_queries = []
+    # Giữ logic tách truy vấn
     if " và " in q_base or " and " in q_base.lower() or "," in q_base:
         splitters = re.split(r"\s*(?:và|and|,)\s*", q_base, flags=re.IGNORECASE)
         sub_queries = [q.strip() for q in splitters if q.strip()]
     else:
         sub_queries = [q_base.strip()]
 
-    enriched_queries = []
-    for q in sub_queries:
-        q_enhanced = q
-        if FORCE_FALLBACK_REQUEST:
-            q_enhanced += " [FORCE FALLBACK]"
-        enriched_queries.append(q_enhanced)
-
     final_results = []
 
-    for q in enriched_queries:
-        async with SEARCH_LOCK:
-            log_q = q.replace(" [FORCE FALLBACK]", "")
-            logger.info(f"Running parallel search for subquery: '{log_q}'")
+    # --- BẮT ĐẦU SỬA LỖI PHÂN LOẠI CHỦ ĐỀ ---
+    # 1. Định nghĩa các từ khóa "nóng" cho game.
+    # Bạn có thể thêm bất kỳ từ khóa nào bạn muốn vào đây.
+    GAMING_KEYWORDS = [
+        'patch', 'banner', 'update', 'release date', 'roadmap', 'leak', 
+        'speculation', 'gacha', 'reroll', 'tier list', 'build', 'nhân vật',
+        'honkai', 'hsr', 'star rail', 'genshin', 'zzz', 'zenless', 
+        'wuwa', 'wuthering waves', 'arknights', 'fgo', 'game', 'phiên bản'
+    ]
+    
+    # 2. Định nghĩa chuỗi từ khóa game (đây là chuỗi bạn đang dùng)
+    GAMING_SUFFIX = " official update release date patch notes roadmap leaks OR speculation"
+    # --- KẾT THÚC SỬA LỖI ---
 
-            cse0_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1))
-            cse1_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=4))
-            cse2_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=7))
+
+    for q_sub in sub_queries:
+        async with SEARCH_LOCK:
+            
+            # --- BẮT ĐẦU SỬA LỖI PHÂN LOẠI CHỦ ĐỀ ---
+            # 3. Logic phân loại chủ đề
+            query_lower = q_sub.lower()
+            is_gaming_query = False
+            for keyword in GAMING_KEYWORDS:
+                if keyword in query_lower:
+                    is_gaming_query = True
+                    break
+            
+            # 4. Tạo truy vấn cuối cùng (log_q) DỰA TRÊN CHỦ ĐỀ
+            log_q = ""
+            if is_gaming_query:
+                # Nếu là chủ đề game, thêm hậu tố
+                log_q = q_sub.strip() + GAMING_SUFFIX
+                logger.info(f"Phân loại: GAMING. Chạy search: '{log_q}'")
+            else:
+                # Nếu là chủ đề chung (chính trị, kinh tế...), giữ nguyên
+                log_q = q_sub.strip()
+                logger.info(f"Phân loại: GENERAL. Chạy search: '{log_q}'")
+            # --- KẾT THÚC SỬA LỖI ---
+
+            # --- SỬA ĐỔI 1: TÌM KIẾM SONG SONG VIỆT-ANH (VI-EN-EN) ---
+            # (Phần này giữ nguyên như code gốc của bạn)
+            cse0_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1, force_lang="vi"))
+            cse1_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=4, force_lang="en"))
+            cse2_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=7, force_lang="en"))
 
             cse0_result, cse1_result, cse2_result = await asyncio.gather(
                 cse0_task, cse1_task, cse2_task, return_exceptions=True
@@ -312,14 +342,27 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
             cse1_result = safe_result(cse1_result, "CSE1")
             cse2_result = safe_result(cse2_result, "CSE2")
 
-            if "[FORCE FALLBACK]" in q.upper() and cse2_result:
-                logger.warning(f"AI yêu cầu [FORCE FALLBACK] → Bỏ qua CSE2 (có dữ liệu rác), chạy Fallback thay thế.")
-                cse2_result = await _run_fallback_search(log_q)
-            elif not cse2_result:
-                logger.warning("CSE2 rỗng/lỗi → fallback qua SerpAPI/Tavily/Exa")
-                cse2_result = await _run_fallback_search(log_q)
+            # --- SỬA ĐỔI 2: LOGIC FALLBACK ĐỂ NGĂN LOOP ---
+            should_run_fallback = FORCE_FALLBACK_REQUEST or not cse2_result
+            
+            if should_run_fallback:
+                if FORCE_FALLBACK_REQUEST:
+                    logger.warning(f"AI yêu cầu [FORCE FALLBACK] → Chạy Fallback thay thế CSE2 (hoặc bổ sung).")
+                elif not cse2_result:
+                    logger.warning("CSE2 rỗng/lỗi → Chạy Fallback thay thế CSE2.")
+                
+                fallback_result = await _run_fallback_search(log_q) # Dùng log_q đã được phân loại
+
+                if fallback_result:
+                    logger.info(f"Fallback thành công. Thay thế/Bổ sung kết quả CSE2.")
+                    cse2_result = fallback_result
+                elif FORCE_FALLBACK_REQUEST and not cse2_result:
+                    pass
+                elif FORCE_FALLBACK_REQUEST and cse2_result:
+                    logger.warning("Fallback thất bại, giữ lại kết quả CSE2 gốc.")
 
             parts: list[str] = [str(x) for x in [cse0_result, cse1_result, cse2_result] if x]
+
             if parts:
                 merged = "\n\n".join(parts)
                 unique_lines = []
@@ -334,7 +377,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                     else:
                         unique_lines.append(line)
                 final_text = "\n".join(unique_lines)
-                final_results.append(f"### 🔍 Kết quả cho truy vấn phụ: {log_q}\n{final_text.strip()}")
+                final_results.append(f"### 🔍 Kết quả cho truy vấn phụ: {q_sub}\n{final_text.strip()}") # Hiển thị q_sub gốc cho user
 
     if final_results:
         logger.info(f"Hoàn tất tìm kiếm {len(final_results)} subquery.")
@@ -343,7 +386,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
     logger.error("TẤT CẢ 3 CSE + fallback FAIL.")
     return ""
 
-async def _search_cse(query: str, cse_id: str | None, api_key: str | None, index: int = 0, start_idx: int = 1) -> str:
+async def _search_cse(query: str, cse_id: str | None, api_key: str | None, index: int = 0, start_idx: int = 1, force_lang: str | None = None) -> str:
     if not cse_id or not api_key:
         logger.warning(f"CSE{index} chưa cấu hình ID/API key.")
         return ""
@@ -355,7 +398,8 @@ async def _search_cse(query: str, cse_id: str | None, api_key: str | None, index
         "num": 3,
         "start": start_idx,
         "gl": "vn",
-        "hl": "en" if re.search(r"[a-zA-Z]{4,}", query) else "vi",
+        # SỬA ĐỔI: Dùng force_lang nếu có, nếu không thì dùng logic cũ.
+        "hl": force_lang or ("en" if re.search(r"[a-zA-Z]{4,}", query) else "vi"),
     }
 
     try:
