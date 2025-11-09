@@ -283,26 +283,23 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
 
     final_results = []
 
-    # --- BẮT ĐẦU SỬA LỖI PHÂN LOẠI CHỦ ĐỀ ---
-    # 1. Định nghĩa các từ khóa "nóng" cho game.
-    # Bạn có thể thêm bất kỳ từ khóa nào bạn muốn vào đây.
+    # --- LOGIC PHÂN LOẠI CHỦ ĐỀ: CHỈ THÊM HẬU TỐ GAME KHI CẦN ---
     GAMING_KEYWORDS = [
         'patch', 'banner', 'update', 'release date', 'roadmap', 'leak', 
         'speculation', 'gacha', 'reroll', 'tier list', 'build', 'nhân vật',
         'honkai', 'hsr', 'star rail', 'genshin', 'zzz', 'zenless', 
-        'wuwa', 'wuthering waves', 'arknights', 'fgo', 'game', 'phiên bản'
+        'wuwa', 'wuthering waves', 'arknights', 'fgo', 'game', 'phiên bản', 
+        'sự kiện' # Thêm "sự kiện" để cover tiếng Việt
     ]
     
-    # 2. Định nghĩa chuỗi từ khóa game (đây là chuỗi bạn đang dùng)
     GAMING_SUFFIX = " official update release date patch notes roadmap leaks OR speculation"
-    # --- KẾT THÚC SỬA LỖI ---
+    # --- KẾT THÚC ĐỊNH NGHĨA ---
 
 
     for q_sub in sub_queries:
         async with SEARCH_LOCK:
             
-            # --- BẮT ĐẦU SỬA LỖI PHÂN LOẠI CHỦ ĐỀ ---
-            # 3. Logic phân loại chủ đề
+            # 1. Logic phân loại chủ đề
             query_lower = q_sub.lower()
             is_gaming_query = False
             for keyword in GAMING_KEYWORDS:
@@ -310,20 +307,18 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                     is_gaming_query = True
                     break
             
-            # 4. Tạo truy vấn cuối cùng (log_q) DỰA TRÊN CHỦ ĐỀ
+            # 2. Tạo truy vấn cuối cùng (log_q) DỰA TRÊN CHỦ ĐỀ
             log_q = ""
             if is_gaming_query:
                 # Nếu là chủ đề game, thêm hậu tố
                 log_q = q_sub.strip() + GAMING_SUFFIX
                 logger.info(f"Phân loại: GAMING. Chạy search: '{log_q}'")
             else:
-                # Nếu là chủ đề chung (chính trị, kinh tế...), giữ nguyên
+                # Nếu là chủ đề chung (chính trị, kinh tế, xã hội...), giữ nguyên
                 log_q = q_sub.strip()
                 logger.info(f"Phân loại: GENERAL. Chạy search: '{log_q}'")
-            # --- KẾT THÚC SỬA LỖI ---
 
-            # --- SỬA ĐỔI 1: TÌM KIẾM SONG SONG VIỆT-ANH (VI-EN-EN) ---
-            # (Phần này giữ nguyên như code gốc của bạn)
+            # --- BẮT ĐẦU CHẠY SEARCH TỪ log_q ĐÃ ĐƯỢC PHÂN LOẠI ---
             cse0_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1, force_lang="vi"))
             cse1_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=4, force_lang="en"))
             cse2_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=7, force_lang="en"))
@@ -342,7 +337,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
             cse1_result = safe_result(cse1_result, "CSE1")
             cse2_result = safe_result(cse2_result, "CSE2")
 
-            # --- SỬA ĐỔI 2: LOGIC FALLBACK ĐỂ NGĂN LOOP ---
+            # --- LOGIC FALLBACK ---
             should_run_fallback = FORCE_FALLBACK_REQUEST or not cse2_result
             
             if should_run_fallback:
@@ -351,7 +346,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                 elif not cse2_result:
                     logger.warning("CSE2 rỗng/lỗi → Chạy Fallback thay thế CSE2.")
                 
-                fallback_result = await _run_fallback_search(log_q) # Dùng log_q đã được phân loại
+                fallback_result = await _run_fallback_search(log_q)
 
                 if fallback_result:
                     logger.info(f"Fallback thành công. Thay thế/Bổ sung kết quả CSE2.")
@@ -377,7 +372,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                     else:
                         unique_lines.append(line)
                 final_text = "\n".join(unique_lines)
-                final_results.append(f"### 🔍 Kết quả cho truy vấn phụ: {q_sub}\n{final_text.strip()}") # Hiển thị q_sub gốc cho user
+                final_results.append(f"### 🔍 Kết quả cho truy vấn phụ: {q_sub}\n{final_text.strip()}")
 
     if final_results:
         logger.info(f"Hoàn tất tìm kiếm {len(final_results)} subquery.")
