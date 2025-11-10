@@ -344,6 +344,8 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         # --- KẾT THÚC LOGIC VÁ LỖI ---
         
         reply = reply.strip()
+        # SỬA LỖI: Un-escape các ký tự newline mà mô hình có thể đã output ra dưới dạng text
+        reply = reply.replace('\\n', '\n')
         reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply) # Vẫn giữ lại bước dọn dẹp này
 
         # Khối 'if not reply:' cũ đã được xử lý bên trên
