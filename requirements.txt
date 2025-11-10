@@ -9,3 +9,10 @@ exa-py
 flask
 aiofiles
 httpx
+python-docx 
+openpyxl 
+pandas 
+chardet
+xlrd
+huggingface_hub
+PyPDF2

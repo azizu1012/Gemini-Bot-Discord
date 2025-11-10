@@ -1,4 +1,4 @@
-
+# tools.py
 import asyncio
 import json
 import re
@@ -12,10 +12,10 @@ from google.generativeai.types import Tool, FunctionDeclaration
 from serpapi import GoogleSearch
 from tavily import TavilyClient
 import exa_py
+import aiohttp  # New import
 from typing import Any, Dict, Tuple, Optional
 from config import (
     logger,
-    NOTE_PATH,
     WEATHER_API_KEY,
     CITY,
     WEATHER_CACHE_PATH,
@@ -27,8 +27,14 @@ from config import (
     GOOGLE_CSE_ID_1,
     GOOGLE_CSE_API_KEY_1,
     GOOGLE_CSE_ID_2,
-    GOOGLE_CSE_API_KEY_2
+    GOOGLE_CSE_API_KEY_2,
+    HF_TOKEN  # New import
 )
+# --- IMPORT MODULE NOTE MỚI ---
+from note_manager import save_note_to_db, retrieve_notes_from_db
+# --- Load dotenv for environment variables ---
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file if present
 
 # --- ĐỊNH NGHĨA TOOLS CHO GEMINI ---
 ALL_TOOLS = [
@@ -72,15 +78,114 @@ ALL_TOOLS = [
     Tool(function_declarations=[
         FunctionDeclaration(
             name="save_note",
-            description="Lưu một mẩu thông tin, ghi chú hoặc lời nhắc cụ thể theo yêu cầu của người dùng để bạn có thể truy cập lại sau.",
+            description=(
+                "Lưu một mẩu thông tin, sở thích, sự thật, hoặc nội dung quan trọng về người dùng để bạn có thể truy cập lại sau. "
+                "Dùng khi user chia sẻ thông tin cá nhân có giá trị lâu dài (ví dụ: 'tôi thích chơi game X', 'cấu hình máy của tôi là Y')."
+            ),
             parameters={
                 "type": "object",
-                "properties": {"note": {"type": "string", "description": "Nội dung ghi chú cần lưu."}},
-                "required": ["note"]
+                "properties": {
+                    "note_content": {"type": "string", "description": "Nội dung thông tin cần ghi nhớ."},
+                    "source": {"type": "string", "description": "Ngữ cảnh hoặc nguồn của thông tin, ví dụ: 'chat_inference', 'user_request'."}
+                },
+                "required": ["note_content", "source"]
+            }
+        )
+    ]),
+    Tool(function_declarations=[
+        FunctionDeclaration(
+            name="retrieve_notes",
+            description=(
+                "Truy xuất các ghi chú, nội dung file, hoặc thông tin đã lưu trước đó của người dùng. "
+                "Dùng khi user hỏi về thông tin họ đã cung cấp trong quá khứ (ví dụ: 'lần trước tôi nói gì?', 'file config của tôi là gì?')."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Từ khóa hoặc chủ đề tìm kiếm trong bộ nhớ (ví dụ: 'config', 'sở thích'). Để trống nếu muốn lấy tất cả."}
+                },
+                "required": ["query"]
+            }
+        )
+    ]),
+    Tool(function_declarations=[
+        FunctionDeclaration(
+            name="image_recognition",
+            description=(
+                "Nhận diện đối tượng, người nổi tiếng, nhân vật game/anime, đếm vật thể, và trích xuất văn bản (OCR) từ một hình ảnh. "
+                "Sử dụng khi người dùng tải lên một hình ảnh và hỏi các câu hỏi liên quan đến nội dung của hình ảnh đó. "
+                "Ví dụ: 'có bao nhiêu quả táo trong ảnh?', 'người này là ai?', 'đây là nhân vật gì?', 'đọc chữ trong ảnh này'."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "image_url": {"type": "string", "description": "URL công khai của hình ảnh cần nhận diện."},
+                    "question": {"type": "string", "description": "Câu hỏi cụ thể của người dùng về hình ảnh (ví dụ: 'đếm số lượng', 'người này là ai?', 'đây là gì?')."}
+                },
+                "required": ["image_url", "question"]
             }
         )
     ]),
 ]
+
+async def run_image_recognition(image_url: str, question: str) -> str:
+    if not HF_TOKEN:
+        return "Lỗi: Không tìm thấy Hugging Face API token. Vui lòng cấu hình HF_TOKEN trong config.py."
+
+    API_URL = "https://router.huggingface.co/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"}
+
+    MAX_RETRIES = 5
+    INITIAL_BACKOFF_DELAY = 5  # seconds
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Prepare JSON payload for Hugging Face router (OpenAI-compatible format)
+                json_payload = {
+                    "model": "Qwen/Qwen2.5-VL-7B-Instruct",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": image_url}},
+                                {"type": "text", "text": question}
+                            ]
+                        }
+                    ],
+                    "max_tokens": 300
+                }
+
+                async with session.post(API_URL, headers=headers, json=json_payload) as response:
+                    response.raise_for_status()
+                    result = await response.json()
+                    logger.info(f"HF Image Recognition raw result: {result}")
+
+                    if "choices" in result and result["choices"]:
+                        generated_text = result["choices"][0]["message"]["content"]
+                        # Clean up if necessary
+                        assistant_tag = "<|im_start|>assistant\n"
+                        if assistant_tag in generated_text:
+                            return generated_text.split(assistant_tag, 1)[1].strip()
+                        return generated_text.strip()
+                    return json.dumps(result, ensure_ascii=False)
+
+        except aiohttp.ClientResponseError as e:
+            if e.status == 429:
+                delay = INITIAL_BACKOFF_DELAY * (2 ** attempt)
+                logger.warning(f"Hugging Face API rate limit hit (429). Retrying in {delay:.2f} seconds... (Attempt {attempt + 1}/{MAX_RETRIES})")
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Lỗi phản hồi từ API Hugging Face ({e.status}): {e.message}")
+                return f"Lỗi từ dịch vụ nhận diện hình ảnh (mã {e.status}): {e.message}"
+        except aiohttp.ClientError as e:
+            logger.error(f"Lỗi kết nối đến API Hugging Face: {e}")
+            return f"Lỗi kết nối đến dịch vụ nhận diện hình ảnh: {e}"
+        except Exception as e:
+            logger.error(f"Lỗi không xác định khi nhận diện hình ảnh: {e}")
+            return f"Đã xảy ra lỗi không mong muốn khi xử lý hình ảnh: {e}"
+    
+    return f"Lỗi: Đã thử lại {MAX_RETRIES} lần nhưng không thể kết nối đến dịch vụ nhận diện hình ảnh do giới hạn rate."
 
 # === BỘ ĐIỀU PHỐI TOOL ===
 async def call_tool(function_call: Any, user_id: str) -> str:
@@ -103,8 +208,28 @@ async def call_tool(function_call: Any, user_id: str) -> str:
             return await asyncio.to_thread(run_calculator, eq)
 
         elif name == "save_note":
-            note = args.get("note", "")
-            return await save_note(note)
+            content = args.get("note_content")
+            source = args.get("source", "chat_inference")
+            if not content:
+                return "Lỗi: 'note_content' không được rỗng."
+            # Gọi hàm từ note_manager
+            success = await save_note_to_db(user_id, content, source)
+            return f"Đã lưu note: {content}" if success else "Lỗi: Không thể lưu note vào database."
+
+        elif name == "retrieve_notes":
+            query = args.get("query", "")  # Query có thể rỗng
+            # Gọi hàm từ note_manager
+            notes = await retrieve_notes_from_db(user_id, query)
+            if not notes:
+                return "Không tìm thấy ghi chú nào phù hợp."
+            return json.dumps(notes, ensure_ascii=False, indent=2)
+
+        elif name == "image_recognition":
+            image_url = args.get("image_url")
+            question = args.get("question")
+            if not image_url or not question:
+                return "Lỗi: 'image_url' và 'question' không được rỗng cho image_recognition."
+            return await run_image_recognition(image_url, question)
 
         else:
             return "Tool không tồn tại!"
@@ -229,31 +354,6 @@ def run_calculator(equation_str: str) -> str:
             "success": False
         }, ensure_ascii=False)
 
-async def save_note(query: str) -> str:
-    try:
-        note = query.lower().replace("ghi note: ", "").replace("save note: ", "").strip()
-        async with aiofiles.open(NOTE_PATH, 'a', encoding='utf-8') as f:
-            await f.write(f"[{datetime.now().isoformat()}] {note}\n")
-        return f"Đã ghi note: {note}"
-    except PermissionError:
-        return "Lỗi: Không có quyền ghi file notes.txt!"
-    except Exception as e:
-        return f"Lỗi ghi note: {str(e)}"
-
-async def read_note() -> str:
-    try:
-        if not os.path.exists(NOTE_PATH):
-            return "Chưa có note nào bro! Ghi note đi nha! 😎"
-        async with aiofiles.open(NOTE_PATH, 'r', encoding='utf-8') as f:
-            notes = await f.readlines()
-        if not notes:
-            return "Chưa có note nào bro! Ghi note đi nha! 😎"
-        return "Danh sách note:\n" + "".join(notes[-5:])
-    except PermissionError:
-        return "Lỗi: Không có quyền đọc file notes.txt!"
-    except Exception as e:
-        return f"Lỗi đọc note: {str(e)}"
-
 SEARCH_API_COUNTER = 0
 SEARCH_LOCK = asyncio.Lock()
 SEARCH_CACHE = {}
@@ -365,7 +465,7 @@ SEARCH_TOPICS = {
         "suffixes": ["new law", "policy explained", "election results", "legal advice", "luật mới", "giải thích chính sách"]
     },
     "real_estate": {
-        "keywords": ['real estate', 'bất động sản', 'nhà đất', 'housing market', 'apartment', 'căn hộ', 'chung cư', 'giá nhà'],
+        "keywords": ['real estate', 'bất động sản', 'nhà đất', 'housing market', 'apartment', 'căn hộ', 'lịch sử giá nhà'],
         "suffixes": ["market trends", "how to buy", "investment tips", "apartment tour", "xu hướng thị trường", "kinh nghiệm mua nhà"]
     },
     "cryptocurrency_blockchain": {
@@ -410,7 +510,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
 
     FORCE_FALLBACK_REQUEST = "[FORCE FALLBACK]" in query.upper()
     q_base = query.replace("[FORCE FALLBACK]", "").strip()
-    
+
     sub_queries = []
     if " và " in q_base or " and " in q_base.lower() or "," in q_base:
         splitters = re.split(r"\s*(?:và|and|,)\s*", q_base, flags=re.IGNORECASE)
@@ -431,17 +531,17 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                 if any(keyword in query_lower for keyword in data["keywords"]):
                     selected_topic = topic
                     break
-            
+
             logger.info(f"Phân loại: {selected_topic.upper()}. Chạy search cho: '{q_sub}'")
 
             # 2. Tạo các truy vấn đa dạng dựa trên chủ đề
             suffixes = SEARCH_TOPICS[selected_topic]["suffixes"]
             random.shuffle(suffixes)
-            
+
             q1 = q_sub.strip()
             q2 = f"{q1} {suffixes[0]} OR {suffixes[1]}" if len(suffixes) > 1 else q1
             q3 = f"{q1} {suffixes[2]} OR {suffixes[3]}" if len(suffixes) > 3 else q1
-            
+
             # Fallback query in case the specialized ones fail
             fallback_q = f"{q_sub.strip()} {SEARCH_TOPICS['general']['suffixes'][0]} OR {SEARCH_TOPICS['general']['suffixes'][1]}"
 
@@ -467,14 +567,13 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
             cse2_result = safe_result(cse2_result, "CSE2")
 
             # --- LOGIC FALLBACK ---
-            # If all CSE results are empty, or forced, run fallback
             should_run_fallback = FORCE_FALLBACK_REQUEST or not (cse0_result or cse1_result or cse2_result)
-            
+
             fallback_result = ""
             if should_run_fallback:
                 log_message = "AI yêu cầu [FORCE FALLBACK]" if FORCE_FALLBACK_REQUEST else "Tất cả CSE đều rỗng/lỗi"
                 logger.warning(f"{log_message} → Chạy Fallback API.")
-                
+
                 # Use a more general query for fallback
                 fallback_result = await _run_fallback_search(fallback_q)
                 if fallback_result:
@@ -483,7 +582,6 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                     logger.warning("Fallback thất bại.")
 
             # Combine results
-            # Prioritize CSE results, but add fallback if it exists
             parts: list[str] = [str(x) for x in [cse0_result, cse1_result, cse2_result, fallback_result] if x]
 
             if parts:
@@ -521,7 +619,6 @@ async def _search_cse(query: str, cse_id: str | None, api_key: str | None, index
         "num": 3,
         "start": start_idx,
         "gl": "vn",
-        # SỬA ĐỔI: Dùng force_lang nếu có, nếu không thì dùng logic cũ.
         "hl": force_lang or ("en" if re.search(r"[a-zA-Z]{4,}", query) else "vi"),
     }
 
@@ -588,7 +685,7 @@ async def _run_fallback_search(query: str) -> str:
 
 async def _search_serpapi(query: str) -> str:
     if not SERPAPI_API_KEY: return ""
-    
+
     params = {
         "q": query,
         "api_key": SERPAPI_API_KEY,
@@ -597,13 +694,13 @@ async def _search_serpapi(query: str) -> str:
         "gl": "vn",
         "hl": "en" if re.search(r'[a-zA-Z]{4,}', query) else "vi"
     }
-    
+
     search = GoogleSearch(params)
     results = await asyncio.to_thread(search.get_dict)
-    
+
     if 'organic_results' not in results:
         return ""
-    
+
     relevant = []
     for item in results['organic_results'][:3]:
         title = item.get('title', 'Không có tiêu đề')
@@ -611,12 +708,12 @@ async def _search_serpapi(query: str) -> str:
         link = item.get('link', '')
         if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']): continue
         relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
-    
+
     return "**Search SerpAPI (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
 
 async def _search_tavily(query: str) -> str:
     if not TAVILY_API_KEY: return ""
-    
+
     tavily = TavilyClient(api_key=TAVILY_API_KEY)
     params = {
         "query": query,
@@ -624,12 +721,12 @@ async def _search_tavily(query: str) -> str:
         "max_results": 3,
         "include_answer": False
     }
-    
+
     results = await asyncio.to_thread(tavily.search, **params)
-    
+
     if 'results' not in results:
         return ""
-    
+
     relevant = []
     for item in results['results'][:3]:
         title = item.get('title', 'Không có tiêu đề')
@@ -637,12 +734,12 @@ async def _search_tavily(query: str) -> str:
         link = item.get('url', '')
         if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']): continue
         relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
-    
+
     return "**Search Tavily (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
 
 async def _search_exa(query: str) -> str:
     if not EXA_API_KEY: return ""
-    
+
     exa = exa_py.Exa(api_key=EXA_API_KEY)
     params = {
         "query": query,
@@ -650,12 +747,12 @@ async def _search_exa(query: str) -> str:
         "use_autoprompt": True,
         "type": "neural"
     }
-    
+
     results = await asyncio.to_thread(exa.search, **params)
-    
+
     if not results.results:
         return ""
-    
+
     relevant = []
     for item in results.results[:3]:
         title = item.title or 'Không có tiêu đề'
@@ -664,6 +761,5 @@ async def _search_exa(query: str) -> str:
         link = item.url
         if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']): continue
         relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
-    
-    return "**Search Exa.ai (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
 
+    return "**Search Exa.ai (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
