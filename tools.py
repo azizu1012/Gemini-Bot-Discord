@@ -3,6 +3,7 @@ import asyncio
 import json
 import re
 import os
+import random
 from datetime import datetime, timedelta
 import aiofiles
 import requests
@@ -258,6 +259,143 @@ SEARCH_LOCK = asyncio.Lock()
 SEARCH_CACHE = {}
 CACHE_LOCK = asyncio.Lock()
 
+SEARCH_TOPICS = {
+    # --- Core Topics (1-6) ---
+    "gaming": {
+        "keywords": ['game', 'patch', 'banner', 'update', 'release date', 'roadmap', 'leak', 'speculation', 'gacha', 'reroll', 'tier list', 'build', 'nhân vật', 'honkai', 'hsr', 'star rail', 'genshin', 'zzz', 'zenless', 'wuwa', 'wuthering waves', 'arknights', 'fgo', 'phiên bản', 'sự kiện'],
+        "suffixes": ["update", "release date", "patch notes", "roadmap", "leaks", "speculation", "official", "tin tức"]
+    },
+    "tech": {
+        "keywords": ['tech', 'công nghệ', 'ai', 'ios', 'android', 'app', 'software', 'hardware', 'card màn hình', 'cpu', 'laptop', 'phone'],
+        "suffixes": ["review", "release date", "news", "vs", "benchmark", "specs", "đánh giá", "tin tức"]
+    },
+    "science": {
+        "keywords": ['science', 'khoa học', 'space', 'vũ trụ', 'nasa', 'discovery', 'research', 'nghiên cứu', 'y tế'],
+        "suffixes": ["new discovery", "latest research", "breakthrough", "study finds", "công bố", "nghiên cứu mới"]
+    },
+    "finance": {
+        "keywords": ['finance', 'tài chính', 'stock', 'cổ phiếu', 'market', 'thị trường', 'investment', 'đầu tư', 'economy', 'kinh tế', 'lãi suất', 'ngân hàng'],
+        "suffixes": ["stock price", "market analysis", "forecast", "news", "earnings report", "phân tích", "dự báo"]
+    },
+    "movies_tv": {
+        "keywords": ['movie', 'phim', 'tv show', 'series', 'netflix', 'disney+', 'trailer', 'actor', 'diễn viên', 'đạo diễn', 'lịch chiếu'],
+        "suffixes": ["review", "release date", "trailer", "cast", "ending explained", "season 2", "lịch chiếu phim", "đánh giá"]
+    },
+    "anime_manga": {
+        "keywords": ['anime', 'manga', 'light novel', 'manhwa', 'manhua', 'chapter', 'episode', 'season', 'ova', 'phần mới', 'tập mới'],
+        "suffixes": ["release date", "new season", "chapter review", "discussion", "spoiler", "tin tức anime"]
+    },
+    # --- Entertainment & Hobbies (7-13) ---
+    "sports": {
+        "keywords": ['sports', 'thể thao', 'bóng đá', 'football', 'basketball', 'tennis', 'cầu lông', 'f1', 'đội tuyển', 'cầu thủ', 'trận đấu'],
+        "suffixes": ["match result", "highlights", "live score", "news", "transfer", "lịch thi đấu", "kết quả"]
+    },
+    "music": {
+        "keywords": ['music', 'âm nhạc', 'bài hát', 'ca sĩ', 'album', 'mv', 'concert', 'lyrics', 'lời bài hát', 'spotify', 'apple music'],
+        "suffixes": ["new song", "album review", "music video", "tour dates", "lyrics meaning", "bài hát mới"]
+    },
+    "celebrity_gossip": {
+        "keywords": ['celebrity', 'người nổi tiếng', 'showbiz', 'tin đồn', 'scandal', 'drama', 'diễn viên', 'ca sĩ'],
+        "suffixes": ["scandal", "news", "gossip", "drama", "phốt", "tin đồn"]
+    },
+    "books_literature": {
+        "keywords": ['book', 'sách', 'tiểu thuyết', 'tác giả', 'văn học', 'truyện', 'poetry', 'author', 'novel', 'đọc sách'],
+        "suffixes": ["review", "summary", "recommendations", "new releases", "đánh giá sách", "tóm tắt"]
+    },
+    "photography_video": {
+        "keywords": ['photography', 'nhiếp ảnh', 'quay phim', 'máy ảnh', 'camera', 'lens', 'drone', 'chụp ảnh', 'edit video'],
+        "suffixes": ["tutorial", "gear review", "best settings", "tips and tricks", "hướng dẫn", "đánh giá thiết bị"]
+    },
+    "diy_crafts": {
+        "keywords": ['diy', 'tự làm', 'thủ công', 'handmade', 'craft', 'tutorial', 'hướng dẫn', 'đồ handmade'],
+        "suffixes": ["how to", "tutorial", "ideas", "project", "hướng dẫn làm", "ý tưởng"]
+    },
+    "social_media_trends": {
+        "keywords": ['social media', 'mạng xã hội', 'tiktok', 'instagram', 'facebook', 'twitter', 'viral', 'meme', 'trend', 'xu hướng'],
+        "suffixes": ["new trend", "viral video", "meme explained", "challenge", "xu hướng mới", "trào lưu"]
+    },
+    # --- Lifestyle & Wellness (14-20) ---
+    "food_cooking": {
+        "keywords": ['food', 'cooking', 'recipe', 'công thức', 'nấu ăn', 'nhà hàng', 'quán ăn', 'ẩm thực', 'món ngon'],
+        "suffixes": ["recipe", "how to make", "best restaurants", "review", "cách làm", "địa chỉ"]
+    },
+    "travel": {
+        "keywords": ['travel', 'du lịch', 'phượt', 'khách sạn', 'resort', 'vé máy bay', 'địa điểm', 'kinh nghiệm'],
+        "suffixes": ["travel guide", "things to do", "best places to visit", "flight deals", "kinh nghiệm du lịch", "giá vé"]
+    },
+    "health_wellness": {
+        "keywords": ['health', 'wellness', 'sức khỏe', 'fitness', 'gym', 'yoga', 'meditation', 'dinh dưỡng', 'bệnh'],
+        "suffixes": ["benefits", "how to", "symptoms", "treatment", "healthy diet", "lợi ích", "cách tập"]
+    },
+    "mental_health": {
+        "keywords": ['mental health', 'sức khỏe tinh thần', 'tâm lý', 'stress', 'anxiety', 'therapy', 'trị liệu', 'tâm sự'],
+        "suffixes": ["how to cope", "symptoms of", "self-care tips", "therapy options", "cách đối phó", "lời khuyên"]
+    },
+    "fashion_beauty": {
+        "keywords": ['fashion', 'thời trang', 'làm đẹp', 'beauty', 'mỹ phẩm', 'quần áo', 'brand', 'style', 'makeup', 'phối đồ'],
+        "suffixes": ["trends", "style guide", "product review", "tutorial", "xu hướng", "cách phối đồ"]
+    },
+    "home_garden": {
+        "keywords": ['home', 'garden', 'nhà cửa', 'sân vườn', 'trang trí', 'nội thất', 'diy', 'gardening', 'cây cảnh'],
+        "suffixes": ["decor ideas", "gardening tips", "diy project", "organization hacks", "ý tưởng trang trí", "mẹo làm vườn"]
+    },
+    "pets_animals": {
+        "keywords": ['pet', 'animal', 'thú cưng', 'chó', 'mèo', 'dog', 'cat', 'động vật', 'chăm sóc thú cưng'],
+        "suffixes": ["care tips", "breeds", "funny videos", "health problems", "cách chăm sóc", "giống loài"]
+    },
+    # --- Practical & Professional (21-27) ---
+    "education": {
+        "keywords": ['education', 'giáo dục', 'học tập', 'school', 'university', 'trường học', 'đại học', 'khóa học', 'online course'],
+        "suffixes": ["best courses", "how to learn", "study tips", "admission requirements", "khóa học tốt nhất", "mẹo học tập"]
+    },
+    "career_development": {
+        "keywords": ['career', 'sự nghiệp', 'phát triển bản thân', 'job search', 'tìm việc', 'resume', 'cv', 'interview', 'phỏng vấn'],
+        "suffixes": ["job search tips", "resume template", "interview questions", "career path", "mẹo tìm việc", "câu hỏi phỏng vấn"]
+    },
+    "business_entrepreneurship": {
+        "keywords": ['business', 'kinh doanh', 'khởi nghiệp', 'startup', 'marketing', 'sales', 'doanh nghiệp'],
+        "suffixes": ["business ideas", "how to start", "marketing strategy", "case study", "ý tưởng kinh doanh", "chiến lược marketing"]
+    },
+    "automotive": {
+        "keywords": ['automotive', 'xe hơi', 'ô tô', 'xe máy', 'car', 'motorcycle', 'vehicle', 'xe điện', 'vinfast'],
+        "suffixes": ["review", "specs", "price", "release date", "vs", "đánh giá xe", "giá bán"]
+    },
+    "law_politics": {
+        "keywords": ['law', 'politics', 'luật', 'chính trị', 'chính phủ', 'government', 'policy', 'election', 'bầu cử', 'quy định'],
+        "suffixes": ["new law", "policy explained", "election results", "legal advice", "luật mới", "giải thích chính sách"]
+    },
+    "real_estate": {
+        "keywords": ['real estate', 'bất động sản', 'nhà đất', 'housing market', 'apartment', 'căn hộ', 'chung cư', 'giá nhà'],
+        "suffixes": ["market trends", "how to buy", "investment tips", "apartment tour", "xu hướng thị trường", "kinh nghiệm mua nhà"]
+    },
+    "cryptocurrency_blockchain": {
+        "keywords": ['crypto', 'bitcoin', 'ethereum', 'blockchain', 'nft', 'defi', 'web3', 'tiền ảo', 'tiền điện tử'],
+        "suffixes": ["price prediction", "news", "how to buy", "wallet", "dự đoán giá", "tin tức crypto"]
+    },
+    # --- Local & Shopping (28-31) ---
+    "local_events": {
+        "keywords": ['event', 'sự kiện', 'lễ hội', 'concert', 'workshop', 'hội thảo', 'gần đây', 'quanh đây'],
+        "suffixes": ["events near me", "tickets", "schedule", "local festivals", "sự kiện sắp tới", "lịch trình"]
+    },
+    "shopping_deals": {
+        "keywords": ['shopping', 'mua sắm', 'deal', 'giảm giá', 'khuyến mãi', 'sale', 'discount', 'black friday', 'shopee', 'lazada'],
+        "suffixes": ["best deals", "discount codes", "sale on", "product review", "mã giảm giá", "đánh giá sản phẩm"]
+    },
+    "history": {
+        "keywords": ['history', 'lịch sử', 'chiến tranh', 'ancient', 'medieval', 'modern history', 'lịch sử việt nam'],
+        "suffixes": ["history of", "explained", "documentary", "key events", "lịch sử về", "giải thích"]
+    },
+    "environment_sustainability": {
+        "keywords": ['environment', 'môi trường', 'biến đổi khí hậu', 'climate change', 'sustainability', 'năng lượng tái tạo', 'ô nhiễm'],
+        "suffixes": ["latest news", "solutions", "impact of", "how to help", "tin tức môi trường", "giải pháp"]
+    },
+    # --- Default ---
+    "general": {
+        "keywords": [],  # Default
+        "suffixes": ["news", "latest", "update", "information", "tin tức", "thông tin", "mới nhất"]
+    }
+}
+
 async def cached_search(key: str, func: Any, *args: Any) -> Any:
     async with CACHE_LOCK:
         if key in SEARCH_CACHE and datetime.now() - SEARCH_CACHE[key]['time'] < timedelta(hours=6):
@@ -274,7 +412,6 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
     q_base = query.replace("[FORCE FALLBACK]", "").strip()
     
     sub_queries = []
-    # Giữ logic tách truy vấn
     if " và " in q_base or " and " in q_base.lower() or "," in q_base:
         splitters = re.split(r"\s*(?:và|and|,)\s*", q_base, flags=re.IGNORECASE)
         sub_queries = [q.strip() for q in splitters if q.strip()]
@@ -283,45 +420,37 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
 
     final_results = []
 
-    # --- LOGIC PHÂN LOẠI CHỦ ĐỀ: CHỈ THÊM HẬU TỐ GAME KHI CẦN ---
-    GAMING_KEYWORDS = [
-        'patch', 'banner', 'update', 'release date', 'roadmap', 'leak', 
-        'speculation', 'gacha', 'reroll', 'tier list', 'build', 'nhân vật',
-        'honkai', 'hsr', 'star rail', 'genshin', 'zzz', 'zenless', 
-        'wuwa', 'wuthering waves', 'arknights', 'fgo', 'game', 'phiên bản', 
-        'sự kiện' # Thêm "sự kiện" để cover tiếng Việt
-    ]
-    
-    GAMING_SUFFIX = " official update release date patch notes roadmap leaks OR speculation"
-    # --- KẾT THÚC ĐỊNH NGHĨA ---
-
-
     for q_sub in sub_queries:
         async with SEARCH_LOCK:
-            
-            # 1. Logic phân loại chủ đề
+            # 1. Phân loại chủ đề
             query_lower = q_sub.lower()
-            is_gaming_query = False
-            for keyword in GAMING_KEYWORDS:
-                if keyword in query_lower:
-                    is_gaming_query = True
+            selected_topic = "general"
+            for topic, data in SEARCH_TOPICS.items():
+                if topic == "general":
+                    continue
+                if any(keyword in query_lower for keyword in data["keywords"]):
+                    selected_topic = topic
                     break
             
-            # 2. Tạo truy vấn cuối cùng (log_q) DỰA TRÊN CHỦ ĐỀ
-            log_q = ""
-            if is_gaming_query:
-                # Nếu là chủ đề game, thêm hậu tố
-                log_q = q_sub.strip() + GAMING_SUFFIX
-                logger.info(f"Phân loại: GAMING. Chạy search: '{log_q}'")
-            else:
-                # Nếu là chủ đề chung (chính trị, kinh tế, xã hội...), giữ nguyên
-                log_q = q_sub.strip()
-                logger.info(f"Phân loại: GENERAL. Chạy search: '{log_q}'")
+            logger.info(f"Phân loại: {selected_topic.upper()}. Chạy search cho: '{q_sub}'")
 
-            # --- BẮT ĐẦU CHẠY SEARCH TỪ log_q ĐÃ ĐƯỢC PHÂN LOẠI ---
-            cse0_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1, force_lang="vi"))
-            cse1_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=4, force_lang="en"))
-            cse2_task = asyncio.create_task(_search_cse(log_q, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=7, force_lang="en"))
+            # 2. Tạo các truy vấn đa dạng dựa trên chủ đề
+            suffixes = SEARCH_TOPICS[selected_topic]["suffixes"]
+            random.shuffle(suffixes)
+            
+            q1 = q_sub.strip()
+            q2 = f"{q1} {suffixes[0]} OR {suffixes[1]}" if len(suffixes) > 1 else q1
+            q3 = f"{q1} {suffixes[2]} OR {suffixes[3]}" if len(suffixes) > 3 else q1
+            
+            # Fallback query in case the specialized ones fail
+            fallback_q = f"{q_sub.strip()} {SEARCH_TOPICS['general']['suffixes'][0]} OR {SEARCH_TOPICS['general']['suffixes'][1]}"
+
+            logger.info(f"Queries: Q1='{q1}', Q2='{q2}', Q3='{q3}'")
+
+            # --- BẮT ĐẦU CHẠY SEARCH ---
+            cse0_task = asyncio.create_task(_search_cse(q1, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1, force_lang="vi"))
+            cse1_task = asyncio.create_task(_search_cse(q2, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=1, force_lang="en"))
+            cse2_task = asyncio.create_task(_search_cse(q3, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=1, force_lang="en"))
 
             cse0_result, cse1_result, cse2_result = await asyncio.gather(
                 cse0_task, cse1_task, cse2_task, return_exceptions=True
@@ -338,25 +467,24 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
             cse2_result = safe_result(cse2_result, "CSE2")
 
             # --- LOGIC FALLBACK ---
-            should_run_fallback = FORCE_FALLBACK_REQUEST or not cse2_result
+            # If all CSE results are empty, or forced, run fallback
+            should_run_fallback = FORCE_FALLBACK_REQUEST or not (cse0_result or cse1_result or cse2_result)
             
+            fallback_result = ""
             if should_run_fallback:
-                if FORCE_FALLBACK_REQUEST:
-                    logger.warning(f"AI yêu cầu [FORCE FALLBACK] → Chạy Fallback thay thế CSE2 (hoặc bổ sung).")
-                elif not cse2_result:
-                    logger.warning("CSE2 rỗng/lỗi → Chạy Fallback thay thế CSE2.")
+                log_message = "AI yêu cầu [FORCE FALLBACK]" if FORCE_FALLBACK_REQUEST else "Tất cả CSE đều rỗng/lỗi"
+                logger.warning(f"{log_message} → Chạy Fallback API.")
                 
-                fallback_result = await _run_fallback_search(log_q)
-
+                # Use a more general query for fallback
+                fallback_result = await _run_fallback_search(fallback_q)
                 if fallback_result:
-                    logger.info(f"Fallback thành công. Thay thế/Bổ sung kết quả CSE2.")
-                    cse2_result = fallback_result
-                elif FORCE_FALLBACK_REQUEST and not cse2_result:
-                    pass
-                elif FORCE_FALLBACK_REQUEST and cse2_result:
-                    logger.warning("Fallback thất bại, giữ lại kết quả CSE2 gốc.")
+                    logger.info(f"Fallback thành công.")
+                else:
+                    logger.warning("Fallback thất bại.")
 
-            parts: list[str] = [str(x) for x in [cse0_result, cse1_result, cse2_result] if x]
+            # Combine results
+            # Prioritize CSE results, but add fallback if it exists
+            parts: list[str] = [str(x) for x in [cse0_result, cse1_result, cse2_result, fallback_result] if x]
 
             if parts:
                 merged = "\n\n".join(parts)
@@ -372,7 +500,7 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                     else:
                         unique_lines.append(line)
                 final_text = "\n".join(unique_lines)
-                final_results.append(f"### 🔍 Kết quả cho truy vấn phụ: {q_sub}\n{final_text.strip()}")
+                final_results.append(f"### 🔍 [Chủ đề: {selected_topic.upper()}] Kết quả cho '{q_sub}':\n{final_text.strip()}")
 
     if final_results:
         logger.info(f"Hoàn tất tìm kiếm {len(final_results)} subquery.")

@@ -23,6 +23,8 @@ Bot đã được tái cấu trúc thành các module nhỏ hơn để dễ qu�
 
 ## Tính năng chính
 
+## Tính năng chính
+
 | Tính năng | Mô tả |
 |----------|-------|
 | **AI hội thoại thông minh** | Sử dụng Google Gemini với cơ chế **failover 5 API key** và **tool calling tự động** |

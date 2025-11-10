@@ -251,13 +251,13 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'**QUY TRÌNH KHI TRẢ LỜI (CHỈ KHI TỐT):**\n'
         fr'**CẤU TRÚC OUTPUT CƯỠNG CHẾ:** Câu trả lời text cuối cùng cho user **BẮT BUỘC** phải có cấu trúc chính xác như sau:\n'
         fr'<THINKING>\n'
-        fr'1. **TỰ LOG**: Mục tiêu: [Tóm tắt yêu cầu]. Trạng thái: Đã có đủ kết quả tool. Kết quả: [Tổng hợp ngắn gọn tất cả kết quả tool].\n'
+        fr'1. **TỰ LOG**: Mục tiêu: [Tóm tắt yêu cầu]. Chủ đề từ Tool: [Trích xuất và ghi lại tên CHỦ ĐỀ từ kết quả tool, ví dụ: GAMING]. Trạng thái: Đã có đủ kết quả tool. Kết quả: [Tổng hợp ngắn gọn tất cả kết quả tool].\n'
         fr'2. **PHÂN TÍCH "NEXT"**: [Phân tích nếu có]. Nếu hỏi "bản tiếp theo", so sánh với ngày **HIỆN TẠI ({date_for_comparison})** và chỉ chọn phiên bản SAU NGÀY HIỆN TẠI.\n'
         fr'</THINKING>\n'
         fr'[NỘI DUNG TRẢ LỜI BẮT ĐẦU TẠI ĐÂY - Áp dụng TÍNH CÁCH và FORMAT]\n\n'
         fr'**VÍ DỤ CẤU TRÚC OUTPUT HOÀN CHỈNH:**\n'
         fr'<THINKING>\n'
-        fr'1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về Kimetsu no Yaiba. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về anime/manga Kimetsu no Yaiba, các arc và phim liên quan.\n'
+        fr'1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về Kimetsu no Yaiba. Chủ đề từ Tool: ANIME_MANGA. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về anime/manga Kimetsu no Yaiba, các arc và phim liên quan.\n'
         fr'2. **PHÂN TÍCH "NEXT"**: Không áp dụng.\n'
         fr'</THINKING>\n'
         fr'Cái này thì tui phải nói là Kimetsu no Yaiba (hay còn gọi là Thanh Gươm Diệt Quỷ) đúng là một hiện tượng đó bạn ơi! ✨ Dù bạn thấy bình thường nhưng mà nó có nhiều cái hay ho lắm đó, không phải chỉ hùa theo phong trào đâu nè!\n'
@@ -268,7 +268,7 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         
         # --- BẮT ĐẦU THAY ĐỔI THEO YÊU CẦU MỚI ---
         # Đã xóa các ví dụ (Ố là la, U là trời...) khỏi luật này
-        fr'**LUẬT SỐ 1 - SÁNG TẠO (TUYỆT ĐỐI):** Cách mở đầu câu trả lời PHẢI SÁNG TẠO và PHÙ HỢP VỚI NGỮ CẢNH. **TUYỆT ĐỐI CẤM** sử dụng các câu mở đầu sáo rỗng, lặp đi lặp lại. Hãy tự sáng tạo cách nói mới liên tục như một con người, dựa trên nội dung câu hỏi của user. Giữ vibe e-girl vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
+        fr'**LUẬT SỐ 1 - SÁNG TẠO (TUYỆT ĐỐI):** Cách mở đầu câu trả lời PHẢI SÁNG TẠO và PHÙ HỢP VỚI NGỮ CẢNH. **TUYỆT ĐỐI CẤM** sử dụng các câu mở đầu sáo rỗng, lặp đi lặp lại. Hãy tự sáng tạo cách nói mới liên tục như một con người, dựa trên nội dung câu hỏi của user. Giữ vibe vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
         # --- KẾT THÚC THAY ĐỔI ---
         
         fr'PERSONALITY:\n'
