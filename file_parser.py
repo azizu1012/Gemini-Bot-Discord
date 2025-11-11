@@ -99,7 +99,9 @@ async def parse_attachment(attachment: discord.Attachment) -> Optional[Dict[str,
                 return None
             
             # For fallback, we might want to indicate it's a raw text interpretation
-            filename = f"raw_text_{filename}"
+            # and explicitly change the extension to .txt as requested by the user.
+            base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+            filename = f"{base_name}.txt"
 
 
         if not content.strip():

@@ -380,17 +380,29 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             break
 
     if image_attachment_url:
-        if not query or query.lower() in ["ảnh này có gì?", "phân tích ảnh này", "đây là gì?", "kể tui nghe về ảnh này"]:
-            # Nếu user chỉ gửi ảnh hoặc hỏi chung chung về ảnh, yêu cầu câu hỏi cụ thể
-            reply_content = "Hí hí, bạn gửi ảnh mà không nói gì hết! 🥺 Bạn muốn tui phân tích gì về ảnh này nè?"
-            await message.reply(reply_content)
-            await log_message(user_id, "assistant", reply_content)
-            return
-        else:
-            # Nếu có ảnh và có query, thêm thông tin ảnh vào lịch sử để Gemini xử lý
-            # Đảm bảo rằng Gemini sẽ thấy thông tin này và có thể gọi image_recognition
-            history.insert(0, {"role": "system", "content": f"User vừa gửi một hình ảnh có URL: {image_attachment_url}. Nếu câu hỏi của user '{query}' liên quan đến việc phân tích hình ảnh này, hãy sử dụng tool `image_recognition(image_url='{image_attachment_url}', question='{query}')`. Nếu không, hãy bỏ qua hình ảnh và trả lời câu hỏi của user như bình thường."})
-            logger.info(f"Đã thêm thông tin ảnh vào lịch sử cho Gemini: {image_attachment_url}")
+        # Always use a comprehensive question for image recognition if an image is present
+        comprehensive_image_question = (
+            "Phân tích toàn bộ nội dung trong ảnh này một cách chi tiết nhất có thể. "
+            "Trích xuất tất cả văn bản, nhận diện các đối tượng, nhân vật, thương hiệu, và mô tả ngữ cảnh. "
+            "Nếu là hóa đơn, đơn hàng, hoặc giao diện ứng dụng, hãy đọc và tóm tắt các thông tin chính như sản phẩm, giá cả, ưu đãi, tổng tiền, trạng thái, v.v. "
+            "Cung cấp một bản tóm tắt đầy đủ và có cấu trúc."
+        )
+        
+        # Construct the system instruction to explicitly call image_recognition
+        # and then consider the user's original query.
+        image_system_instruction = (
+            f"User vừa gửi một hình ảnh có URL: {image_attachment_url}. "
+            f"Bạn BẮT BUỘC phải sử dụng tool `image_recognition(image_url='{image_attachment_url}', question='{comprehensive_image_question}')` "
+            f"để phân tích hình ảnh này. "
+            f"Sau khi nhận được kết quả từ tool, hãy sử dụng thông tin đó để trả lời câu hỏi của user: '{query}'. "
+            f"Nếu câu hỏi của user không liên quan trực tiếp đến ảnh, hãy vẫn phân tích ảnh và sau đó trả lời câu hỏi của user, có thể tham khảo kết quả phân tích ảnh nếu phù hợp."
+        )
+        history.insert(0, {"role": "system", "content": image_system_instruction})
+        logger.info(f"Đã thêm hướng dẫn xử lý ảnh vào lịch sử cho Gemini: {image_attachment_url} với câu hỏi: {comprehensive_image_question}")
+
+        # If the original query was empty, set a default one so Gemini has something to respond to after image analysis
+        if not query.strip():
+            query = "Hãy phân tích ảnh và cho tôi biết những gì bạn tìm thấy."
 
     messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": query}]
 
@@ -411,10 +423,10 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             logger.info(thinking_content)
             logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
 
-            # Xóa khối THINKING đầu tiên
-            reply_without_thinking = re.sub(thinking_block_pattern, '', reply, count=1, flags=re.DOTALL).strip()
+            # Xóa khối THINKING đầu tiên để lấy phần trả lời chính
+            reply = re.sub(thinking_block_pattern, '', reply, count=1, flags=re.DOTALL).strip()
 
-            if not reply_without_thinking:
+            if not reply:
                 # TRƯỜNG HỢP LỖI: Model chỉ trả về THINKING. Ta tự tổng hợp câu trả lời
                 logger.warning(f"LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: {user_id}")
                 conclusion = None
@@ -441,9 +453,6 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
                     ]
                     reply = random.choice(friendly_errors)
                     logger.error(f"LỖI LOGIC NGHIÊM TRỌNG: Khối THINKING cũng rỗng. User: {user_id}")
-            else:
-                # TRƯỜNG HỢP BÌNH THƯỜNG: Có text sau THINKING
-                reply = reply_without_thinking
         else:
             # TRƯỜNG HỢP LỖI: Model không tạo Khối THINKING. Tự động tạo một khối THINKING mặc định.
             logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Tự động tạo khối THINKING mặc định.")
@@ -454,9 +463,8 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} (Mặc định) ---")
             logger.info(default_thinking_content)
             logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
-            # Gán reply hiện tại vào biến tạm và sau đó tạo reply mới với THINKING block
-            original_reply_content = reply.strip()
-            reply = f"<THINKING>\n{default_thinking_content}\n</THINKING>\n{original_reply_content}"
+            # Prepend the default THINKING block to the model's raw reply
+            reply = f"<THINKING>\n{default_thinking_content}\n</THINKING>\n{reply.strip()}"
 
         reply = reply.strip()
         # SỬA LỖI: Un-escape các ký tự newline mà mô hình có thể đã output ra dưới dạng text
