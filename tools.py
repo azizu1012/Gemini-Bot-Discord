@@ -32,6 +32,8 @@ from config import (
 )
 # --- IMPORT MODULE NOTE MỚI ---
 from note_manager import save_note_to_db, retrieve_notes_from_db
+# --- IMPORT CACHE MANAGER ---
+from cache_manager import get_web_search_cache, set_web_search_cache, get_image_recognition_cache, set_image_recognition_cache
 # --- Load dotenv for environment variables ---
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file if present
@@ -129,6 +131,12 @@ ALL_TOOLS = [
 ]
 
 async def run_image_recognition(image_url: str, question: str) -> str:
+    # Kiểm tra cache trước
+    cached_result = get_image_recognition_cache(image_url, question)
+    if cached_result:
+        logger.info(f"Đã lấy kết quả image_recognition từ cache cho URL: {image_url}, Question: {question[:30]}...")
+        return cached_result
+
     if not HF_TOKEN:
         return "Lỗi: Không tìm thấy Hugging Face API token. Vui lòng cấu hình HF_TOKEN trong config.py."
 
@@ -166,9 +174,18 @@ async def run_image_recognition(image_url: str, question: str) -> str:
                         # Clean up if necessary
                         assistant_tag = "<|im_start|>assistant\n"
                         if assistant_tag in generated_text:
-                            return generated_text.split(assistant_tag, 1)[1].strip()
-                        return generated_text.strip()
-                    return json.dumps(result, ensure_ascii=False)
+                            final_result = generated_text.split(assistant_tag, 1)[1].strip()
+                        else:
+                            final_result = generated_text.strip()
+                        
+                        # Lưu vào cache
+                        set_image_recognition_cache(image_url, question, final_result)
+                        return final_result
+                    
+                    # Nếu không có choices, lưu toàn bộ JSON vào cache (nếu muốn) hoặc trả về lỗi
+                    error_result = json.dumps(result, ensure_ascii=False)
+                    set_image_recognition_cache(image_url, question, error_result) # Cache lỗi để tránh gọi lại
+                    return error_result
 
         except aiohttp.ClientResponseError as e:
             if e.status == 429:
@@ -505,6 +522,12 @@ async def cached_search(key: str, func: Any, *args: Any) -> Any:
         return result
 
 async def run_search_apis(query: str, mode: str = "general") -> str:
+    # Kiểm tra cache trước
+    cached_result = get_web_search_cache(query)
+    if cached_result:
+        logger.info(f"Đã lấy kết quả web_search từ cache cho query: {query[:50]}...")
+        return cached_result
+
     logger.info(f"CALLING 3x CSE SMART SEARCH for '{query}' (mode: {mode})")
     global SEARCH_API_COUNTER
 
@@ -601,8 +624,10 @@ async def run_search_apis(query: str, mode: str = "general") -> str:
                 final_results.append(f"### 🔍 [Chủ đề: {selected_topic.upper()}] Kết quả cho '{q_sub}':\n{final_text.strip()}")
 
     if final_results:
-        logger.info(f"Hoàn tất tìm kiếm {len(final_results)} subquery.")
-        return "\n\n".join(final_results)
+        combined_final_results = "\n\n".join(final_results)
+        set_web_search_cache(query, combined_final_results) # Lưu vào cache
+        logger.info(f"Hoàn tất tìm kiếm {len(final_results)} subquery và đã lưu vào cache.")
+        return combined_final_results
 
     logger.error("TẤT CẢ 3 CSE + fallback FAIL.")
     return ""

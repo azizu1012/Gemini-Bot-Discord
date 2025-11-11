@@ -27,6 +27,9 @@ from logger import log_message
 from file_parser import parse_attachment
 from note_manager import save_file_note_to_db
 
+# Global dictionary to store the last uploaded image URL for each user
+last_uploaded_image_urls: Dict[str, str] = {}
+
 async def handle_message(message: discord.Message, bot: Any, mention_history: Dict[str, list], confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any], user_queue: defaultdict) -> None:
     if message.author == bot.user:
         return
@@ -108,6 +111,8 @@ async def handle_attachments(message: discord.Message) -> bool:
             if success:
                 images_processed_urls.append(attachment.url)
                 logger.info(f"Đã lưu URL ảnh '{attachment.filename}' của user {user_id} vào note.")
+                # Store the URL of the last uploaded image for this user
+                last_uploaded_image_urls[user_id] = attachment.url
             else:
                 logger.error(f"Lỗi khi lưu URL ảnh '{attachment.filename}' của user {user_id} vào note.")
         else:
@@ -521,8 +526,7 @@ async def run_gemini_api(messages: list, model_name: str, user_id: str, temperat
             role = "model" if msg["role"] == "assistant" else msg["role"]
             gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
         elif "parts" in msg:
-            role = "model" if msg["role"] == "assistant" else msg["role"]
-            gemini_messages.append({"role": role, "parts": msg["parts"]})
+            role = "model" if msg["role"] == "assistant" else msg["parts"]
     
     for i, api_key in enumerate(keys):
         logger.info(f"THỬ KEY {i+1}: {api_key[:8]}...")

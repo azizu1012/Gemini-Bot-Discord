@@ -1,4 +1,5 @@
-# Discord AI Assistant (Modularized)
+# Gemini Discord Bot - Advanced Modular Edition
+
 <p align="center">
   <a href="https://github.com/azizu1012/Gemini-Bot-Discord/blob/main/LICENSE">
     <img alt="License" src="https://img.shields.io/github/license/azizu1012/Gemini-Bot-Discord?style=flat-square"/>
@@ -7,210 +8,179 @@
     <img alt="Discord Bot" src="https://img.shields.io/badge/Discord-Add%20Bot-5865F2?style=flat-square&logo=discord&logoColor=white"/>
   </a>
   <a href="https://www.python.org/">
-    <img alt="Python" src="https://img.shields.io/badge/Python-3.13%2B-blue?style=flat-square&logo=python"/>
+    <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-blue?style=flat-square&logo=python"/>
   </a>
   <a href="https://render.com/">
     <img alt="Render" src="https://img.shields.io/badge/Render-Web%20Service%20(Free)-46E3B7?style=flat-square&logo=render&logoColor=white"/>
   </a>
 </p>
 
-## Giới thiệu
-**Discord AI Assistant** là một bot Discord hiệu suất cao, được phát triển bằng `discord.py` và tích hợp **Google Gemini AI** để xử lý hội thoại tự nhiên, tìm kiếm thông tin thời gian thực, hỗ trợ tính toán toán học, tra cứu thời tiết, lưu ghi chú và nhiều tính năng hữu ích khác.
+## Introduction
 
-Bot đã được tái cấu trúc thành các module nhỏ hơn để dễ quản lý, bảo trì và tối ưu hiệu năng. Bot được thiết kế để hoạt động ổn định 24/7 trên **Render Free Tier** bằng Web Service với **Flask tích hợp sẵn**, không cần file `keep_alive.py` riêng biệt — đảm bảo uptime cao và tránh vòng lặp khởi động lại.
+**Gemini Discord Bot** is a high-performance, modular AI assistant built with `discord.py` and powered by **Google's Gemini Pro**. It's designed to be an autonomous and intelligent agent, capable of performing complex tasks through dynamic tool use.
 
----
-
-## Tính năng chính
-
-## Tính năng chính
-
-| Tính năng | Mô tả |
-|----------|-------|
-| **AI hội thoại thông minh** | Sử dụng Google Gemini với cơ chế **failover 5 API key** và **tool calling tự động** |
-| **Tìm kiếm thời gian thực** | Tích hợp **Google CSE**, **SerpAPI**, **Tavily**, **Exa.ai** (round-robin + cache 6h). AI **tự động gọi search** khi kiến thức đã cũ (sau 2024) |
-| **Giải toán học** | Hỗ trợ biểu thức, phương trình, đạo hàm, tích phân qua **SymPy** (tool calling tự động) |
-| **Thời tiết & Ghi chú** | Tool `get_weather` và `save_note` để tra cứu thời tiết theo thành phố hoặc lưu ghi chú cá nhân |
-| **Quản lý lịch sử chat** | Lưu theo user trong **SQLite** (`chat_history.db`) + **bộ nhớ ngắn hạn JSON** (`short_term_memory.json`) |
-| **Tương tác đa kênh** | Phản hồi khi **mention**, **reply**, hoặc **DM** |
-| **Lệnh quản trị** | Slash commands: `/reset-chat`, `/reset-all`, `/dm` (chỉ admin) |
-| **Chống spam** | Rate limit + anti-spam nâng cao (giới hạn 3 tin/30 giây) |
-| **Tự động backup DB** | Sao lưu DB khi khởi động và dọn dẹp tin nhắn cũ (>30 ngày) |
-| **Keep-alive tích hợp** | Flask webhook tại `/` giúp Render health check ổn định |
+This bot goes beyond simple chat by integrating a sophisticated, multi-layered search system, long-term memory, file analysis, image recognition, and more. The architecture is optimized for easy maintenance and has been engineered for stable, 24/7 deployment on **Render's Free Web Service Tier** using an integrated Flask server, eliminating the need for paid background workers.
 
 ---
 
-## Yêu cầu hệ thống
+## Key Features
 
-- Python **3.13+**
-- Discord Bot Token
-- **Google Gemini API Key(s)** (tối đa 5 key hỗ trợ failover)
-- **Ít nhất 1 API key** từ các dịch vụ tìm kiếm sau (khuyến nghị dùng đủ 4):
+| Feature | Description |
+| :--- | :--- |
+| 🤖 **Core AI** | Powered by **Google Gemini** with a failover system supporting up to **5 API keys** for maximum reliability. Features a fun, e-girl persona. |
+| 🛠️ **Autonomous Tool Use** | Dynamically decides when to use tools like web search, calculator, or memory functions based on the conversation. |
+| 🌐 **Multi-API Search** | - **Parallel Search**: Queries 3 separate Google Custom Search Engines simultaneously.<br>- **Automatic Fallback**: If CSE fails, it round-robins between **SerpAPI**, **Tavily**, and **Exa.ai**.<br>- **Topic-Aware**: Categorizes queries (e.g., Gaming, Tech, Finance) to generate smarter search terms.<br>- **6-Hour Cache**: Caches search results to reduce API calls. |
+| 🧠 **Long-Term Memory** | - **Automatic Noting**: Intelligently identifies and saves important user information (preferences, facts, file summaries) to a persistent **SQLite** database.<br>- **Contextual Retrieval**: Fetches relevant memories when the user asks about past information. |
+| 📄 **File & Image Analysis** | - **File Parsing**: Reads and understands content from uploaded files (`.txt`, `.py`, `.md`, etc.) and saves summaries to memory.<br>- **Image Recognition**: Uses a Hugging Face vision model to perform OCR, object detection, and answer questions about images. |
+| 💬 **Interaction** | Responds to DMs (premium users only), replies, and mentions. Splits long responses into multiple messages. |
+| 🔐 **Admin & Premium** | - **Admin Commands**: `/reset-all`, `/message_to` for privileged users.<br>- **Premium System**: Manages premium users in a `premium_users.json` file to grant DM access. |
+| ⚙️ **System & Deployment** | - **SQLite Database**: Stores chat history and user notes.<br>- **Automatic Maintenance**: Backs up and cleans the database on startup.<br>- **Render-Optimized**: Integrated Flask server ensures 24/7 uptime on Render's free tier. |
+| 🛡️ **Safe & Secure** | Includes an anti-spam/rate-limiting system and sanitizes user input to prevent prompt injection. |
+
+---
+
+## Tech Stack
+
+- **Language**: Python 3.11+
+- **Discord Library**: `discord.py`
+- **AI Model**: Google Gemini Pro
+- **Database**: SQLite
+- **Web Framework**: Flask (for keep-alive)
+- **Core Tools**: SymPy (Math), `requests`, `aiohttp`
+- **Search APIs**: Google CSE, SerpAPI, Tavily, Exa.ai
+- **Other APIs**: WeatherAPI, Hugging Face (for Vision)
+
+---
+
+## API Keys & Setup
+
+To run the bot, you need the following:
+- **Discord Bot Token**
+- **Google Gemini API Key(s)** (at least 1, up to 5 are supported for failover)
+- **At least one Search API key** from the following (all are recommended):
+  - Google Custom Search Engine (up to 3 supported)
   - SerpAPI
   - Tavily
   - Exa.ai
-  - Google Custom Search Engine (CSE)
-- (Tùy chọn) WeatherAPI Key
+- **(Optional) WeatherAPI Key** for the weather tool.
+- **(Optional) Hugging Face Token** for the image recognition tool.
 
 ---
 
-## Cài đặt cục bộ
+## Local Installation
 
-```bash
-git clone https://github.com/azizu1012/Gemini-Bot-Discord.git
-cd Gemini-Bot-Discord/gemini discord bot/clone
-pip install -r requirements.txt
-```
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/azizu1012/Gemini-Bot-Discord.git
+    cd Gemini-Bot-Discord/gemini discord bot/clone
+    ```
 
-Tạo file `.env` tại thư mục `gemini discord bot/clone` (hoặc copy từ thư mục gốc) với nội dung sau:
+2.  **Install dependencies:**
+    ```bash
+    pip install -r requirements.txt
+    ```
 
-```env
-DISCORD_TOKEN=your_bot_token
-GEMINI_API_KEY_PROD=your_primary_key
-GEMINI_API_KEY_TEST=key_2
-GEMINI_API_KEY_BACKUP=key_3
-GEMINI_API_KEY_EXTRA1=key_4
-GEMINI_API_KEY_EXTRA2=key_5
+3.  **Create the `.env` file:**
+    In the `clone` directory, create a file named `.env` and fill it with your API keys.
 
-MODEL_NAME=gemini-2.5-flash
+    ```env
+    # --- REQUIRED ---
+    DISCORD_TOKEN=your_discord_bot_token
+    ADMIN_ID=your_discord_user_id
+    MODEL_NAME=gemini-pro # Or any other supported Gemini model
 
-ADMIN_ID=your_admin_user_id
+    # --- GEMINI KEYS (at least 1 required) ---
+    GEMINI_API_KEY_PROD=your_main_gemini_key
+    GEMINI_API_KEY_TEST=your_second_key
+    GEMINI_API_KEY_BACKUP=your_third_key
+    GEMINI_API_KEY_EXTRA1=your_fourth_key
+    GEMINI_API_KEY_EXTRA2=your_fifth_key
 
-# Search APIs (tối thiểu 1, khuyến nghị dùng hết)
-SERPAPI_API_KEY=your_serpapi_key
-TAVILY_API_KEY=your_tavily_key
-EXA_API_KEY=your_exa_key
-GOOGLE_CSE_ID=your_cse_id
-GOOGLE_CSE_API_KEY=your_cse_key
+    # --- SEARCH KEYS (at least 1 required) ---
+    # Google CSE (Engine 1)
+    GOOGLE_CSE_ID=your_google_cse_id_1
+    GOOGLE_CSE_API_KEY=your_google_api_key_1
+    # Google CSE (Engine 2)
+    GOOGLE_CSE_ID_1=your_google_cse_id_2
+    GOOGLE_CSE_API_KEY_1=your_google_api_key_2
+    # Google CSE (Engine 3)
+    GOOGLE_CSE_ID_2=your_google_cse_id_3
+    GOOGLE_CSE_API_KEY_2=your_google_api_key_3
+    # Fallback APIs
+    SERPAPI_API_KEY=your_serpapi_key
+    TAVILY_API_KEY=your_tavily_key
+    EXA_API_KEY=your_exa_key
 
-# Optional
-WEATHER_API_KEY=your_weather_key
-CITY=Ho Chi Minh City
-```
+    # --- OPTIONAL ---
+    WEATHER_API_KEY=your_weatherapi_key
+    HF_TOKEN=your_huggingface_read_token
+    ```
 
-Chạy bot:
-
-```bash
-python run_bot_sever.py
-```
-
----
-
-## Triển khai trên Render (Web Service – Free Tier)
-
-> ⚠️ **Không dùng Background Worker** (yêu cầu paid plan). Dùng **Web Service** + Flask tích hợp sẵn — đảm bảo uptime cao và tránh vòng lặp khởi động lại.
-
-### 1. Tạo dịch vụ
-- Truy cập [Render Dashboard](https://dashboard.render.com)
-- **New → Web Service**
-- Kết nối repository: `azizu1012/Gemini-Bot-Discord`
-
-### 2. Cấu hình
-
-| Trường | Giá trị |
-|--------|--------|
-| **Name** | `discord-ai-assistant` |
-| **Branch** | `main` |
-| **Root Directory** | `gemini discord bot/clone` |
-| **Runtime** | `Python 3` |
-| **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `python run_bot_sever.py` |
-| **Health Check Path** | `/` |
-
-### 3. Biến môi trường
-Thêm toàn bộ biến từ `.env` vào phần **Environment Variables** trên Render.
-
-> ✅ **Lưu ý**:
-> - Không cần `keep_alive.py` — Flask đã tích hợp.
-> - Không cần khai báo `PORT` — Render tự cung cấp
-> - Flask bind `0.0.0.0` + `PORT` từ env → health check ổn định
+4.  **Run the bot:**
+    ```bash
+    python run_bot_sever.py
+    ```
 
 ---
 
-## Cấu trúc dự án
+## Deploying on Render (Free)
+
+This bot is designed to run on Render's free **Web Service** tier, which is more stable than a Background Worker.
+
+1.  **Create a New Web Service:**
+    - Go to your [Render Dashboard](https://dashboard.render.com) and click **New → Web Service**.
+    - Connect your GitHub account and select the forked repository.
+
+2.  **Configure the Service:**
+    - **Name**: A name for your service (e.g., `gemini-discord-bot`).
+    - **Branch**: `main`.
+    - **Root Directory**: `gemini discord bot/clone` (Important: Set this correctly).
+    - **Runtime**: `Python 3`.
+    - **Build Command**: `pip install -r requirements.txt`.
+    - **Start Command**: `python run_bot_sever.py`.
+    - **Health Check Path**: `/` (This will ping the integrated Flask server).
+
+3.  **Add Environment Variables:**
+    - Go to the **Environment** tab.
+    - Add all the variables from your `.env` file one by one.
+
+4.  **Deploy:**
+    - Click **Create Web Service**. Render will build and deploy your bot. The integrated Flask server will respond to health checks, keeping the bot online 24/7.
+
+---
+
+## Slash Commands
+
+| Command | Description | Permissions |
+| :--- | :--- | :--- |
+| `/reset-chat` | Clears your personal chat history with the bot. | Everyone |
+| `/premium` | Checks premium status or adds a premium user. | Admin Only |
+| `/reset-all` | **Deletes all data** from the database (requires confirmation). | Admin Only |
+| `/message_to` | Sends a DM or channel message to a specified user. | Admin Only |
+
+---
+
+## Project Structure
 
 ```
 clone/
 ├── bot_core.py             # Core bot logic, Discord events, slash commands
-├── config.py               # Environment variables and constants
-├── database.py             # SQLite database operations
-├── memory.py               # Short-term memory management (JSON)
 ├── message_handler.py      # Handles incoming messages and delegates tasks
-├── logger.py               # Logging functions
-├── server.py               # Flask keep-alive server
-├── tools.py                # External tool integrations (web search, weather, calculator, notes)
-├── run_bot_sever.py        # Main entry point to run the bot
-├── .env                    # Environment variables (ignored by Git)
-├── .gitignore              # Specifies intentionally untracked files to ignore
+├── tools.py                # Defines and executes all external tools (search, weather, etc.)
+├── config.py               # Loads and manages all environment variables and constants
+├── database.py             # Handles all SQLite database operations
+├── memory.py               # Manages short-term (JSON) memory for chat context
+├── note_manager.py         # Service layer for saving/retrieving long-term notes
+├── file_parser.py          # Utility to parse content from uploaded files
+├── premium_manager.py      # Manages the premium user list
+├── server.py               # Integrated Flask web server for keep-alive
+├── run_bot_sever.py        # Main entry point to start the bot and server
+├── .env                    # Local environment variables (ignored by Git)
 └── requirements.txt        # Python dependencies
 ```
 
 ---
 
-## Dependencies (`requirements.txt`)
+## License
 
-```txt
-discord.py==2.6.4
-python-dotenv
-sympy
-google-genai
-google-search-results
-tavily-python
-exa-py
-flask==3.1.2
-aiofiles
-httpx
-```
-
----
-
-## Lệnh Slash (Discord)
-
-| Lệnh | Mô tả | Quyền |
-|------|------|------|
-| `/reset-chat` | Xóa lịch sử chat của người dùng | Mọi người |
-| `/reset-all` | Xóa toàn bộ DB + memory (xác nhận 2 bước) | Chỉ admin |
-| `/message_to` | Gửi tin nhắn riêng tới user cụ thể | Chỉ admin |
-
-> Ngoài ra, admin có thể dùng lệnh text `!resetall` trong DM với bot để kích hoạt reset toàn bộ.
-
----
-
-## Bảo mật
-
-- **Không commit `.env`** lên repository công khai.
-- Tất cả API key được quản lý qua **Environment Variables**.
-- Flask chỉ trả về `"Bot alive! No sleep pls~ 😴"` tại `/` — an toàn cho health check.
-- **Input Sanitization**: Các truy vấn của người dùng được làm sạch để ngăn chặn các cuộc tấn công injection.
-
----
-
-## Giữ Bot Luôn Sống (Free Tier)
-
-Render Free Tier sẽ **sleep sau 15 phút không hoạt động**.
-
-### Giải pháp miễn phí:
-Dùng [UptimeRobot](https://uptimerobot.com):
-- Tạo monitor → **HTTP(s)**
-- URL: `https://your-service.onrender.com/`
-- Interval: **5 phút**
-→ Bot được ping liên tục → **không bị sleep**
-
----
-
-## Giấy phép
-Dự án được cấp phép theo [MIT License](LICENSE).
-
----
-
-## Liên hệ & Hỗ trợ
-
-- **Repository**: [github.com/azizu1012/Gemini-Bot-Discord](https://github.com/azizu1012/Gemini-Bot-Discord)
-- **Mời bot**: [Nhấn vào đây để thêm bot vào server của bạn](https://discord.com/oauth2/authorize?client_id=1418949883859308594&permissions=8&integration_type=0&scope=bot)
-- **Báo lỗi / Đề xuất**: [GitHub Issues](https://github.com/azizu1012/Gemini-Bot-Discord/issues)
-
-> ✅ Đã kiểm thử và triển khai thành công trên **Render Free Tier**
-> ✅ Không cần Background Worker, không cần UptimeRobot nếu có người chat thường xuyên
-> ✅ Flask tích hợp → ổn định, không loop, không lỗi
-
----
+This project is licensed under the [MIT License](LICENSE).

@@ -10,6 +10,7 @@ from database import init_db, backup_db, cleanup_db
 from memory import init_json_memory
 from logger import log_message
 from message_handler import handle_message
+from premium_manager import is_premium_user, add_premium_user, remove_premium_user
 
 # --- KHỞI TẠO BOT ---
 intents = discord.Intents.default()
@@ -55,6 +56,51 @@ async def reset_chat_slash(interaction: discord.Interaction) -> None:
     user_id = str(interaction.user.id)
     confirmation_pending[user_id] = {'timestamp': datetime.now(), 'awaiting': True}
     await interaction.followup.send("Chắc chắn xóa lịch sử chat? Reply **yes** hoặc **y** trong 60 giây! 😳", ephemeral=True)
+
+@bot.tree.command(name="premium", description="Kiểm tra hoặc quản lý trạng thái Premium của người dùng (CHỈ ADMIN)")
+@app_commands.describe(
+    user="Người dùng để kiểm tra/thêm/xóa Premium",
+    action="Hành động: 'check' (kiểm tra), 'add' (thêm), 'remove' (xóa)"
+)
+@app_commands.choices(action=[
+    app_commands.Choice(name="Kiểm tra", value="check"),
+    app_commands.Choice(name="Thêm", value="add"),
+    app_commands.Choice(name="Xóa", value="remove"),
+])
+@is_admin()
+async def premium_slash(interaction: discord.Interaction, user: discord.User, action: app_commands.Choice[str]) -> None:
+    await interaction.response.defer(ephemeral=True)
+    requester_id = str(interaction.user.id)
+    target_user_id = str(user.id)
+    
+    # Nếu admin tự check bản thân
+    if action.value == "check" and requester_id == target_user_id:
+        await interaction.followup.send(
+            f"Ôi Admin ơi! ✨ Ngài là người tạo ra tui, là chủ của tui mà, sao lại phải check Premium chứ! "
+            f"Ngài luôn là VIP nhất, là Premium vĩnh viễn trong lòng tui rồi! 🥰 "
+            f"Cảm ơn ngài đã tạo ra tui và cho tui được phục vụ mọi người nha! 🙏",
+            ephemeral=True
+        )
+        return
+
+    # Logic hiện tại cho các trường hợp khác (admin check người khác, hoặc add/remove)
+    if action.value == "check":
+        if is_premium_user(target_user_id):
+            await interaction.followup.send(f"Người dùng {user.display_name} (ID: {target_user_id}) hiện đang là Premium. ✨", ephemeral=True)
+        else:
+            await interaction.followup.send(f"Người dùng {user.display_name} (ID: {target_user_id}) không phải là Premium. 😔", ephemeral=True)
+    elif action.value == "add":
+        if add_premium_user(target_user_id):
+            await interaction.followup.send(f"Đã thêm {user.display_name} (ID: {target_user_id}) vào danh sách Premium. 🎉", ephemeral=True)
+        else:
+            await interaction.followup.send(f"Người dùng {user.display_name} (ID: {target_user_id}) đã là Premium rồi. 🤔", ephemeral=True)
+    elif action.value == "remove":
+        if remove_premium_user(target_user_id):
+            await interaction.followup.send(f"Đã xóa {user.display_name} (ID: {target_user_id}) khỏi danh sách Premium. 💔", ephemeral=True)
+        else:
+            await interaction.followup.send(f"Người dùng {user.display_name} (ID: {target_user_id}) không có trong danh sách Premium. 🤷‍♀️", ephemeral=True)
+    else:
+        await interaction.followup.send("Hành động không hợp lệ. Vui lòng chọn 'check', 'add' hoặc 'remove'.", ephemeral=True)
 
 @bot.tree.command(name="reset-all", description="Xóa toàn bộ DB (CHỈ ADMIN)")
 @is_admin()
