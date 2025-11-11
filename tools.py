@@ -9,7 +9,7 @@ import aiofiles
 import requests
 import sympy as sp
 from google.generativeai.types import Tool, FunctionDeclaration
-from serpapi import GoogleSearch
+import serpapi
 from tavily import TavilyClient
 import exa_py
 import aiohttp  # New import
@@ -720,8 +720,7 @@ async def _search_serpapi(query: str) -> str:
         "hl": "en" if re.search(r'[a-zA-Z]{4,}', query) else "vi"
     }
 
-    search = GoogleSearch(params)
-    results = await asyncio.to_thread(search.get_dict)
+    results = await asyncio.to_thread(serpapi.search, params)
 
     if 'organic_results' not in results:
         return ""
