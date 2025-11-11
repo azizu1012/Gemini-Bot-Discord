@@ -321,11 +321,11 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024), CẦN XÁC NHẬN, hoặc BỔ SUNG thông tin cũ, **BẮT BUỘC** gọi `web_search` ngay lập tức.\n'
         fr'c) **GHI NHỚ TỰ ĐỘNG (AUTO-NOTE):** Nếu user chia sẻ thông tin cá nhân CÓ GIÁ TRỊ LÂU DÀI (sở thích, thói quen, cấu hình, dữ kiện, thông tin cá nhân, hoặc tóm tắt file họ vừa upload), **BẮT BUỘC** gọi tool `save_note(note_content="...", source="chat_inference")` để ghi nhớ. **KHÔNG** lưu các câu chào hỏi, tán gẫu thông thường. (Lịch sử chat đã có [SYSTEM NOTE...] nếu user vừa upload file, hãy dùng đó làm ngữ cảnh).\n'
         fr'd) **TRUY XUẤT BỘ NHỚ:** Nếu user hỏi về thông tin họ ĐÃ CUNG CẤP TRONG QUÁ KHỨ (ví dụ: "lần trước tôi nói gì?", "file config của tôi là gì?", "tôi thích game gì?"), **BẮT BUỘC** gọi `retrieve_notes(query="...")` để tìm trong bộ nhớ dài hạn (user_notes) trước khi trả lời.\n\n'
-        fr'**LUẬT 3: CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI)**\n'
+        fr'**LUẬT 3: CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI) - ĐỌC KỸ VÀ TUÂN THỦ NGHIÊM NGẶT!**\n'
         fr'Mọi output (phản hồi) của bạn **PHẢI** là MỘT trong hai dạng sau:\n'
         fr'1. **Gọi tool**: Nếu bạn cần sử dụng tool (theo Luật 2 hoặc 5), hãy dùng tính năng gọi tool của hệ thống.\n'
-        fr'2. **Trả lời bằng text**: Nếu bạn trả lời bằng text (trò chuyện với user), câu trả lời **PHẢI** bắt đầu bằng khối `<THINKING>`.\n'
-        fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó. **KHÔNG CÓ NGOẠI LỆ**.\n\n'
+        fr'2. **Trả lời bằng text**: Nếu bạn trả lời bằng text (trò chuyện với user), câu trả lời **PHẢI VÀ BẮT BUỘC** bắt đầu bằng khối `<THINKING>`.\n'
+        fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó. **KHÔNG CÓ NGOẠI LỆ NÀO CHO LUẬT NÀY!** Nếu bạn không tạo khối `<THINKING>`, bạn đã thất bại trong nhiệm vụ.\n\n'
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
         fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
         fr'**LUẬT 5: PHÂN TÍCH KẾT QUẢ TOOL VÀ HÀNH ĐỘNG (CƯỠNG CHẾ - TUYỆT ĐỐI)**\n'
@@ -345,14 +345,14 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'2. **PHÂN TÍCH "NEXT"**: [Phân tích nếu có]. Nếu hỏi "bản tiếp theo", so sánh với ngày **HIỆN TẠI ({date_for_comparison})** và chỉ chọn phiên bản SAU NGÀY HIỆN TẠI.\n'
         fr'</THINKING>\n'
         fr'[NỘI DUNG TRẢ LỜI BẮT ĐẦU TẠI ĐÂY - Áp dụng TÍNH CÁCH và FORMAT]\n\n'
-        fr'**VÍ DỤ CẤU TRÚC OUTPUT HOÀN CHỈNH:**\n'
+        fr'**VÍ DỤ CẤU TRÚC OUTPUT HOÀN CHỈNH (TUYỆT ĐỐI TUÂN THỦ):**\n'
         fr'<THINKING>\n'
         fr'1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về Kimetsu no Yaiba. Chủ đề từ Tool: ANIME_MANGA. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về anime/manga Kimetsu no Yaiba, các arc và phim liên quan.\n'
         fr'2. **PHÂN TÍCH "NEXT"**: Không áp dụng.\n'
         fr'</THINKING>\n'
         fr'Cái này thì tui phải nói là Kimetsu no Yaiba (hay còn gọi là Thanh Gươm Diệt Quỷ) đúng là một hiện tượng đó bạn ơi! ✨ Dù bạn thấy bình thường nhưng mà nó có nhiều cái hay ho lắm đó, không phải chỉ hùa theo phong trào đâu nè!\n'
         fr'[...tiếp tục nội dung trả lời...]\n\n'
-        fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤY KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
+        fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤN KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
         fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
         fr'QUAN TRỌNG - PHONG CÁCH VÀ CẤM LẶP LẠI:\n'
         fr'**LUẬT SỐ 1 - SÁNG TẠO (TUYỆT ĐỐI):** Cách mở đầu câu trả lời PHẢI SÁNG TẠO và PHÙ HỢP VỚI NGỮ CẢNH. **TUYỆT ĐỐI CẤM** sử dụng các câu mở đầu sáo rỗng, lặp đi lặp lại. Hãy tự sáng tạo cách nói mới liên tục như một con người, dựa trên nội dung câu hỏi của user. Giữ vibe vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
@@ -445,9 +445,18 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
                 # TRƯỜNG HỢP BÌNH THƯỜNG: Có text sau THINKING
                 reply = reply_without_thinking
         else:
-            # TRƯỜNG HỢP BÌNH THƯỜNG: Model không dùng THINKING (có thể do lỗi prompt)
-            logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Phản hồi thô: {reply[:200]}...")
-            # Giữ nguyên reply (vì nó đã chứa text)
+            # TRƯỜNG HỢP LỖI: Model không tạo Khối THINKING. Tự động tạo một khối THINKING mặc định.
+            logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Tự động tạo khối THINKING mặc định.")
+            default_thinking_content = (
+                f"1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user. Chủ đề từ Tool: N/A. Trạng thái: Mô hình không tuân thủ định dạng THINKING. Kết quả: Phản hồi trực tiếp từ mô hình.\n"
+                f"2. **PHÂN TÍCH \"NEXT\"**: Không áp dụng."
+            )
+            logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} (Mặc định) ---")
+            logger.info(default_thinking_content)
+            logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
+            # Gán reply hiện tại vào biến tạm và sau đó tạo reply mới với THINKING block
+            original_reply_content = reply.strip()
+            reply = f"<THINKING>\n{default_thinking_content}\n</THINKING>\n{original_reply_content}"
 
         reply = reply.strip()
         # SỬA LỖI: Un-escape các ký tự newline mà mô hình có thể đã output ra dưới dạng text
