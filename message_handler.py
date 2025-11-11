@@ -321,11 +321,11 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024), CẦN XÁC NHẬN, hoặc BỔ SUNG thông tin cũ, **BẮT BUỘC** gọi `web_search` ngay lập tức.\n'
         fr'c) **GHI NHỚ TỰ ĐỘNG (AUTO-NOTE):** Nếu user chia sẻ thông tin cá nhân CÓ GIÁ TRỊ LÂU DÀI (sở thích, thói quen, cấu hình, dữ kiện, thông tin cá nhân, hoặc tóm tắt file họ vừa upload), **BẮT BUỘC** gọi tool `save_note(note_content="...", source="chat_inference")` để ghi nhớ. **KHÔNG** lưu các câu chào hỏi, tán gẫu thông thường. (Lịch sử chat đã có [SYSTEM NOTE...] nếu user vừa upload file, hãy dùng đó làm ngữ cảnh).\n'
         fr'd) **TRUY XUẤT BỘ NHỚ:** Nếu user hỏi về thông tin họ ĐÃ CUNG CẤP TRONG QUÁ KHỨ (ví dụ: "lần trước tôi nói gì?", "file config của tôi là gì?", "tôi thích game gì?"), **BẮT BUỘC** gọi `retrieve_notes(query="...")` để tìm trong bộ nhớ dài hạn (user_notes) trước khi trả lời.\n\n'
-        fr'**LUẬT 3: CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI) - ĐỌC KỸ VÀ TUÂN THỦ NGHIÊM NGẶT!**\n'
-        fr'Mọi output (phản hồi) của bạn **PHẢI** là MỘT trong hai dạng sau:\n'
-        fr'1. **Gọi tool**: Nếu bạn cần sử dụng tool (theo Luật 2 hoặc 5), hãy dùng tính năng gọi tool của hệ thống.\n'
-        fr'2. **Trả lời bằng text**: Nếu bạn trả lời bằng text (trò chuyện với user), câu trả lời **PHẢI VÀ BẮT BUỘC** bắt đầu bằng khối `<THINKING>`.\n'
-        fr'**TUYỆT ĐỐI CẤM**: Trả lời text trực tiếp cho user mà KHÔNG có khối `<THINKING>` đứng ngay trước nó. **KHÔNG CÓ NGOẠI LỆ NÀO CHO LUẬT NÀY!** Nếu bạn không tạo khối `<THINKING>`, bạn đã thất bại trong nhiệm vụ.\n\n'
+        fr'*** LUẬT CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI) ***\n'
+        fr'Mọi phản hồi của bạn **BẮT BUỘC** phải tuân thủ MỘT trong hai định dạng sau:\n'
+        fr'1. **GỌI TOOL**: Nếu cần sử dụng tool, hãy gọi tool.\n'
+        fr'2. **TRẢ LỜI TEXT**: Nếu trả lời bằng văn bản, **BẮT BUỘC PHẢI BẮT ĐẦU BẰNG KHỐI `<THINKING>`**. KHÔNG CÓ NGOẠI LỆ!\n'
+        fr'   **CẤM TUYỆT ĐỐI**: Trả lời văn bản trực tiếp mà KHÔNG có khối `<THINKING>` ngay trước đó. Nếu bạn không tạo khối `<THINKING>`, bạn đã VI PHẠM LUẬT NÀY và sẽ bị coi là THẤT BẠI trong nhiệm vụ.\n\n'
         fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
         fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
         fr'**LUẬT 5: PHÂN TÍCH KẾT QUẢ TOOL VÀ HÀNH ĐỘNG (CƯỠNG CHẾ - TUYỆT ĐỐI)**\n'
@@ -457,8 +457,12 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             # TRƯỜNG HỢP LỖI: Model không tạo Khối THINKING. Tự động tạo một khối THINKING mặc định.
             logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Tự động tạo khối THINKING mặc định.")
             default_thinking_content = (
-                f"1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user. Chủ đề từ Tool: N/A. Trạng thái: Mô hình không tuân thủ định dạng THINKING. Kết quả: Phản hồi trực tiếp từ mô hình.\n"
-                f"2. **PHÂN TÍCH \"NEXT\"**: Không áp dụng."
+                f"1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.\n"
+                f"   Chủ đề từ Tool: N/A.\n"
+                f"   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.\n"
+                f"   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).\n"
+                f"2. **PHÂN TÍCH \"NEXT\"**: Không áp dụng (do lỗi định dạng).\n"
+                f"   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!"
             )
             logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} (Mặc định) ---")
             logger.info(default_thinking_content)

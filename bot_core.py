@@ -69,7 +69,18 @@ async def reset_chat_slash(interaction: discord.Interaction) -> None:
 ])
 @is_admin()
 async def premium_slash(interaction: discord.Interaction, user: discord.User, action: app_commands.Choice[str]) -> None:
-    await interaction.response.defer(ephemeral=True)
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except discord.errors.NotFound:
+        logger.error(f"Lỗi: Không tìm thấy tương tác cho lệnh premium. Có thể đã hết hạn hoặc bị hủy.")
+        # Attempt to send a message via followup if defer failed, though this might also fail.
+        # A direct message to the user might be more reliable if interaction is truly gone.
+        try:
+            await interaction.user.send("Xin lỗi, đã xảy ra lỗi khi xử lý lệnh Premium của bạn. Vui lòng thử lại sau.")
+        except discord.Forbidden:
+            pass # User might have DMs disabled
+        return
+    
     requester_id = str(interaction.user.id)
     target_user_id = str(user.id)
     
