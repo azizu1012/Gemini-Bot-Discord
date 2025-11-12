@@ -1,6 +1,7 @@
 import json
 import os
 from typing import List
+from config import ADMIN_USER_IDS
 
 PREMIUM_USERS_FILE = 'premium_users.json'
 
@@ -23,6 +24,10 @@ def is_premium_user(user_id: str) -> bool:
     """Checks if a given user ID is in the premium list."""
     premium_users = _load_premium_users()
     return user_id in premium_users
+
+def is_admin_user(user_id: str) -> bool:
+    """Checks if a given user ID is in the admin list."""
+    return user_id in ADMIN_USER_IDS
 
 def add_premium_user(user_id: str) -> bool:
     """Adds a user ID to the premium list. Returns True if added, False if already present."""

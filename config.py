@@ -87,6 +87,13 @@ MIN_FREE_SPACE_MB = 100  # Ngưỡng dung lượng trống (MB)
 SPAM_THRESHOLD = 3
 SPAM_WINDOW = 30
 
+# --- RATE & DM LIMITS ---
+DEFAULT_RATE_LIMIT = "10/60"  # 10 requests per 60 seconds
+PREMIUM_RATE_LIMIT = "20/60"  # 20 requests per 60 seconds
+DEFAULT_DM_LIMIT = 5  # 5 DMs per day
+PREMIUM_DM_LIMIT = 15  # 15 DMs per day
+ADMIN_USER_IDS = [ADMIN_ID] if ADMIN_ID else []
+
 # --- GEMINI SAFETY SETTINGS ---
 SAFETY_SETTINGS = [
     {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},

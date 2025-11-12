@@ -15,7 +15,8 @@ from typing import Dict, Deque, Any, Tuple, Optional
 from config import (
     logger, MODEL_NAME, ADMIN_ID, HABE_USER_ID, MIRA_USER_ID, ADO_FAT_USER_ID,
     MUC_RIM_USER_ID, SUC_VIEN_USER_ID, CHUI_USER_ID, SPAM_THRESHOLD, SPAM_WINDOW,
-    GEMINI_API_KEYS, SAFETY_SETTINGS
+    GEMINI_API_KEYS, SAFETY_SETTINGS, DEFAULT_RATE_LIMIT, PREMIUM_RATE_LIMIT,
+    DEFAULT_DM_LIMIT, PREMIUM_DM_LIMIT
 )
 from database import (
     clear_user_data_db, clear_all_data_db, get_user_history_from_db # <-- SỬA LỖI RAM
@@ -28,29 +29,31 @@ from logger import log_message
 # --- IMPORT MODULE MỚI ---
 from file_parser import parse_attachment
 from note_manager import save_file_note_to_db
+import premium_manager
 
 # Global dictionary to store the last uploaded image URL for each user
 last_uploaded_image_urls: Dict[str, str] = {}
+user_dm_counts: Dict[str, Dict[str, Any]] = {}
+user_rate_limits: Dict[str, Deque[datetime]] = defaultdict(lambda: deque())
+
 
 async def handle_message(message: discord.Message, bot: Any, mention_history: Dict[str, list], confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any], user_queue: defaultdict) -> None:
     if message.author == bot.user:
         return
 
     user_id = str(message.author.id)
-    is_admin = user_id == ADMIN_ID
+    is_admin = premium_manager.is_admin_user(user_id)
+    is_premium = premium_manager.is_premium_user(user_id)
 
     attachments_processed = False
     if message.attachments:
-        # Tách riêng file ảnh và file văn bản/dữ liệu
         image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
         data_attachments = [a for a in message.attachments if not (a.content_type and a.content_type.startswith('image/'))]
 
-        # Xử lý file ảnh (chỉ lưu URL, không tải lên)
         if image_attachments:
             await handle_image_attachments(message, image_attachments)
             attachments_processed = True
             
-        # Xử lý file dữ liệu (Tải local -> Tải Cloud)
         if data_attachments:
             await handle_data_attachments(message, data_attachments)
             attachments_processed = True
@@ -68,15 +71,24 @@ async def handle_message(message: discord.Message, bot: Any, mention_history: Di
         if not attachments_processed:
             query = "Hihi, anh ping tui có chuyện gì hông? Tag nhầm hả? uwu"
         else:
-            # Nếu có ảnh HOẶC file, đặt query mặc định
             query = "phân tích ảnh hoặc file đính kèm" 
     elif len(query) > 500:
         await message.reply("Ôi, query dài quá (>500 ký tự), tui chịu hông nổi đâu! 😅")
         return
 
-    if not is_admin and is_rate_limited(user_id, mention_history):
-        await message.reply("Chill đi bro, spam quá rồi! Đợi 1 phút nha 😎")
-        return
+    # Rate limiting and DM limiting
+    if not is_admin:
+        rate_limit_str = PREMIUM_RATE_LIMIT if is_premium else DEFAULT_RATE_LIMIT
+        requests, seconds = map(int, rate_limit_str.split('/'))
+        if is_rate_limited(user_id, requests, seconds):
+            await message.reply(f"Chill đi bro, spam quá rồi! Đợi {seconds} giây nha 😎")
+            return
+
+        if interaction_type == "DM":
+            dm_limit = PREMIUM_DM_LIMIT if is_premium else DEFAULT_DM_LIMIT
+            if is_dm_limited(user_id, dm_limit):
+                await message.reply("Bạn đã hết lượt nhắn tin riêng cho bot hôm nay rồi. Nâng cấp premium để có thêm lượt nhé! 😉")
+                return
 
     if is_spam(user_id, user_queue):
         await message.reply("Chill đi anh, tui mệt rồi nha 😫")
@@ -162,15 +174,36 @@ def get_query(message: discord.Message, bot: Any) -> str:
         query = re.sub(rf'<@!?{bot.user.id}>', '', query).strip()
     return query
 
-def is_rate_limited(user_id: str, mention_history: Dict[str, list]) -> bool:
+def is_rate_limited(user_id: str, max_requests: int, period_seconds: int) -> bool:
+    """Checks if a user is rate-limited."""
     now = datetime.now()
-    if user_id not in mention_history:
-        mention_history[user_id] = []
-    mention_history[user_id] = [ts for ts in mention_history[user_id] if now - ts < timedelta(minutes=1)]
-    if len(mention_history[user_id]) >= 25:
+    user_requests = user_rate_limits[user_id]
+    
+    # Remove timestamps older than the period
+    while user_requests and (now - user_requests[0]).total_seconds() > period_seconds:
+        user_requests.popleft()
+        
+    if len(user_requests) >= max_requests:
         return True
-    mention_history[user_id].append(now)
+        
+    user_requests.append(now)
     return False
+
+def is_dm_limited(user_id: str, limit: int) -> bool:
+    """Checks if a user has reached their daily DM limit."""
+    now = datetime.now()
+    user_data = user_dm_counts.get(user_id)
+
+    if user_data is None or (now - user_data['reset_time']).days >= 1:
+        user_dm_counts[user_id] = {'count': 1, 'reset_time': now}
+        return False
+
+    if user_data['count'] >= limit:
+        return True
+
+    user_data['count'] += 1
+    return False
+
 
 def is_spam(user_id: str, user_queue: defaultdict) -> bool:
     q = user_queue[user_id]
