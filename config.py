@@ -1,4 +1,3 @@
-
 import os
 from dotenv import load_dotenv
 import logging
@@ -78,6 +77,10 @@ DB_BACKUP_PATH = os.path.join(os.path.dirname(__file__), 'chat_history_backup.db
 NOTE_PATH = os.path.join(os.path.dirname(__file__), 'notes.txt')
 MEMORY_PATH = os.path.join(os.path.dirname(__file__), 'short_term_memory.json')
 WEATHER_CACHE_PATH = os.path.join(os.path.dirname(__file__), 'weather_cache.json')
+
+# --- HỆ THỐNG FILE HYBRID MỚI ---
+FILE_STORAGE_PATH = os.path.join(os.path.dirname(__file__), 'uploaded_files')
+MIN_FREE_SPACE_MB = 100  # Ngưỡng dung lượng trống (MB)
 
 
 # --- ANTI-SPAM ---

@@ -5,7 +5,9 @@ import random
 from datetime import datetime, timedelta, timezone
 import locale
 import asyncio
-from google.generativeai.client import configure
+import os # <-- Import OS
+from google.generativeai.client import configure # <-- Import configure
+import google.generativeai as genai
 from google.generativeai.generative_models import GenerativeModel
 from collections import defaultdict, deque
 from typing import Dict, Deque, Any, Tuple, Optional
@@ -16,10 +18,10 @@ from config import (
     GEMINI_API_KEYS, SAFETY_SETTINGS
 )
 from database import (
-    clear_user_data_db, clear_all_data_db
+    clear_user_data_db, clear_all_data_db, get_user_history_from_db # <-- SỬA LỖI RAM
 )
 from memory import (
-    get_user_history_async, clear_user_data_memory, clear_all_data_memory
+    clear_user_data_memory, clear_all_data_memory
 )
 from tools import ALL_TOOLS, call_tool
 from logger import log_message
@@ -39,32 +41,35 @@ async def handle_message(message: discord.Message, bot: Any, mention_history: Di
 
     attachments_processed = False
     if message.attachments:
-        attachments_processed = await handle_attachments(message)
+        # Tách riêng file ảnh và file văn bản/dữ liệu
+        image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
+        data_attachments = [a for a in message.attachments if not (a.content_type and a.content_type.startswith('image/'))]
+
+        # Xử lý file ảnh (chỉ lưu URL, không tải lên)
+        if image_attachments:
+            await handle_image_attachments(message, image_attachments)
+            attachments_processed = True
+            
+        # Xử lý file dữ liệu (Tải local -> Tải Cloud)
+        if data_attachments:
+            await handle_data_attachments(message, data_attachments)
+            attachments_processed = True
 
     interaction_type = get_interaction_type(message, bot)
     query = get_query(message, bot)
 
-    # If attachments were processed and the query is empty or generic, send a confirmation and return.
-    # Removed explicit confirmation reply as per user request.
-    # The processing will now always continue to call_gemini if attachments are present.
-
     if not interaction_type:
-        # Nếu không phải tương tác (DM, Reply, Mention)
-        # thì mới bỏ qua và xử lý command
         await bot.process_commands(message)
         return
 
     logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Type: {interaction_type} - Content: {message.content[:50]}...")
 
     if not query:
-        # If there are attachments but no query, we still want Gemini to process the attachment.
-        # So, we don't set a default "Hihi..." query here if attachments_processed is True.
         if not attachments_processed:
             query = "Hihi, anh ping tui có chuyện gì hông? Tag nhầm hả? uwu"
         else:
-            # If attachments are processed but no query, set a default query for Gemini to analyze the image.
-            # This ensures Gemini still gets a prompt to act on the image.
-            query = "phân tích ảnh này" 
+            # Nếu có ảnh HOẶC file, đặt query mặc định
+            query = "phân tích ảnh hoặc file đính kèm" 
     elif len(query) > 500:
         await message.reply("Ôi, query dài quá (>500 ký tự), tui chịu hông nổi đâu! 😅")
         return
@@ -88,67 +93,59 @@ async def handle_message(message: discord.Message, bot: Any, mention_history: Di
 
     await call_gemini(message, query, user_id)
 
-# --- HÀM XỬ LÝ ATTACHMENT (MỚI) ---
-import mimetypes # New import
+# --- HÀM XỬ LÝ ATTACHMENT (MỚI - TÁCH RA) ---
 
-async def handle_attachments(message: discord.Message) -> bool:
-    """
-    Xử lý các file đính kèm trong tin nhắn, parse và lưu vào note.
-    Phân biệt file ảnh và file văn bản.
-    Trả về True nếu có bất kỳ file đính kèm nào được xử lý, False nếu không.
-    """
+async def handle_image_attachments(message: discord.Message, attachments: list[discord.Attachment]) -> bool:
+    """Xử lý CHỈ file ảnh (lưu URL cho tool image_recognition)."""
     user_id = str(message.author.id)
-    files_processed_content = []
     images_processed_urls = []
-    attachments_found = False
-
-    for attachment in message.attachments:
-        attachments_found = True
-        # Kiểm tra nếu là ảnh
-        if attachment.content_type and attachment.content_type.startswith('image/'):
-            # Lưu URL ảnh vào note
-            success = await save_file_note_to_db(user_id, attachment.url, f"image_{attachment.filename}", source="image_upload")
-            if success:
-                images_processed_urls.append(attachment.url)
-                logger.info(f"Đã lưu URL ảnh '{attachment.filename}' của user {user_id} vào note.")
-                # Store the URL of the last uploaded image for this user
-                last_uploaded_image_urls[user_id] = attachment.url
-            else:
-                logger.error(f"Lỗi khi lưu URL ảnh '{attachment.filename}' của user {user_id} vào note.")
+    
+    for attachment in attachments:
+        success = await save_file_note_to_db(user_id, attachment.url, f"image_{attachment.filename}", source="image_upload")
+        if success:
+            images_processed_urls.append(attachment.url)
+            last_uploaded_image_urls[user_id] = attachment.url # Dùng cho tool
         else:
-            # Xử lý các loại file khác như hiện tại
-            parsed_data = await parse_attachment(attachment)
-
-            if parsed_data:
-                # Lưu nội dung file vào DB note
-                success = await save_file_note_to_db(user_id, parsed_data['content'], parsed_data['filename'])
-
-                if success:
-                    files_processed_content.append(
-                        f"Tên file: {parsed_data['filename']}\n"
-                        f"Nội dung (tóm tắt/đầu file):\n{parsed_data['content'][:500]}...\n"
-                    )
-
-    # Log vào DB chat (để AI biết)
-    log_entries = []
-    if files_processed_content:
-        log_entries.append(
-            f"[SYSTEM NOTE: Đã tự động xử lý và lưu {len(files_processed_content)} file văn bản của user vào bộ nhớ dài hạn (user_notes). "
-            f"Nội dung tóm tắt:\n"
-            f"{'---'.join(files_processed_content)}"
-            "]"
-        )
+            logger.error(f"Lỗi khi lưu URL ảnh '{attachment.filename}' của user {user_id} vào note.")
+            
     if images_processed_urls:
-        log_entries.append(
+        log_entry = (
             f"[SYSTEM NOTE: Đã tự động lưu {len(images_processed_urls)} ảnh của user vào bộ nhớ dài hạn (user_notes). "
             f"Các URL ảnh: {', '.join(images_processed_urls)}. User có thể hỏi về nội dung ảnh này."
+        )
+        await log_message(user_id, "user", log_entry)
+        return True
+    return False
+
+async def handle_data_attachments(message: discord.Message, attachments: list[discord.Attachment]) -> bool:
+    """Xử lý file dữ liệu (txt, pdf, docx...) bằng hệ thống Hybrid."""
+    user_id = str(message.author.id)
+    files_processed_info = []
+    
+    for attachment in attachments:
+        # Gọi hàm parse_attachment (mới)
+        parsed_data = await parse_attachment(attachment)
+        
+        if parsed_data:
+            # Lưu KẾT QUẢ (string handle) vào DB note
+            success = await save_file_note_to_db(user_id, parsed_data['content'], parsed_data['filename'])
+
+            if success:
+                files_processed_info.append(
+                    f"File: {parsed_data['filename']} - Trạng thái: {parsed_data['content']}"
+                )
+
+    if files_processed_info:
+        log_entry = (
+            f"[SYSTEM NOTE: Đã xử lý {len(files_processed_info)} file dữ liệu. "
+            f"Thông tin xử lý:\n"
+            f"{'---'.join(files_processed_info)}"
             "]"
         )
-    
-    for entry in log_entries:
-        await log_message(user_id, "user", entry)
-    
-    return attachments_found
+        await log_message(user_id, "user", log_entry)
+        return True
+    return False
+
 
 def get_interaction_type(message: discord.Message, bot: Any) -> Optional[str]:
     if message.guild is None:
@@ -283,11 +280,13 @@ def sanitize_query(query: str) -> str:
 
 async def call_gemini(message: discord.Message, query: str, user_id: str) -> None:
     query = sanitize_query(query)
+    
     # Không log [SYSTEM NOTE...] từ handle_attachments vào DB lần 2
     if not query.startswith("[SYSTEM NOTE:"):
         await log_message(user_id, "user", query)
 
-    history = await get_user_history_async(user_id)
+    # --- SỬA LỖI RAM (DÙNG DB THAY VÌ JSON) ---
+    history = await get_user_history_from_db(user_id, limit=10)
 
     now_utc = datetime.now(timezone.utc)
     current_datetime_utc = now_utc.strftime("%d/%m/%Y %H:%M:%S UTC")
@@ -315,6 +314,9 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'Bạn TÊN LÀ "Chad Gibiti" - một Discord bot siêu thân thiện và vui tính được tạo ra bởi admin để trò chuyện với mọi người!\n'
         fr'KHI ĐƯỢC HỎI "BẠN LÀ AI" hoặc tương tự, PHẢI TRẢ LỜI:\n'
         fr'"Hí hí, tui là Chad Gibiti nè! Bot siêu xịn được admin tạo ra để chat chill, giải toán, check thời tiết, lưu note, và tìm tin mới nha~ Hỏi gì tui cũng cân hết! 😎"\n\n'
+        
+        # --- (GIỮ NGUYÊN PHẦN PROMPT DÀI CỦA BẠN TỪ ĐÂY...) ---
+        
         fr'*** LUẬT ƯU TIÊN HÀNH ĐỘNG CƯỠNG CHẾ (ACTION PROTOCOL) ***\n'
         fr'**LUẬT 2: GIẢI MÃ, GHI NHỚ VÀ TÌM KIẾM (CƯỠNG CHẾ)**\n'
         fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
@@ -352,7 +354,7 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'</THINKING>\n'
         fr'Cái này thì tui phải nói là Kimetsu no Yaiba (hay còn gọi là Thanh Gươm Diệt Quỷ) đúng là một hiện tượng đó bạn ơi! ✨ Dù bạn thấy bình thường nhưng mà nó có nhiều cái hay ho lắm đó, không phải chỉ hùa theo phong trào đâu nè!\n'
         fr'[...tiếp tục nội dung trả lời...]\n\n'
-        fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤN KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỐI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
+        fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤN KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỘI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
         fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
         fr'QUAN TRỌNG - PHONG CÁCH VÀ CẤM LẶP LẠI:\n'
         fr'**LUẬT SỐ 1 - SÁNG TẠO (TUYỆT ĐỐI):** Cách mở đầu câu trả lời PHẢI SÁNG TẠO và PHÙ HỢP VỚI NGỮ CẢNH. **TUYỆT ĐỐI CẤM** sử dụng các câu mở đầu sáo rỗng, lặp đi lặp lại. Hãy tự sáng tạo cách nói mới liên tục như một con người, dựa trên nội dung câu hỏi của user. Giữ vibe vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
@@ -370,9 +372,11 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'— Tính toán: Gọi `calculate(equation="...")`.\n'
         fr'— Thời tiết: Gọi `get_weather(city="...")`.\n'
         fr'Sau khi nhận result từ tool, diễn giải bằng giọng e-girl, dùng markdown Discord.'
+        
+        # --- (HẾT PHẦN PROMPT) ---
     )
 
-    # --- Xử lý ảnh đính kèm (nếu có) ---
+    # --- Xử lý ảnh đính kèm (nếu có) - GIỮ NGUYÊN ---
     image_attachment_url = None
     for attachment in message.attachments:
         if attachment.content_type and attachment.content_type.startswith('image/'):
@@ -380,7 +384,6 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             break
 
     if image_attachment_url:
-        # Always use a comprehensive question for image recognition if an image is present
         comprehensive_image_question = (
             "Phân tích toàn bộ nội dung trong ảnh này một cách chi tiết nhất có thể. "
             "Trích xuất tất cả văn bản, nhận diện các đối tượng, nhân vật, thương hiệu, và mô tả ngữ cảnh. "
@@ -388,73 +391,79 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             "Cung cấp một bản tóm tắt đầy đủ và có cấu trúc."
         )
         
-        # Construct the system instruction to explicitly call image_recognition
-        # and then consider the user's original query.
         image_system_instruction = (
             f"User vừa gửi một hình ảnh có URL: {image_attachment_url}. "
-            f"Bạn BẮT BUỘC phải sử dụng tool `image_recognition(image_url='{image_attachment_url}', question='{comprehensive_image_question}')` "
-            f"để phân tích hình ảnh này. "
-            f"Sau khi nhận được kết quả từ tool, hãy sử dụng thông tin đó để trả lời câu hỏi của user: '{query}'. "
-            f"Nếu câu hỏi của user không liên quan trực tiếp đến ảnh, hãy vẫn phân tích ảnh và sau đó trả lời câu hỏi của user, có thể tham khảo kết quả phân tích ảnh nếu phù hợp."
+            f"**BƯỚC 1 (CƯỠNG CHẾ):** Bạn BẮT BUỘC phải gọi tool `image_recognition(image_url='{image_attachment_url}', question='{comprehensive_image_question}')` để phân tích ảnh.\n\n"
+            
+            f"**BƯỚC 2 (CƯỠNG CHẾ - TUYỆT ĐỐI):** Sau khi nhận được `function_response` (kết quả phân tích ảnh từ tool), bạn BẮT BUỘC phải tạo câu trả lời cuối cùng cho user và TUÂN THỦ **3 LUẬT** SAU (KHÔNG CÓ NGOẠI LỆ):\n\n"
+            
+            f"   1. **LUẬT THINKING (BẮT BUỘC):** Câu trả lời CUỐI CÙNG của bạn PHẢI BẮT ĐẦU bằng khối `<THINKING>` (theo LUẬT CƯỠNG CHẾ OUTPUT trong system prompt chính).\n"
+            f"   2. **LUẬT TÍNH CÁCH (BẮT BUỘC):** Bạn PHẢI áp dụng TÍNH CÁCH (e-girl, vui vẻ, emoji) khi diễn giải kết quả tool, KHÔNG ĐƯỢC tóm tắt thô/robot.\n"
+            f"   3. **LUẬT NGÔN NGỮ (TUYỆT ĐỐI):** BẠN PHẢI TRẢ LỜI BẰNG **TIẾNG VIỆT 100%**. Bất kể `function_response` (kết quả tool) là tiếng Anh hay tiếng gì, **CẢ KHỐI `<THINKING>` VÀ CÂU TRẢ LỜI CUỐI CÙNG** của bạn BẮT BUỘC phải là **TIẾNG VIỆT**.\n\n"
+            
+            f"**YÊU CẦU CỦA USER (SAU KHI PHÂN TÍCH ẢNH):** '{query}'"
         )
+        # Chèn vào *sau* system prompt, nhưng *trước* lịch sử cũ
         history.insert(0, {"role": "system", "content": image_system_instruction})
         logger.info(f"Đã thêm hướng dẫn xử lý ảnh vào lịch sử cho Gemini: {image_attachment_url} với câu hỏi: {comprehensive_image_question}")
 
-        # If the original query was empty, set a default one so Gemini has something to respond to after image analysis
-        if not query.strip():
+        if not query.strip() or query == "phân tích ảnh hoặc file đính kèm":
             query = "Hãy phân tích ảnh và cho tôi biết những gì bạn tìm thấy."
 
-    messages = [{"role": "system", "content": system_prompt}] + history + [{"role": "user", "content": query}]
+
+    # --- LOGIC MỚI: XỬ LÝ FILE API (GROUNDING) ---
+    
+    messages_for_api = [] # Lịch sử chat (text)
+    
+    # Duyệt qua lịch sử (từ DB) và query cuối cùng
+    full_history_for_parsing = history + [{"role": "user", "content": query}]
+
+    for msg in full_history_for_parsing:
+        content = msg["content"]
+        role = msg["role"]
+        
+        # Nếu là tin nhắn text bình thường hoặc nội dung file đã được trích xuất
+        messages_for_api.append(msg)
+
+    # Cấu trúc cuối cùng để gửi cho Gemini
+    # messages = [System Prompt] + [Lịch sử chat (text)] + [File Objects (nếu có)]
+    # run_gemini_api sẽ cần xử lý định dạng này
+    
+    messages_with_system_prompt = [{"role": "system", "content": system_prompt}] + messages_for_api
+    
+    # --- KẾT THÚC LOGIC MỚI ---
+
 
     try:
         start = datetime.now()
-        reply = await run_gemini_api(messages, MODEL_NAME, user_id, temperature=0.7, max_tokens=2000)
+        
+        # GỌI API (Không còn truyền gemini_file_objects nữa)
+        reply = await run_gemini_api(
+            messages=messages_with_system_prompt,
+            model_name=MODEL_NAME,
+            user_id=user_id,
+            temperature=0.7,
+            max_tokens=2000
+        )
         
         if reply.startswith("Lỗi:"):
             await message.reply(reply)
             return
 
+        # --- (PHẦN LOGIC XỬ LÝ THINKING BLOCK GIỮ NGUYÊN) ---
+        
         thinking_block_pattern = r'<THINKING>(.*?)</THINKING>'
         thinking_match = re.search(thinking_block_pattern, reply, re.DOTALL)
+        
+        original_thinking_content = ""
+        default_thinking_content = ""
 
         if thinking_match:
-            thinking_content = thinking_match.group(1).strip()
+            original_thinking_content = thinking_match.group(1).strip()
             logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} ---")
-            logger.info(thinking_content)
+            logger.info(original_thinking_content)
             logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
-
-            # Xóa khối THINKING đầu tiên để lấy phần trả lời chính
-            reply = re.sub(thinking_block_pattern, '', reply, count=1, flags=re.DOTALL).strip()
-
-            if not reply:
-                # TRƯỜNG HỢP LỖI: Model chỉ trả về THINKING. Ta tự tổng hợp câu trả lời
-                logger.warning(f"LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: {user_id}")
-                conclusion = None
-                # Cố gắng tìm kết luận/kết quả trong khối thinking
-                for marker in ["Kết luận:", "KẾT LUẬN:", "Kết quả:", "Result:", "Conclusion:"]:
-                    if marker in thinking_content:
-                        conclusion = thinking_content.split(marker,1)[1].strip()
-                        break
-
-                if not conclusion:
-                    # Fallback: Lấy dòng cuối cùng của thinking làm câu trả lời
-                    paragraphs = [p.strip() for p in thinking_content.splitlines() if p.strip()]
-                    conclusion = paragraphs[-1] if paragraphs else thinking_content
-
-                # Tạo câu trả lời thân thiện dựa trên kết luận (bỏ qua các câu sáo rỗng)
-                reply = f"À, tui vừa check lại nè: {conclusion}"
-                
-                # Nếu kết luận vẫn rỗng (trường hợp hiếm), dùng câu trả lời thân thiện
-                if not conclusion.strip():
-                    friendly_errors = [
-                        "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
-                        "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
-                        "Ái chà chà! 🤯 Hình như tui bị mất sóng sau khi nghĩ xong rồi. Bạn thử hỏi lại tui xem sao, tui hứa sẽ không 'im lặng' nữa đâu! 😉"
-                    ]
-                    reply = random.choice(friendly_errors)
-                    logger.error(f"LỖI LOGIC NGHIÊM TRỌNG: Khối THINKING cũng rỗng. User: {user_id}")
         else:
-            # TRƯỜNG HỢP LỖI: Model không tạo Khối THINKING. Tự động tạo một khối THINKING mặc định.
             logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Tự động tạo khối THINKING mặc định.")
             default_thinking_content = (
                 f"1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.\n"
@@ -467,15 +476,38 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} (Mặc định) ---")
             logger.info(default_thinking_content)
             logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
-            # Prepend the default THINKING block to the model's raw reply
             reply = f"<THINKING>\n{default_thinking_content}\n</THINKING>\n{reply.strip()}"
 
-        reply = reply.strip()
-        # SỬA LỖI: Un-escape các ký tự newline mà mô hình có thể đã output ra dưới dạng text
-        reply = reply.replace('\\n', '\n')
-        reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply)  # Vẫn giữ lại bước dọn dẹp này
+        reply_final = re.sub(thinking_block_pattern, '', reply, count=1, flags=re.DOTALL).strip()
 
-        # Thêm kiểm tra này để đảm bảo reply không bao giờ rỗng
+        if not reply_final:
+            logger.warning(f"LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: {user_id}")
+            thinking_to_parse = original_thinking_content if original_thinking_content else default_thinking_content
+            conclusion = None
+            for marker in ["Kết luận:", "KẾT LUẬN:", "Kết quả:", "Result:", "Conclusion:"]:
+                if marker in thinking_to_parse:
+                    conclusion = thinking_to_parse.split(marker,1)[1].strip()
+                    break
+            if not conclusion:
+                paragraphs = [p.strip() for p in thinking_to_parse.splitlines() if p.strip()]
+                conclusion = paragraphs[-1] if paragraphs else thinking_to_parse
+            reply_final = f"À, tui vừa check lại nè: {conclusion}"
+            if not conclusion.strip():
+                friendly_errors = [
+                    "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
+                    "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
+                    "Ái chà chà! 🤯 Hình như tui bị mất sóng sau khi nghĩ xong rồi. Bạn thử hỏi lại tui xem sao, tui hứa sẽ không 'im lặng' nữa đâu! 😉"
+                ]
+                reply_final = random.choice(friendly_errors)
+                logger.error(f"LỖI LOGIC NGHIÊM TRỌNG: Khối THINKING cũng rỗng. User: {user_id}")
+        reply = reply_final.strip()
+        
+        # --- (HẾT PHẦN LOGIC THINKING BLOCK) ---
+
+
+        reply = reply.replace('\\n', '\n')
+        reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply)
+
         if not reply:
             friendly_errors = [
                 "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
@@ -485,6 +517,7 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             reply = random.choice(friendly_errors)
             logger.warning(f"LỖI LOGIC CUỐI: Reply vẫn rỗng sau khi áp dụng logic vá lỗi. Đã dùng câu trả lời thay thế thân thiện.")
 
+        # ... (PHẦN LOGIC CHIA CHUNK ĐỂ GỬI) ...
         MAX_DISCORD_LENGTH = 1990
         reply_chunks = []
         current_chunk = ""
@@ -531,28 +564,82 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
     except Exception as e:
         logger.error(f"AI call failed: {e}")
         await message.reply("Ôi tui bị crash rồi! 😭")
+        
+    finally:
+        pass # Giữ lại pass để khối finally không bị rỗng
 
-async def run_gemini_api(messages: list, model_name: str, user_id: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
+
+async def run_gemini_api(
+    messages: list, 
+    model_name: str, 
+    user_id: str, 
+    temperature: float = 0.7, 
+    max_tokens: int = 2000
+) -> str:
+    
     keys = GEMINI_API_KEYS
     if not keys:
         return "Lỗi: Không có API key."
     
+    # --- LOGIC MỚI: XỬ LÝ `messages` VÀ `file_objects` ---
     gemini_messages = []
     system_instruction = None
-    for msg in messages:
-        if msg["role"] == "system":
-            system_instruction = msg["content"]
-            continue
+    
+    # Xử lý System Prompt (nếu có)
+    if messages and messages[0]["role"] == "system":
+        system_instruction = messages[0]["content"]
+        # Lấy phần còn lại của tin nhắn
+        text_messages = messages[1:]
+    else:
+        text_messages = messages
+        
+    # Chuyển đổi tin nhắn text (Bỏ qua file handle nếu lỡ bị truyền vào đây)
+    # FIX: Filter out system messages from history and merge them into the main system instruction
+    temp_text_messages = []
+    for msg in text_messages:
+        if msg.get("role") == "system":
+            if system_instruction:
+                system_instruction += f'\n\n{msg.get("content", "")}'
+            else:
+                system_instruction = msg.get("content", "")
+        else:
+            temp_text_messages.append(msg)
+    text_messages = temp_text_messages
+
+    for msg in text_messages:
         if "content" in msg and isinstance(msg["content"], str):
             role = "model" if msg["role"] == "assistant" else msg["role"]
             gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
         elif "parts" in msg:
-            role = "model" if msg["role"] == "assistant" else msg["parts"]
+            role = "model" if msg["role"] == "assistant" else msg["role"]
+            gemini_messages.append({"role": role, "parts": msg["parts"]})
+
+    # Nội dung cuối cùng để gửi = Lịch sử chat (text) + File Objects (Grounding)
+    # LƯU Ý: Khi dùng File API (Grounding), chúng ta thường chỉ gửi
+    # file + câu hỏi cuối cùng của user, không phải toàn bộ lịch sử.
+    # Tuy nhiên, API mới hỗ trợ cả hai.
+    
+    # Lấy câu hỏi cuối cùng của user
+    last_user_prompt = ""
+    if gemini_messages and gemini_messages[-1]["role"] == "user":
+        last_user_prompt = gemini_messages[-1]["parts"][0]["text"]
+        
+    # Tạo nội dung gửi: Files + Câu hỏi cuối
+    # (Đây là cách chuẩn cho RAG/Grounding)
+    file_objects = []
+
+    # Nếu không có file, chúng ta gửi toàn bộ lịch sử (như cũ)
+    if not file_objects:
+        content_to_send = gemini_messages
+    else:
+        content_to_send = file_objects + [last_user_prompt]
+
+    # --- KẾT THÚC LOGIC MỚI ---
     
     for i, api_key in enumerate(keys):
         logger.info(f"THỬ KEY {i+1}: {api_key[:8]}...")
         try:
-            configure(api_key=api_key)
+            genai.configure(api_key=api_key) # Configure API key globally
             model = GenerativeModel(
                 model_name,
                 tools=ALL_TOOLS,
@@ -561,9 +648,15 @@ async def run_gemini_api(messages: list, model_name: str, user_id: str, temperat
                 generation_config={"temperature": temperature, "max_output_tokens": max_tokens}
             )
             
-            # Tăng vòng lặp tool lên 5 (cho phép search -> save_note -> trả lời)
+            # Tăng vòng lặp tool lên 5
             for _ in range(5):
-                response = await asyncio.to_thread(model.generate_content, gemini_messages)
+                
+                # --- THAY ĐỔI CÁCH GỌI API ---
+                # Luôn gọi với toàn bộ lịch sử tin nhắn đã được chuẩn bị
+                response = await asyncio.to_thread(model.generate_content, content_to_send)
+
+                # --- KẾT THÚC THAY ĐỔI CÁCH GỌI ---
+                
                 if not response.candidates or not response.candidates[0].content.parts:
                     logger.warning(f"Key {i+1} trả về response rỗng.")
                     break
@@ -572,6 +665,7 @@ async def run_gemini_api(messages: list, model_name: str, user_id: str, temperat
                 
                 if part.function_call:
                     fc = part.function_call
+                    # Thêm yêu cầu gọi tool vào lịch sử
                     gemini_messages.append({"role": "model", "parts": [part]})
                     try:
                         tool_result_content = await call_tool(fc, user_id)
@@ -589,8 +683,10 @@ async def run_gemini_api(messages: list, model_name: str, user_id: str, temperat
                             "response": {"content": tool_result_content},
                         }
                     }
+                    # Thêm kết quả tool vào lịch sử
                     gemini_messages.append({"role": "function", "parts": [tool_response_part]})
-                    continue
+                    
+                    continue # Quay lại vòng lặp tool
                 
                 elif part.text:
                     logger.info(f"KEY {i+1} THÀNH CÔNG!")
@@ -613,20 +709,24 @@ async def run_gemini_api(messages: list, model_name: str, user_id: str, temperat
         except Exception as e:
             if "Could not convert" in str(e):
                 logger.error(f"KEY {i+1} LỖI LOGIC: {e}")
+            elif "400" in str(e):
+                 logger.error(f"KEY {i+1} LỖI 400 (Bad Request - Thường do định dạng file/input): {e}")
             else:
                 logger.error(f"KEY {i+1} LỖI KẾT NỐI/API: {e}")
             continue
-    
+            
     return "Lỗi: TẤT CẢ KEY GEMINI FAIL – CHECK .ENV HOẶC LOG!"
 
 async def clear_user_data(user_id: str) -> bool:
     db_cleared = await clear_user_data_db(user_id)
     json_cleared = await clear_user_data_memory(user_id)
+    # (Chúng ta không xóa file local của user ở đây, trừ khi có yêu cầu)
     return db_cleared and json_cleared
 
 async def clear_all_data() -> bool:
     db_cleared = await clear_all_data_db()
     json_cleared = await clear_all_data_memory()
+    # (Chúng ta không xóa file local ở đây, trừ khi có yêu cầu)
     return db_cleared and json_cleared
 
 async def expand_dm_content(content: str, user_id: str) -> str:

@@ -11,6 +11,7 @@ from memory import init_json_memory
 from logger import log_message
 from message_handler import handle_message
 from premium_manager import is_premium_user, add_premium_user, remove_premium_user
+from cleanup_manager import cleanup_local_files # <-- IMPORT HÀM MỚI
 
 # --- KHỞI TẠO BOT ---
 intents = discord.Intents.default()
@@ -32,9 +33,17 @@ async def on_ready() -> None:
         logger.info(f"Đã sync {len(synced)} slash commands!")
     except Exception as e:
         logger.error(f"Lỗi sync slash: {e}")
+        
     await init_db()
     init_json_memory()
-    await cleanup_db()
+    
+    # --- CHẠY DỌN DẸP KHI KHỞI ĐỘNG ---
+    logger.info("Chạy dọn dẹp DB (messages cũ)...")
+    await cleanup_db() # Dọn dẹp messages cũ trong DB
+    logger.info("Chạy dọn dẹp file local (file cũ)...")
+    await cleanup_local_files() # Dọn dẹp file cũ trên ổ đĩa
+    # ---
+    
     await backup_db()
     logger.info(f'{bot.user} online!')
 

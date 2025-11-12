@@ -65,6 +65,10 @@ def _backup_db_sync() -> None:
             logger.error(f"Lỗi không xác định khi backup DB: {e}")
 
 async def cleanup_db() -> None:
+    """
+    Dọn dẹp DB: Chỉ xóa messages cũ, GIỮ LẠI user_notes.
+    Đây là chính sách của bạn.
+    """
     await asyncio.to_thread(_cleanup_db_sync)
 
 def _cleanup_db_sync() -> None:
@@ -74,22 +78,14 @@ def _cleanup_db_sync() -> None:
         c = conn.cursor()
         old_date = (datetime.now() - timedelta(days=30)).isoformat()
         
-        # Dọn dẹp messages
+        # Dọn dẹp messages (GIỮ LẠI NOTES)
         c.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='messages'"
         )
         if c.fetchone():
             c.execute("DELETE FROM messages WHERE timestamp < ?", (old_date, ))
-            logger.info("DB cleaned: Old messages deleted.")
+            logger.info("DB cleaned: Old messages deleted (User notes kept).")
         
-        # (TÙY CHỌN) Dọn dẹp notes cũ - Tạm thời vô hiệu hóa để giữ note lâu dài
-        # c.execute(
-        #     "SELECT name FROM sqlite_master WHERE type='table' AND name='user_notes'"
-        # )
-        # if c.fetchone():
-        #     c.execute("DELETE FROM user_notes WHERE created_at < ?", (old_date, ))
-        #     logger.info("DB cleaned: Old notes deleted.")
-            
         conn.commit()
     except sqlite3.DatabaseError as e:
         logger.error(f"Cannot clean DB: {str(e)}. Creating new DB.")
@@ -126,6 +122,44 @@ async def log_message_db(user_id: str, role: str, content: str) -> None:
     finally:
         if conn:
             conn.close()
+
+async def get_user_history_from_db(user_id: str, limit: int = 10) -> List[Dict[str, str]]:
+    """
+    HÀM MỚI (VÁ LỖI RAM): Lấy lịch sử chat của user từ DB, giới hạn 10 tin nhắn gần nhất.
+    """
+    conn = None
+    history = []
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        # Đảm bảo bảng messages tồn tại
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+        if not c.fetchone():
+            logger.warning("Bảng 'messages' không tồn tại, không thể lấy history.")
+            if conn: conn.close()
+            await init_db() # Khởi tạo nếu chưa có
+            return []
+
+        # Lấy 'limit' tin nhắn cuối cùng
+        c.execute(
+            "SELECT role, content FROM messages WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (user_id, limit)
+        )
+        rows = c.fetchall()
+        
+        # Đảo ngược lại để đúng thứ tự (cũ -> mới) cho Gemini
+        for row in reversed(rows):
+            history.append({"role": row['role'], "content": row['content']})
+            
+    except sqlite3.DatabaseError as e:
+        logger.error(f"Database error while getting user history: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+    return history
+
 
 async def add_user_note_db(user_id: str, note_id: str, content: str, metadata: Dict[str, Any]) -> bool:
     """Lưu một note mới vào DB."""
@@ -169,9 +203,12 @@ async def get_file_note_by_filename_db(user_id: str, filename: str) -> Optional[
         rows = c.fetchall()
         
         for row in rows:
-            metadata = json.loads(row['metadata'])
-            if metadata.get("filename") == filename:
-                return dict(row)
+            try:
+                metadata = json.loads(row['metadata'])
+                if metadata.get("filename") == filename:
+                    return dict(row)
+            except json.JSONDecodeError:
+                continue # Bỏ qua metadata bị lỗi
         return None
     except sqlite3.DatabaseError as e:
         logger.error(f"Database error while getting file note by filename: {str(e)}")

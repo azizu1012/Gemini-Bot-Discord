@@ -1,121 +1,99 @@
 # file_parser.py
 import discord
-import io
-import chardet
-import pandas as pd
-import openpyxl
-import docx
-import PyPDF2 # New import for PDF parsing
-from typing import Optional, Dict, Any
-from config import logger
+import os
+import asyncio
+import aiohttp
+from typing import Optional, Dict
+from config import logger, FILE_STORAGE_PATH, MIN_FREE_SPACE_MB
+from cleanup_manager import get_disk_free_space_mb
+import pypdf # Import pypdf for PDF text extraction
 
-# --- CÁC THƯ VIỆT CẦN CÀI ĐẶT ---
-# pip install python-docx openpyxl pandas chardet PyPDF2 xlrd
+# Giới hạn kích thước file cho việc tải lên (Discord giới hạn 25MB, ta lấy 20MB)
+MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024 
+# Giới hạn độ dài văn bản được trích xuất để gửi đến Gemini (khoảng 10k ký tự)
+MAX_TEXT_LENGTH = 10000
 
 async def parse_attachment(attachment: discord.Attachment) -> Optional[Dict[str, str]]:
     """
-    Phân tích file đính kèm của Discord và trả về nội dung dưới dạng text.
-    Hỗ trợ: txt, md, json, yaml, ini, bat, reg, docx, xlsx, csv, xls, pdf.
-    Đối với các file không được hỗ trợ trực tiếp, sẽ cố gắng đọc nội dung thô dưới dạng văn bản.
+    Kiểm tra file, tải về local, trích xuất văn bản (nếu có thể),
+    và trả về nội dung văn bản đã xử lý.
     """
     filename = attachment.filename
-    file_extension = filename.split('.')[-1].lower()
     
+    # Tạo đường dẫn local duy nhất để tránh xung đột
+    unique_filename = f"{attachment.id}_{filename}"
+    local_path = os.path.join(FILE_STORAGE_PATH, unique_filename)
+    
+    if attachment.size > MAX_FILE_SIZE_BYTES:
+        logger.warning(f"File {filename} ({(attachment.size / 1024 / 1024):.2f} MB) quá lớn. Bỏ qua.")
+        return {"filename": filename, "content": f"[LỖI: File quá lớn, giới hạn {MAX_FILE_SIZE_BYTES // 1024 // 1024}MB]"}
+    
+    # --- BƯỚC 1: KIỂM TRA DUNG LƯỢNG VÀ LƯU LOCAL ---
     try:
-        file_content_bytes = await attachment.read()
-        if not file_content_bytes:
-            return None
+        # Ước tính dung lượng cần thiết: kích thước file + 10MB buffer
+        required_space_mb = (attachment.size // (1024 * 1024)) + 10
+        if get_disk_free_space_mb(FILE_STORAGE_PATH) < required_space_mb:
+            logger.warning(f"Ổ đĩa sắp đầy. Không thể tải file mới. Cần {required_space_mb}MB.")
+            return {"filename": filename, "content": "[LỖI: Server sắp hết bộ nhớ. Vui lòng thử lại sau.]"}
 
-        content = ""
-        parsed_successfully = False
-
-        if file_extension in ['txt', 'md', 'json', 'yaml', 'ini', 'bat', 'reg', 'log', 'cfg', 'conf', 'readme']:
-            # Tự động nhận diện encoding
-            detected_encoding = chardet.detect(file_content_bytes)['encoding'] or 'utf-8'
-            try:
-                content = file_content_bytes.decode(detected_encoding)
-            except UnicodeDecodeError:
-                logger.warning(f"Chardet failed for {filename}, falling back to utf-8 with errors.")
-                content = file_content_bytes.decode('utf-8', errors='ignore')
-            parsed_successfully = True
-
-        elif file_extension == 'docx':
-            with io.BytesIO(file_content_bytes) as f:
-                doc = docx.Document(f)
-                content = "\n".join([para.text for para in doc.paragraphs if para.text])
-            parsed_successfully = True
-
-        elif file_extension == 'xlsx':
-            with io.BytesIO(file_content_bytes) as f:
-                workbook = openpyxl.load_workbook(f, read_only=True)
-                for sheet in workbook:
-                    content += f"--- Sheet: {sheet.title} ---\n"
-                    for row in sheet.iter_rows(values_only=True):
-                        # Loại bỏ các cell None và join lại
-                        row_data = [str(cell) for cell in row if cell is not None]
-                        if row_data:
-                            content += ", ".join(row_data) + "\n"
-            parsed_successfully = True
-
-        elif file_extension in ['csv', 'xls']:
-            # Dùng Pandas để xử lý CSV, XLS (cần 'xlrd' cho .xls)
-            with io.BytesIO(file_content_bytes) as f:
-                if file_extension == 'csv':
-                    # Cố gắng tự nhận diện encoding cho CSV
-                    detected_encoding = chardet.detect(file_content_bytes[:5000])['encoding'] or 'utf-8'
-                    try:
-                        f.seek(0)
-                        df = pd.read_csv(f, encoding=detected_encoding)
-                    except UnicodeDecodeError:
-                        f.seek(0)
-                        df = pd.read_csv(f, encoding='utf-8', errors='ignore')
-                else: # xls
-                    df = pd.read_excel(f, engine='xlrd' if file_extension == 'xls' else 'openpyxl')
-                
-                content = df.to_string()
-            parsed_successfully = True
+        # Tải file về local
+        os.makedirs(FILE_STORAGE_PATH, exist_ok=True)
         
-        elif file_extension == 'pdf':
-            with io.BytesIO(file_content_bytes) as f:
-                reader = PyPDF2.PdfReader(f)
-                for page_num in range(len(reader.pages)):
-                    page = reader.pages[page_num]
-                    content += page.extract_text() + "\n"
-            parsed_successfully = True
+        async with aiohttp.ClientSession() as session:
+            async with session.get(attachment.url) as resp:
+                if resp.status == 200:
+                    data = await resp.read()
+                    with open(local_path, 'wb') as f:
+                        f.write(data)
+                    logger.info(f"Đã lưu file local: {local_path}")
+                else:
+                    raise Exception(f"HTTP Error {resp.status}")
+                    
+    except Exception as e:
+        logger.error(f"Lỗi khi tải file từ Discord về local: {e}")
+        return {"filename": filename, "content": "[LỖI: Không thể tải file về local]"}
 
-        if not parsed_successfully:
-            # Fallback: attempt to decode as text for any other file type
-            detected_encoding = chardet.detect(file_content_bytes)['encoding'] or 'utf-8'
+    # --- BƯỚC 2: TRÍCH XUẤT VĂN BẢN TỪ FILE LOCAL ---
+    extracted_text = ""
+    file_extension = os.path.splitext(filename)[1].lower()
+
+    try:
+        if file_extension == '.txt':
+            with open(local_path, 'r', encoding='utf-8', errors='ignore') as f:
+                extracted_text = f.read()
+            logger.info(f"Đã trích xuất văn bản từ file TXT: {filename}")
+        elif file_extension == '.pdf':
             try:
-                content = file_content_bytes.decode(detected_encoding)
-                logger.info(f"Đã đọc nội dung thô của file không hỗ trợ '{filename}' dưới dạng văn bản.")
-            except UnicodeDecodeError:
-                content = file_content_bytes.decode('utf-8', errors='ignore')
-                logger.warning(f"Không thể giải mã '{filename}' bằng '{detected_encoding}', đã thử utf-8 với errors='ignore'.")
-            
-            # If content is still empty or mostly non-text, it might be a binary file
-            if not content.strip() or len(content.strip()) < len(file_content_bytes) / 10: # Heuristic for binary
-                logger.info(f"Nội dung thô của file '{filename}' có vẻ không phải văn bản hoặc quá ngắn, bỏ qua.")
-                return None
-            
-            # For fallback, we might want to indicate it's a raw text interpretation
-            # and explicitly change the extension to .txt as requested by the user.
-            base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
-            filename = f"{base_name}.txt"
+                reader = pypdf.PdfReader(local_path)
+                for page in reader.pages:
+                    extracted_text += page.extract_text() + "\n"
+                logger.info(f"Đã trích xuất văn bản từ file PDF: {filename}")
+            except pypdf.errors.PdfReadError:
+                logger.error(f"Lỗi đọc file PDF (có thể bị hỏng hoặc mã hóa): {filename}")
+                extracted_text = f"[LỖI: Không thể đọc nội dung file PDF '{filename}'. Có thể file bị hỏng hoặc được bảo vệ.]"
+        else:
+            extracted_text = f"[LƯU Ý: File '{filename}' có định dạng '{file_extension}' không được hỗ trợ trích xuất văn bản. Chỉ hỗ trợ .txt và .pdf.]"
+            logger.warning(f"File '{filename}' có định dạng '{file_extension}' không được hỗ trợ trích xuất văn bản.")
+            # Không xóa file local ở đây, cleanup_manager sẽ lo
+            return {
+                "filename": filename,
+                "content": extracted_text
+            }
 
-
-        if not content.strip():
-            logger.info(f"Nội dung file rỗng sau khi parse: {filename}")
-            return None
-
-        # Giới hạn kích thước nội dung để tránh quá tải DB
-        MAX_CONTENT_LENGTH = 50000 
-        if len(content) > MAX_CONTENT_LENGTH:
-            content = content[:MAX_CONTENT_LENGTH] + "\n... (Nội dung quá dài, đã cắt bớt)"
-            
-        logger.info(f"Đã parse thành công file: {filename}")
-        return {"filename": filename, "content": content}
+        # --- Xử lý văn bản quá dài ---
+        if len(extracted_text) > MAX_TEXT_LENGTH:
+            original_length = len(extracted_text)
+            extracted_text = extracted_text[:MAX_TEXT_LENGTH]
+            extracted_text += f"\n\n[LƯU Ý: Nội dung file đã bị cắt bớt từ {original_length} ký tự xuống còn {MAX_TEXT_LENGTH} ký tự để phù hợp với giới hạn xử lý.]"
+            logger.warning(f"Nội dung file '{filename}' quá dài ({original_length} ký tự), đã cắt bớt.")
+        
+        # Trả về nội dung đã xử lý
+        return {
+            "filename": filename,
+            "content": f"Nội dung từ file '{filename}':\n```\n{extracted_text.strip()}\n```"
+        }
 
     except Exception as e:
-        logger.error(f"Lỗi khi parse file {filename}: {e}")
-        return None
+        logger.error(f"Lỗi khi trích xuất văn bản từ file '{filename}': {e}")
+        # Không xóa file local ở đây, cleanup_manager sẽ lo
+        return {"filename": filename, "content": f"[LỖI: Không thể trích xuất văn bản từ file '{filename}'. Lỗi: {e}]"}
