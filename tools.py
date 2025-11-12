@@ -44,15 +44,11 @@ ALL_TOOLS = [
         FunctionDeclaration(
             name="web_search",
             description=(
-                "Tìm kiếm thông tin cập nhật (tin tức, giá cả, phiên bản game, sự kiện) sau năm 2024. "
-                "Chỉ dùng khi kiến thức nội bộ của bạn đã lỗi thời so với ngày hiện tại. "
-                "Yêu cầu TỰ DỊCH câu hỏi tiếng Việt của user thành một query tìm kiếm tiếng Anh TỐI ƯU."
+                "Tìm kiếm thông tin cập nhật, sự kiện mới, tin tức, "
+                "dữ liệu thực tế không có trong kiến thức của AI, "
+                "hoặc để xác minh thông tin. KHÔNG DÙNG cho các tác vụ tính toán, "
+                "dịch thuật, tóm tắt, viết lại, hoặc các câu hỏi không cần dữ liệu mới."
             ),
-            parameters={
-                "type": "object",
-                "properties": {"query": {"type": "string", "description": "Câu hỏi bằng tiếng Anh"}},
-                "required": ["query"]
-            }
         )
     ]),
     Tool(function_declarations=[
