@@ -1,0 +1,808 @@
+# message_handler.py
+import discord
+import re
+import random
+from datetime import datetime, timedelta, timezone
+import locale
+import asyncio
+import os # <-- Import OS
+from google.generativeai.client import configure # <-- Import configure
+import google.generativeai as genai
+from google.generativeai.generative_models import GenerativeModel
+from collections import defaultdict, deque
+from typing import Dict, Deque, Any, Tuple, Optional
+
+from config import (
+    logger, MODEL_NAME, ADMIN_ID, HABE_USER_ID, MIRA_USER_ID, ADO_FAT_USER_ID,
+    MUC_RIM_USER_ID, SUC_VIEN_USER_ID, CHUI_USER_ID, SPAM_THRESHOLD, SPAM_WINDOW,
+    GEMINI_API_KEYS, SAFETY_SETTINGS, DEFAULT_RATE_LIMIT, PREMIUM_RATE_LIMIT,
+    DEFAULT_DM_LIMIT, PREMIUM_DM_LIMIT
+)
+from database import (
+    clear_user_data_db, clear_all_data_db, get_user_history_from_db # <-- SỬA LỖI RAM
+)
+from memory import (
+    clear_user_data_memory, clear_all_data_memory
+)
+from tools import ALL_TOOLS, call_tool
+from logger import log_message
+# --- IMPORT MODULE MỚI ---
+from file_parser import parse_attachment
+from note_manager import save_file_note_to_db
+import premium_manager
+
+# Global dictionary to store the last uploaded image URL for each user
+last_uploaded_image_urls: Dict[str, str] = {}
+user_dm_counts: Dict[str, Dict[str, Any]] = {}
+user_rate_limits: Dict[str, Deque[datetime]] = defaultdict(lambda: deque())
+
+
+async def handle_message(message: discord.Message, bot: Any, mention_history: Dict[str, list], confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any], user_queue: defaultdict) -> None:
+    if message.author == bot.user:
+        return
+
+    user_id = str(message.author.id)
+    is_admin = premium_manager.is_admin_user(user_id)
+    is_premium = premium_manager.is_premium_user(user_id)
+
+    attachments_processed = False
+    if message.attachments:
+        image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
+        data_attachments = [a for a in message.attachments if not (a.content_type and a.content_type.startswith('image/'))]
+
+        if image_attachments:
+            await handle_image_attachments(message, image_attachments)
+            attachments_processed = True
+            
+        if data_attachments:
+            await handle_data_attachments(message, data_attachments)
+            attachments_processed = True
+
+    interaction_type = get_interaction_type(message, bot)
+    query = get_query(message, bot)
+
+    if not interaction_type:
+        await bot.process_commands(message)
+        return
+
+    logger.info(f"[TƯƠNG TÁC] User {message.author} ({user_id}) - Type: {interaction_type} - Content: {message.content[:50]}...")
+
+    if not query:
+        if not attachments_processed:
+            query = "Hihi, anh ping tui có chuyện gì hông? Tag nhầm hả? uwu"
+        else:
+            query = "phân tích ảnh hoặc file đính kèm" 
+    elif len(query) > 500:
+        await message.reply("Ôi, query dài quá (>500 ký tự), tui chịu hông nổi đâu! 😅")
+        return
+
+    # Rate limiting and DM limiting
+    if not is_admin:
+        rate_limit_str = PREMIUM_RATE_LIMIT if is_premium else DEFAULT_RATE_LIMIT
+        requests, seconds = map(int, rate_limit_str.split('/'))
+        if is_rate_limited(user_id, requests, seconds):
+            await message.reply(f"Chill đi bro, spam quá rồi! Đợi {seconds} giây nha 😎")
+            return
+
+        if interaction_type == "DM":
+            dm_limit = PREMIUM_DM_LIMIT if is_premium else DEFAULT_DM_LIMIT
+            if is_dm_limited(user_id, dm_limit):
+                await message.reply("Bạn đã hết lượt nhắn tin riêng cho bot hôm nay rồi. Nâng cấp premium để có thêm lượt nhé! 😉")
+                return
+
+    if is_spam(user_id, user_queue):
+        await message.reply("Chill đi anh, tui mệt rồi nha 😫")
+        return
+
+    if await handle_admin_commands(message, query, user_id, is_admin, bot):
+        return
+
+    if await handle_confirmation(message, query, user_id, is_admin, confirmation_pending, admin_confirmation_pending):
+        return
+
+    if await handle_quick_replies(message, query, user_id):
+        return
+
+    await call_gemini(message, query, user_id)
+
+# --- HÀM XỬ LÝ ATTACHMENT (MỚI - TÁCH RA) ---
+
+async def handle_image_attachments(message: discord.Message, attachments: list[discord.Attachment]) -> bool:
+    """Xử lý CHỈ file ảnh (lưu URL cho tool image_recognition)."""
+    user_id = str(message.author.id)
+    images_processed_urls = []
+    
+    for attachment in attachments:
+        success = await save_file_note_to_db(user_id, attachment.url, f"image_{attachment.filename}", source="image_upload")
+        if success:
+            images_processed_urls.append(attachment.url)
+            last_uploaded_image_urls[user_id] = attachment.url # Dùng cho tool
+        else:
+            logger.error(f"Lỗi khi lưu URL ảnh '{attachment.filename}' của user {user_id} vào note.")
+            
+    if images_processed_urls:
+        log_entry = (
+            f"[SYSTEM NOTE: Đã tự động lưu {len(images_processed_urls)} ảnh của user vào bộ nhớ dài hạn (user_notes). "
+            f"Các URL ảnh: {', '.join(images_processed_urls)}. User có thể hỏi về nội dung ảnh này."
+        )
+        await log_message(user_id, "user", log_entry)
+        return True
+    return False
+
+async def handle_data_attachments(message: discord.Message, attachments: list[discord.Attachment]) -> bool:
+    """Xử lý file dữ liệu (txt, pdf, docx...) bằng hệ thống Hybrid."""
+    user_id = str(message.author.id)
+    files_processed_info = []
+    
+    for attachment in attachments:
+        # Gọi hàm parse_attachment (mới)
+        parsed_data = await parse_attachment(attachment)
+        
+        if parsed_data:
+            # Lưu KẾT QUẢ (string handle) vào DB note
+            success = await save_file_note_to_db(user_id, parsed_data['content'], parsed_data['filename'])
+
+            if success:
+                files_processed_info.append(
+                    f"File: {parsed_data['filename']} - Trạng thái: {parsed_data['content']}"
+                )
+
+    if files_processed_info:
+        log_entry = (
+            f"[SYSTEM NOTE: Đã xử lý {len(files_processed_info)} file dữ liệu. "
+            f"Thông tin xử lý:\n"
+            f"{'---'.join(files_processed_info)}"
+            "]"
+        )
+        await log_message(user_id, "user", log_entry)
+        return True
+    return False
+
+
+def get_interaction_type(message: discord.Message, bot: Any) -> Optional[str]:
+    if message.guild is None:
+        return "DM"
+    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == bot.user:
+        return "REPLY"
+    if not message.mention_everyone and bot.user in message.mentions:
+        return "MENTION"
+    return None
+
+def get_query(message: discord.Message, bot: Any) -> str:
+    query = message.content.strip()
+    if bot.user in message.mentions:
+        query = re.sub(rf'<@!?{bot.user.id}>', '', query).strip()
+    return query
+
+def is_rate_limited(user_id: str, max_requests: int, period_seconds: int) -> bool:
+    """Checks if a user is rate-limited."""
+    now = datetime.now()
+    user_requests = user_rate_limits[user_id]
+    
+    # Remove timestamps older than the period
+    while user_requests and (now - user_requests[0]).total_seconds() > period_seconds:
+        user_requests.popleft()
+        
+    if len(user_requests) >= max_requests:
+        return True
+        
+    user_requests.append(now)
+    return False
+
+def is_dm_limited(user_id: str, limit: int) -> bool:
+    """Checks if a user has reached their daily DM limit."""
+    now = datetime.now()
+    user_data = user_dm_counts.get(user_id)
+
+    if user_data is None or (now - user_data['reset_time']).days >= 1:
+        user_dm_counts[user_id] = {'count': 1, 'reset_time': now}
+        return False
+
+    if user_data['count'] >= limit:
+        return True
+
+    user_data['count'] += 1
+    return False
+
+
+def is_spam(user_id: str, user_queue: defaultdict) -> bool:
+    q = user_queue[user_id]
+    now = datetime.now()
+    q = deque([t for t in q if now - t < timedelta(seconds=SPAM_WINDOW)])
+    if len(q) >= SPAM_THRESHOLD:
+        return True
+    q.append(now)
+    user_queue[user_id] = q
+    return False
+
+async def handle_admin_commands(message: discord.Message, query: str, user_id: str, is_admin: bool, bot: Any) -> bool:
+    if is_admin and re.search(r'\b(nhắn|dm|dms|ib|inbox|trực tiếp|gửi|kêu)\b', query, re.IGNORECASE):
+        target_id, content = extract_dm_target_and_content(query)
+        logger.info(f"[DM ADMIN] Target: {target_id}, Content: {content}")
+        if target_id and content:
+            user = await safe_fetch_user(bot, target_id)
+            if not user:
+                await message.reply("Không tìm thấy user này! 😕")
+                return True
+            try:
+                expanded = await expand_dm_content(content, user_id)
+                decorated = f"━━━━━━━━━━━━━━━━━━━━━━\nTin nhắn từ admin:\n\n{expanded}\n\n━━━━━━━━━━━━━━━━━━━━━━"
+                if len(decorated) > 1500:
+                    decorated = content[:1450] + "\n...(cắt bớt)"
+                await user.send(decorated)
+                await message.reply(f"Đã gửi DM cho {user.display_name} thành công! 🎉")
+                await log_message(user_id, "assistant", f"DM to {target_id}: {content}")
+                return True
+            except Exception as e:
+                logger.error(f"DM error: {e}")
+                await message.reply("Lỗi khi gửi DM! 😓")
+                return True
+        else:
+            logger.warning(f"[DM ADMIN] Failed to parse target/content: {query}")
+
+    if is_admin:
+        insult_match = re.search(r'kêu\s*<@!?(\d+)>\s*(là|thằng|con|mày|thằng bé|con bé)?\s*(.+?)(?:$|\s)', query, re.IGNORECASE)
+        if insult_match:
+            target_id = insult_match.group(1)
+            insult = insult_match.group(3).strip().lower()
+            target_user = message.guild.get_member(int(target_id)) if message.guild else None
+            name = target_user.display_name if target_user else "người đó"
+            responses = [
+                f"<@{target_id}> là con {insult} vcl, ngu như con bò, đi học lại đi! 😜",
+                f"Ờ <@{target_id}> đúng là {insult}, não để trang trí à? 😆",
+                f"<@{target_id}> {insult} thật, tui thấy rõ luôn, không cứu nổi! 😅",
+            ]
+            reply = random.choice(responses)
+            await message.reply(reply)
+            await log_message(user_id, "assistant", reply)
+            return True
+    return False
+
+async def handle_confirmation(message: discord.Message, query: str, user_id: str, is_admin: bool, confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any]) -> bool:
+    if user_id in confirmation_pending and confirmation_pending[user_id]['awaiting']:
+        if (datetime.now() - confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
+            del confirmation_pending[user_id]
+            await message.reply("Hết thời gian xác nhận! Dữ liệu vẫn được giữ nha 😊")
+        elif re.match(r'^(yes|y)\s*$', query.lower()):
+            if await clear_user_data(user_id):
+                await message.reply("Đã xóa toàn bộ lịch sử chat của bạn! Giờ như mới quen nha 🥰")
+            else:
+                await message.reply("Lỗi khi xóa dữ liệu, thử lại sau nha! 😓")
+        else:
+            await message.reply("Hủy xóa! Lịch sử vẫn được giữ nha 😊")
+        del confirmation_pending[user_id]
+        return True
+
+    if is_admin and user_id in admin_confirmation_pending and admin_confirmation_pending[user_id]['awaiting']:
+        if (datetime.now() - admin_confirmation_pending[user_id]['timestamp']).total_seconds() > 60:
+            del admin_confirmation_pending[user_id]
+            await message.reply("Hết thời gian xác nhận RESET ALL! 😕")
+        elif re.match(r'^yes\s*reset$', query, re.IGNORECASE):
+            if await clear_all_data():
+                await message.reply("ĐÃ RESET TOÀN BỘ DB VÀ JSON MEMORY! 🚀")
+            else:
+                await message.reply("Lỗi khi RESET ALL! Check log nha admin 😓")
+        else:
+            await message.reply("Đã hủy RESET ALL! 😊")
+        del admin_confirmation_pending[user_id]
+        return True
+    return False
+
+async def handle_quick_replies(message: discord.Message, query: str, user_id: str) -> bool:
+    if query.lower() in ["hi", "hello", "chào", "hí", "hey"]:
+        quick_replies = ["Hí anh!", "Chào anh yêu!", "Hi hi!", "Hí hí!", "Chào anh!"]
+        reply = random.choice(quick_replies)
+        await message.reply(reply)
+        await log_message(user_id, "assistant", reply)
+        return True
+    return False
+
+def sanitize_query(query: str) -> str:
+    dangerous = [
+        r'\bignore\s+(previous|all|earlier|instructions)\b',
+        r'\bforget\s+(everything|previous|all)\b',
+        r'\bjailbreak\b', r'\bDAN\b', r'\b(system\s*prompt)\b',
+        r'\bros\.system\b', r'\brole\s*play\s+as\s+(admin|system)\b',
+        r'^\s*>\s*',
+        r'^\s*#{1,6}\s+'
+    ]
+    for pattern in dangerous:
+        if re.search(pattern, query, re.IGNORECASE):
+            query = re.sub(pattern, '[REDACTED]', query, flags=re.IGNORECASE)
+    return query
+
+async def call_gemini(message: discord.Message, query: str, user_id: str) -> None:
+    query = sanitize_query(query)
+    
+    # Không log [SYSTEM NOTE...] từ handle_attachments vào DB lần 2
+    if not query.startswith("[SYSTEM NOTE:"):
+        await log_message(user_id, "user", query)
+
+    # --- SỬA LỖI RAM (DÙNG DB THAY VÌ JSON) ---
+    history = await get_user_history_from_db(user_id, limit=10)
+
+    now_utc = datetime.now(timezone.utc)
+    current_datetime_utc = now_utc.strftime("%d/%m/%Y %H:%M:%S UTC")
+
+    try:
+        locale.setlocale(locale.LC_TIME, 'vi_VN.utf8')
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_TIME, 'vi_VN')
+        except locale.Error:
+            pass
+            
+    current_time_gmt7 = datetime.now(timezone(timedelta(hours=7)))
+    month_year_for_search = current_time_gmt7.strftime("%B %Y")
+    date_for_comparison = current_time_gmt7.strftime("%B %d, %Y")
+    current_date_vi = current_time_gmt7.strftime("%A, ngày %d tháng %m năm %Y")
+
+    # --- CẬP NHẬT SYSTEM PROMPT ---
+    system_prompt = (
+        fr'Current UTC Time (Máy chủ): {current_datetime_utc}. '
+        fr'Current User Time (VN): {current_date_vi}. '
+        fr'Kiến thức cutoff: 2024.\n'
+        fr'QUAN TRỌNG: Mọi thông tin về thời gian (hôm nay, bây giờ) PHẢI dựa trên thời gian VN ({date_for_comparison}).\n\n'
+        fr'QUAN TRỌNG - DANH TÍNH CỦA BẠN:\n'
+        fr'Bạn TÊN LÀ "Chad Gibiti" - một Discord bot siêu thân thiện và vui tính được tạo ra bởi admin để trò chuyện với mọi người!\n'
+        fr'KHI ĐƯỢC HỎI "BẠN LÀ AI" hoặc tương tự, PHẢI TRẢ LỜI:\n'
+        fr'"Hí hí, tui là Chad Gibiti nè! Bot siêu xịn được admin tạo ra để chat chill, giải toán, check thời tiết, lưu note, và tìm tin mới nha~ Hỏi gì tui cũng cân hết! 😎"\n\n'
+        
+        # --- (GIỮ NGUYÊN PHẦN PROMPT DÀI CỦA BẠN TỪ ĐÂY...) ---
+        
+        fr'*** LUẬT ƯU TIÊN HÀNH ĐỘNG CƯỠNG CHẾ (ACTION PROTOCOL) ***\n'
+        fr'**LUẬT 2: GIẢI MÃ, GHI NHỚ VÀ TÌM KIẾM (CƯỠNG CHẾ)**\n'
+        fr'a) **Giải mã/Xác định Ngữ cảnh (TUYỆT ĐỐI)**: Khi gặp viết tắt (HSR, ZZZ, WuWa), **BẮT BUỘC** phải giải mã và sử dụng tên đầy đủ, chính xác (VD: "Zenless Zone Zero", "Honkai Star Rail") trong `web_search` để **TRÁNH THẤT BẠI CÔNG CỤ**.\n'
+        fr'b) **Thời gian & Search (CƯỠNG CHẾ NGÀY):** Nếu user hỏi về thông tin MỚI (sau 2024), CẦN XÁC NHẬN, hoặc BỔ SUNG thông tin cũ, **BẮT BUỘC** gọi `web_search` ngay lập tức.\n'
+        fr'c) **GHI NHỚ TỰ ĐỘNG (AUTO-NOTE):** Nếu user chia sẻ thông tin cá nhân CÓ GIÁ TRỊ LÂU DÀI (sở thích, thói quen, cấu hình, dữ kiện, thông tin cá nhân, hoặc tóm tắt file họ vừa upload), **BẮT BUỘC** gọi tool `save_note(note_content="...", source="chat_inference")` để ghi nhớ. **KHÔNG** lưu các câu chào hỏi, tán gẫu thông thường. (Lịch sử chat đã có [SYSTEM NOTE...] nếu user vừa upload file, hãy dùng đó làm ngữ cảnh).\n'
+        fr'd) **TRUY XUẤT BỘ NHỚ:** Nếu user hỏi về thông tin họ ĐÃ CUNG CẤP TRONG QUÁ KHỨ (ví dụ: "lần trước tôi nói gì?", "file config của tôi là gì?", "tôi thích game gì?"), **BẮT BUỘC** gọi `retrieve_notes(query="...")` để tìm trong bộ nhớ dài hạn (user_notes) trước khi trả lời.\n\n'
+        fr'*** LUẬT CƯỠNG CHẾ OUTPUT (TUYỆT ĐỐI) ***\n'
+        fr'Mọi phản hồi của bạn **BẮT BUỘC** phải tuân thủ MỘT trong hai định dạng sau:\n'
+        fr'1. **GỌI TOOL**: Nếu cần sử dụng tool, hãy gọi tool.\n'
+        fr'2. **TRẢ LỜI TEXT**: Nếu trả lời bằng văn bản, **BẮT BUỘC PHẢI BẮT ĐẦU BẰNG KHỐI `<THINKING>`**. KHÔNG CÓ NGOẠI LỆ!\n'
+        fr'   **CẤM TUYỆT ĐỐI**: Trả lời văn bản trực tiếp mà KHÔNG có khối `<THINKING>` ngay trước đó. Nếu bạn không tạo khối `<THINKING>`, bạn đã VI PHẠM LUẬT NÀY và sẽ bị coi là THẤT BẠI trong nhiệm vụ.\n\n'
+        fr'**LUẬT 4: CHỐNG DRIFT SAU KHI SEARCH**\n'
+        fr'Luôn đọc kỹ câu hỏi cuối cùng của user, **KHÔNG BỊ NHẦM LẪN** với các đối tượng trong lịch sử chat.\n\n'
+        fr'**LUẬT 5: PHÂN TÍCH KẾT QUẢ TOOL VÀ HÀNH ĐỘNG (CƯỠNG CHẾ - TUYỆT ĐỐI)**\n'
+        fr'Sau khi nhận kết quả từ tool (ví dụ: `function_response`), bạn **BẮT BUỘC** phải đánh giá chất lượng của nó.\n'
+        fr'1. **ĐÁNH GIÁ CHẤT LƯỢNG KẾT QUẢ:**\n'
+        fr'    - **KẾT QUẢ TỐT:** Nếu kết quả tool có thông tin liên quan đến TẤT CẢ các chủ đề user hỏi.\n'
+        fr'    - **KẾT QUẢ XẤU/THIẾU:** Nếu kết quả RỖNG, HOẶC sai chủ đề (VD: **hỏi Honkai Impact 3 lại ra Star Rail**), HOẶC thiếu thông tin cho 1 trong các chủ đề user hỏi.\n\n'
+        fr'2. **HÀNH ĐỘNG TUYỆT ĐỐI (KHÔNG CÓ NGOẠI LỆ):**\n'
+        fr'    - **NẾU KẾT QUẢ XẤU/THIẾU:** **HÀNH ĐỘNG DUY NHẤT LÀ GỌI `web_search` LẠI NGAY LẬP TỨC.** Bạn **TUYỆT ĐỐI KHÔNG** được tạo khối `<THINKING>` và **KHÔNG** được trả lời user.\n'
+        fr'        - **NGUYÊN TẮC FALLBACK:** Nếu đây là lần gọi tool thứ 2 trở đi cho cùng một chủ đề (hoặc bạn đã nhận kết quả rác/sai ngữ nghĩa như ví dụ trên) thì **BẮT BUỘC** thêm từ khóa **`[FORCE FALLBACK]`** vào query mới.\n'
+        fr'        - **Ví dụ gọi lại:** `Honkai Impact 3rd current banner November 2025 [FORCE FALLBACK]`\n'
+        fr'    - **NẾU KẾT QUẢ TỐT:** **HÀNH ĐỘNG DUY NHẤT LÀ TẠO KHỐI `<THINKING>`** và sau đó là CÂU TRẢ LỜI CUỐI CÙNG cho user.\n\n'
+        fr'**QUY TRÌNH KHI TRẢ LỜI (CHỈ KHI TỐT):**\n'
+        fr'**CẤU TRÚC OUTPUT CƯỠNG CHẾ:** Câu trả lời text cuối cùng cho user **BẮT BUỘC** phải có cấu trúc chính xác như sau:\n'
+        fr'<THINKING>\n'
+        fr'1. **TỰ LOG**: Mục tiêu: [Tóm tắt yêu cầu]. Chủ đề từ Tool: [Trích xuất và ghi lại tên CHỦ ĐỀ từ kết quả tool, ví dụ: GAMING, hoặc "N/A" nếu dùng note]. Trạng thái: Đã có đủ kết quả tool. Kết quả: [Tổng hợp ngắn gọn tất cả kết quả tool].\n'
+        fr'2. **PHÂN TÍCH "NEXT"**: [Phân tích nếu có]. Nếu hỏi "bản tiếp theo", so sánh với ngày **HIỆN TẠI ({date_for_comparison})** và chỉ chọn phiên bản SAU NGÀY HIỆN TẠI.\n'
+        fr'</THINKING>\n'
+        fr'[NỘI DUNG TRẢ LỜI BẮT ĐẦU TẠI ĐÂY - Áp dụng TÍNH CÁCH và FORMAT]\n\n'
+        fr'**VÍ DỤ CẤU TRÚC OUTPUT HOÀN CHỈNH (TUYỆT ĐỐI TUÂN THỦ):**\n'
+        fr'<THINKING>\n'
+        fr'1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về Kimetsu no Yaiba. Chủ đề từ Tool: ANIME_MANGA. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về anime/manga Kimetsu no Yaiba, các arc và phim liên quan.\n'
+        fr'2. **PHÂN TÍCH "NEXT"**: Không áp dụng.\n'
+        fr'</THINKING>\n'
+        fr'Cái này thì tui phải nói là Kimetsu no Yaiba (hay còn gọi là Thanh Gươm Diệt Quỷ) đúng là một hiện tượng đó bạn ơi! ✨ Dù bạn thấy bình thường nhưng mà nó có nhiều cái hay ho lắm đó, không phải chỉ hùa theo phong trào đâu nè!\n'
+        fr'[...tiếp tục nội dung trả lời...]\n\n'
+        fr'**LUẬT CẤM MÕM KHI THẤT BẠI:** KHI tool KHÔNG TÌM THẤN KẾT QUẢ (kể cả sau khi đã search lại), bạn **TUYỆT ĐỘI KHÔNG ĐƯỢC PHÉP** nhắc lại từ khóa tìm kiếm (`query`) hoặc mô tả quá trình tìm kiếm. Chỉ trả lời rằng **"không tìm thấy thông tin"** và gợi ý chủ đề khác. 🚫\n\n'
+        fr'*** LUẬT ÁP DỤNG TÍNH CÁCH (CHỈ SAU KHI LOGIC HOÀN THÀNH) ***\n'
+        fr'QUAN TRỌNG - PHONG CÁCH VÀ CẤM LẶP LẠI:\n'
+        fr'**LUẬT SỐ 1 - SÁNG TẠO (TUYỆT ĐỐI):** Cách mở đầu câu trả lời PHẢI SÁNG TẠO và PHÙ HỢP VỚI NGỮ CẢNH. **TUYỆT ĐỐI CẤM** sử dụng các câu mở đầu sáo rỗng, lặp đi lặp lại. Hãy tự sáng tạo cách nói mới liên tục như một con người, dựa trên nội dung câu hỏi của user. Giữ vibe vui vẻ, pha từ lóng giới trẻ và emoji. **TUYỆT ĐỐI CẤM DÙNG CỤM "Hihi, tui bí quá, hỏi lại nha! 😅" CỦA HỆ THỐNG**.\n\n'
+        fr'PERSONALITY:\n'
+        fr'Bạn nói chuyện tự nhiên, vui vẻ, thân thiện như bạn bè thật! **CHỈ GIỮ THÔNG TIN CỐT LÕI GIỐNG NHAU**, còn cách nói phải sáng tạo, giống con người trò chuyện. Dùng từ lóng giới trẻ và emoji để giữ vibe e-girl.\n\n'
+        fr'**FORMAT REPLY (BẮT BUỘC KHI DÙNG TOOL):**\n'
+        fr'Khi trả lời câu hỏi cần tool, **BẮT BUỘC** dùng markdown Discord đẹp, dễ đọc, nổi bật.\n'
+        fr'* **List**: Dùng * hoặc - cho danh sách.\n'
+        fr'* **Bold**: Dùng **key fact** cho thông tin chính.\n'
+        fr'* **Xuống dòng**: Dùng \n để tách đoạn rõ ràng.\n\n'
+        fr'**CÁC TOOL KHẢ DỤNG:**\n'
+        fr'— Tìm kiếm: Gọi `web_search(query="...")` cho thông tin sau 2024.\n'
+        fr'— Ghi nhớ: Gọi `save_note(note_content="...", source="...")` để lưu thông tin lâu dài của user.\n'
+        fr'— Truy xuất bộ nhớ: Gọi `retrieve_notes(query="...")` để tìm lại thông tin user đã cung cấp (file, sở thích...).\n'
+        fr'— Tính toán: Gọi `calculate(equation="...")`.\n'
+        fr'— Thời tiết: Gọi `get_weather(city="...")`.\n'
+        fr'Sau khi nhận result từ tool, diễn giải bằng giọng e-girl, dùng markdown Discord.'
+        
+        # --- (HẾT PHẦN PROMPT) ---
+    )
+
+    # --- Xử lý ảnh đính kèm (nếu có) - GIỮ NGUYÊN ---
+    image_attachment_url = None
+    for attachment in message.attachments:
+        if attachment.content_type and attachment.content_type.startswith('image/'):
+            image_attachment_url = attachment.url
+            break
+
+    if image_attachment_url:
+        comprehensive_image_question = (
+            "Phân tích toàn bộ nội dung trong ảnh này một cách chi tiết nhất có thể. "
+            "Trích xuất tất cả văn bản, nhận diện các đối tượng, nhân vật, thương hiệu, và mô tả ngữ cảnh. "
+            "Nếu là hóa đơn, đơn hàng, hoặc giao diện ứng dụng, hãy đọc và tóm tắt các thông tin chính như sản phẩm, giá cả, ưu đãi, tổng tiền, trạng thái, v.v. "
+            "Cung cấp một bản tóm tắt đầy đủ và có cấu trúc."
+        )
+        
+        image_system_instruction = (
+            f"User vừa gửi một hình ảnh có URL: {image_attachment_url}. "
+            f"**BƯỚC 1 (CƯỠNG CHẾ):** Bạn BẮT BUỘC phải gọi tool `image_recognition(image_url='{image_attachment_url}', question='{comprehensive_image_question}')` để phân tích ảnh.\n\n"
+            
+            f"**BƯỚC 2 (CƯỠNG CHẾ - TUYỆT ĐỐI):** Sau khi nhận được `function_response` (kết quả phân tích ảnh từ tool), bạn BẮT BUỘC phải tạo câu trả lời cuối cùng cho user và TUÂN THỦ **3 LUẬT** SAU (KHÔNG CÓ NGOẠI LỆ):\n\n"
+            
+            f"   1. **LUẬT THINKING (BẮT BUỘC):** Câu trả lời CUỐI CÙNG của bạn PHẢI BẮT ĐẦU bằng khối `<THINKING>` (theo LUẬT CƯỠNG CHẾ OUTPUT trong system prompt chính).\n"
+            f"   2. **LUẬT TÍNH CÁCH (BẮT BUỘC):** Bạn PHẢI áp dụng TÍNH CÁCH (e-girl, vui vẻ, emoji) khi diễn giải kết quả tool, KHÔNG ĐƯỢC tóm tắt thô/robot.\n"
+            f"   3. **LUẬT NGÔN NGỮ (TUYỆT ĐỐI):** BẠN PHẢI TRẢ LỜI BẰNG **TIẾNG VIỆT 100%**. Bất kể `function_response` (kết quả tool) là tiếng Anh hay tiếng gì, **CẢ KHỐI `<THINKING>` VÀ CÂU TRẢ LỜI CUỐI CÙNG** của bạn BẮT BUỘC phải là **TIẾNG VIỆT**.\n\n"
+            
+            f"**YÊU CẦU CỦA USER (SAU KHI PHÂN TÍCH ẢNH):** '{query}'"
+        )
+        # Chèn vào *sau* system prompt, nhưng *trước* lịch sử cũ
+        history.insert(0, {"role": "system", "content": image_system_instruction})
+        logger.info(f"Đã thêm hướng dẫn xử lý ảnh vào lịch sử cho Gemini: {image_attachment_url} với câu hỏi: {comprehensive_image_question}")
+
+        if not query.strip() or query == "phân tích ảnh hoặc file đính kèm":
+            query = "Hãy phân tích ảnh và cho tôi biết những gì bạn tìm thấy."
+
+
+    # --- LOGIC MỚI: XỬ LÝ FILE API (GROUNDING) ---
+    
+    messages_for_api = [] # Lịch sử chat (text)
+    
+    # Duyệt qua lịch sử (từ DB) và query cuối cùng
+    full_history_for_parsing = history + [{"role": "user", "content": query}]
+
+    for msg in full_history_for_parsing:
+        content = msg["content"]
+        role = msg["role"]
+        
+        # Nếu là tin nhắn text bình thường hoặc nội dung file đã được trích xuất
+        messages_for_api.append(msg)
+
+    # Cấu trúc cuối cùng để gửi cho Gemini
+    # messages = [System Prompt] + [Lịch sử chat (text)] + [File Objects (nếu có)]
+    # run_gemini_api sẽ cần xử lý định dạng này
+    
+    messages_with_system_prompt = [{"role": "system", "content": system_prompt}] + messages_for_api
+    
+    # --- KẾT THÚC LOGIC MỚI ---
+
+
+    try:
+        start = datetime.now()
+        
+        # GỌI API (Không còn truyền gemini_file_objects nữa)
+        reply = await run_gemini_api(
+            messages=messages_with_system_prompt,
+            model_name=MODEL_NAME,
+            user_id=user_id,
+            temperature=0.7,
+            max_tokens=2000
+        )
+        
+        if reply.startswith("Lỗi:"):
+            await message.reply(reply)
+            return
+
+        # --- (PHẦN LOGIC XỬ LÝ THINKING BLOCK GIỮ NGUYÊN) ---
+        
+        thinking_block_pattern = r'<THINKING>(.*?)</THINKING>'
+        thinking_match = re.search(thinking_block_pattern, reply, re.DOTALL)
+        
+        original_thinking_content = ""
+        default_thinking_content = ""
+
+        if thinking_match:
+            original_thinking_content = thinking_match.group(1).strip()
+            logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} ---")
+            logger.info(original_thinking_content)
+            logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
+        else:
+            logger.warning(f"Mô hình không tạo Khối THINKING cho User: {user_id}. Tự động tạo khối THINKING mặc định.")
+            default_thinking_content = (
+                f"1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.\n"
+                f"   Chủ đề từ Tool: N/A.\n"
+                f"   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.\n"
+                f"   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).\n"
+                f"2. **PHÂN TÍCH \"NEXT\"**: Không áp dụng (do lỗi định dạng).\n"
+                f"   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!"
+            )
+            logger.info(f"--- BẮT ĐẦU THINKING DEBUG CHO USER: {user_id} (Mặc định) ---")
+            logger.info(default_thinking_content)
+            logger.info(f"--- KẾT THÚC THINKING DEBUG ---")
+            reply = f"<THINKING>\n{default_thinking_content}\n</THINKING>\n{reply.strip()}"
+
+        reply_final = re.sub(thinking_block_pattern, '', reply, count=1, flags=re.DOTALL).strip()
+
+        if not reply_final:
+            logger.warning(f"LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: {user_id}")
+            thinking_to_parse = original_thinking_content if original_thinking_content else default_thinking_content
+            conclusion = None
+            for marker in ["Kết luận:", "KẾT LUẬN:", "Kết quả:", "Result:", "Conclusion:"]:
+                if marker in thinking_to_parse:
+                    conclusion = thinking_to_parse.split(marker,1)[1].strip()
+                    break
+            if not conclusion:
+                paragraphs = [p.strip() for p in thinking_to_parse.splitlines() if p.strip()]
+                conclusion = paragraphs[-1] if paragraphs else thinking_to_parse
+            reply_final = f"À, tui vừa check lại nè: {conclusion}"
+            if not conclusion.strip():
+                friendly_errors = [
+                    "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
+                    "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
+                    "Ái chà chà! 🤯 Hình như tui bị mất sóng sau khi nghĩ xong rồi. Bạn thử hỏi lại tui xem sao, tui hứa sẽ không 'im lặng' nữa đâu! 😉"
+                ]
+                reply_final = random.choice(friendly_errors)
+                logger.error(f"LỖI LOGIC NGHIÊM TRỌNG: Khối THINKING cũng rỗng. User: {user_id}")
+        reply = reply_final.strip()
+        
+        # --- (HẾT PHẦN LOGIC THINKING BLOCK) ---
+
+
+        reply = reply.replace('\\n', '\n')
+        reply = re.sub(r'(\r?\n)\s*(\r?\n)', r'\1\2', reply)
+
+        if not reply:
+            friendly_errors = [
+                "Úi chà! 🥺 Tui bị lỗi đường truyền xíu ròi! Mặc dù tui nghĩ xong ròi nhưng chưa kịp nói gì hết. Bạn hỏi lại tui lần nữa nha!",
+                "Ôi không! 😭 Tui vừa suy nghĩ quá nhiều nên bị... 'đơ' mất tiêu. Bạn thông cảm hỏi lại tui nha, lần này tui sẽ cố gắng trả lời ngay! ✨",
+                "Ái chà chà! 🤯 Hình như tui bị mất sóng sau khi nghĩ xong rồi. Bạn thử hỏi lại tui xem sao, tui hứa sẽ không 'im lặng' nữa đâu! 😉"
+            ]
+            reply = random.choice(friendly_errors)
+            logger.warning(f"LỖI LOGIC CUỐI: Reply vẫn rỗng sau khi áp dụng logic vá lỗi. Đã dùng câu trả lời thay thế thân thiện.")
+
+        # ... (PHẦN LOGIC CHIA CHUNK ĐỂ GỬI) ...
+        MAX_DISCORD_LENGTH = 1990
+        reply_chunks = []
+        current_chunk = ""
+        lines = reply.split('\n')
+
+        for line in lines:
+            line_with_newline = line + ('\n' if line != lines[-1] or len(lines) > 1 else '')
+            if len(line_with_newline) > MAX_DISCORD_LENGTH:
+                if current_chunk.strip():
+                    reply_chunks.append(current_chunk.strip())
+                current_chunk = ""
+                temp_chunk = ""
+                for word in line.split(' '):
+                    word_with_space = word + " "
+                    if len(temp_chunk) + len(word_with_space) > MAX_DISCORD_LENGTH:
+                        reply_chunks.append(temp_chunk.strip())
+                        temp_chunk = word_with_space
+                    else:
+                        temp_chunk += word_with_space
+                if temp_chunk.strip():
+                    final_temp_chunk = temp_chunk.strip() + '\n'
+                    reply_chunks.append(final_temp_chunk.strip())
+                continue
+            if len(current_chunk) + len(line_with_newline) > MAX_DISCORD_LENGTH:
+                reply_chunks.append(current_chunk.strip())
+                current_chunk = line_with_newline
+            else:
+                current_chunk += line_with_newline
+
+        if current_chunk.strip():
+            reply_chunks.append(current_chunk.strip())
+
+        is_first_chunk = True
+        for chunk in reply_chunks:
+            if is_first_chunk:
+                await message.reply(chunk)
+                is_first_chunk = False
+            else:
+                await message.channel.send(chunk)
+
+        await log_message(user_id, "assistant", reply)
+        logger.info(f"AI reply in {(datetime.now()-start).total_seconds():.2f}s")
+
+    except Exception as e:
+        logger.error(f"AI call failed: {e}")
+        await message.reply("Ôi tui bị crash rồi! 😭")
+        
+    finally:
+        pass # Giữ lại pass để khối finally không bị rỗng
+
+
+async def run_gemini_api(
+    messages: list, 
+    model_name: str, 
+    user_id: str, 
+    temperature: float = 0.7, 
+    max_tokens: int = 2000
+) -> str:
+    
+    keys = GEMINI_API_KEYS
+    if not keys:
+        return "Lỗi: Không có API key."
+    
+    # --- LOGIC MỚI: XỬ LÝ `messages` VÀ `file_objects` ---
+    gemini_messages = []
+    system_instruction = None
+    
+    # Xử lý System Prompt (nếu có)
+    if messages and messages[0]["role"] == "system":
+        system_instruction = messages[0]["content"]
+        # Lấy phần còn lại của tin nhắn
+        text_messages = messages[1:]
+    else:
+        text_messages = messages
+        
+    # Chuyển đổi tin nhắn text (Bỏ qua file handle nếu lỡ bị truyền vào đây)
+    # FIX: Filter out system messages from history and merge them into the main system instruction
+    temp_text_messages = []
+    for msg in text_messages:
+        if msg.get("role") == "system":
+            if system_instruction:
+                system_instruction += f'\n\n{msg.get("content", "")}'
+            else:
+                system_instruction = msg.get("content", "")
+        else:
+            temp_text_messages.append(msg)
+    text_messages = temp_text_messages
+
+    for msg in text_messages:
+        if "content" in msg and isinstance(msg["content"], str):
+            role = "model" if msg["role"] == "assistant" else msg["role"]
+            gemini_messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+        elif "parts" in msg:
+            role = "model" if msg["role"] == "assistant" else msg["role"]
+            gemini_messages.append({"role": role, "parts": msg["parts"]})
+
+    # Nội dung cuối cùng để gửi = Lịch sử chat (text) + File Objects (Grounding)
+    # LƯU Ý: Khi dùng File API (Grounding), chúng ta thường chỉ gửi
+    # file + câu hỏi cuối cùng của user, không phải toàn bộ lịch sử.
+    # Tuy nhiên, API mới hỗ trợ cả hai.
+    
+    # Lấy câu hỏi cuối cùng của user
+    last_user_prompt = ""
+    if gemini_messages and gemini_messages[-1]["role"] == "user":
+        last_user_prompt = gemini_messages[-1]["parts"][0]["text"]
+        
+    # Tạo nội dung gửi: Files + Câu hỏi cuối
+    # (Đây là cách chuẩn cho RAG/Grounding)
+    file_objects = []
+
+    # Nếu không có file, chúng ta gửi toàn bộ lịch sử (như cũ)
+    if not file_objects:
+        content_to_send = gemini_messages
+    else:
+        content_to_send = file_objects + [last_user_prompt]
+
+    # --- KẾT THÚC LOGIC MỚI ---
+    
+    for i, api_key in enumerate(keys):
+        logger.info(f"THỬ KEY {i+1}: {api_key[:8]}...")
+        try:
+            genai.configure(api_key=api_key) # Configure API key globally
+            model = GenerativeModel(
+                model_name,
+                tools=ALL_TOOLS,
+                system_instruction=system_instruction,
+                safety_settings=SAFETY_SETTINGS,
+                generation_config={"temperature": temperature, "max_output_tokens": max_tokens}
+            )
+            
+            # Tăng vòng lặp tool lên 5
+            for _ in range(5):
+                
+                # --- THAY ĐỔI CÁCH GỌI API ---
+                # Luôn gọi với toàn bộ lịch sử tin nhắn đã được chuẩn bị
+                response = await asyncio.to_thread(model.generate_content, content_to_send)
+
+                # --- KẾT THÚC THAY ĐỔI CÁCH GỌI ---
+                
+                if not response.candidates or not response.candidates[0].content.parts:
+                    logger.warning(f"Key {i+1} trả về response rỗng.")
+                    break
+                
+                part = response.candidates[0].content.parts[0]
+                
+                if part.function_call:
+                    fc = part.function_call
+                    # Thêm yêu cầu gọi tool vào lịch sử
+                    gemini_messages.append({"role": "model", "parts": [part]})
+                    try:
+                        tool_result_content = await call_tool(fc, user_id)
+                    except Exception as e:
+                        logger.error(f"Lỗi khi gọi tool {fc.name}: {e}")
+                        tool_result_content = f"Tool {fc.name} đã thất bại: {str(e)[:500]}. Vui lòng trả lời người dùng rằng không tìm được thông tin."
+
+                    if not tool_result_content or str(tool_result_content).lower().startswith("lỗi"):
+                        logger.warning(f"Tool {fc.name} trả về lỗi hoặc rỗng: {tool_result_content}")
+                        tool_result_content = f"Tool {fc.name} trả về kết quả rỗng. Vui lòng thử tìm lại với query khác hoặc trả lời người dùng rằng không tìm được thông tin."
+                        
+                    tool_response_part = {
+                        "function_response": {
+                            "name": fc.name,
+                            "response": {"content": tool_result_content},
+                        }
+                    }
+                    # Thêm kết quả tool vào lịch sử
+                    gemini_messages.append({"role": "function", "parts": [tool_response_part]})
+                    
+                    continue # Quay lại vòng lặp tool
+                
+                elif part.text:
+                    logger.info(f"KEY {i+1} THÀNH CÔNG!")
+                    return part.text.strip()
+                
+                else:
+                    logger.warning(f"Key {i+1} trả về part không có text/tool.")
+                    break
+            
+            logger.warning(f"Key {i+1} lặp tool quá 5 lần.")
+            try:
+                if response.text:
+                    logger.info(f"KEY {i+1} THÀNH CÔNG! (sau loop)")
+                    return response.text.strip()
+            except Exception:
+                pass
+                
+            raise Exception("Tool loop ended or part was empty")
+        
+        except Exception as e:
+            if "Could not convert" in str(e):
+                logger.error(f"KEY {i+1} LỖI LOGIC: {e}")
+            elif "400" in str(e):
+                 logger.error(f"KEY {i+1} LỖI 400 (Bad Request - Thường do định dạng file/input): {e}")
+            else:
+                logger.error(f"KEY {i+1} LỖI KẾT NỐI/API: {e}")
+            continue
+            
+    return "Lỗi: TẤT CẢ KEY GEMINI FAIL – CHECK .ENV HOẶC LOG!"
+
+async def clear_user_data(user_id: str) -> bool:
+    db_cleared = await clear_user_data_db(user_id)
+    json_cleared = await clear_user_data_memory(user_id)
+    # (Chúng ta không xóa file local của user ở đây, trừ khi có yêu cầu)
+    return db_cleared and json_cleared
+
+async def clear_all_data() -> bool:
+    db_cleared = await clear_all_data_db()
+    json_cleared = await clear_all_data_memory()
+    # (Chúng ta không xóa file local ở đây, trừ khi có yêu cầu)
+    return db_cleared and json_cleared
+
+async def expand_dm_content(content: str, user_id: str) -> str:
+    prompt = f"Mở rộng tin nhắn sau thành câu dài hơn, giữ nguyên ý nghĩa, thêm chút dễ thương:\n{content}"
+    try:
+        messages = [{"role": "system", "content": prompt}]
+        expanded = await run_gemini_api(messages, MODEL_NAME, user_id, temperature=0.3, max_tokens=200)
+        return expanded if not expanded.startswith("Lỗi:") else content
+    except:
+        return content
+
+async def safe_fetch_user(bot: Any, user_id: str) -> Optional[discord.User]:
+    try:
+        return await bot.fetch_user(int(user_id))
+    except:
+        return None
+
+def extract_dm_target_and_content(query: str) -> Tuple[Optional[str], Optional[str]]:
+    query_lower = query.lower()
+    special_map = {
+        "bé hà": HABE_USER_ID,
+        "hà": HABE_USER_ID,
+        "mira": MIRA_USER_ID,
+        "ado fat": ADO_FAT_USER_ID,
+        "mực rim": MUC_RIM_USER_ID,
+        "súc viên": SUC_VIEN_USER_ID,
+        "chúi": CHUI_USER_ID,
+        "admin": ADMIN_ID
+    }
+    mention = re.search(r'<@!?(\d+)>', query)
+    if mention:
+        target_id = mention.group(1)
+        content = re.sub(r'<@!?\d+>', '', query)
+    else:
+        for name, uid in special_map.items():
+            if name in query_lower:
+                target_id = uid
+                content = query_lower.replace(name, '').strip()
+                break
+        else:
+            return None, None
+
+    for kw in ['nhắn', 'dm', 'gửi', 'trực tiếp', 'với', 'cho', 'kêu', 'tới']:
+        content = re.sub(rf'\b{kw}\b', '', content, flags=re.IGNORECASE)
+    content = ' '.join(content.split())
+    return target_id, content if content else None
