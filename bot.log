@@ -1,0 +1,227 @@
+2025-12-14 17:13:24,827 [INFO] Đã thiết lập 5 Gemini API keys cho Failover.
+2025-12-14 17:13:27,773 [INFO] Khởi tạo server keep-alive...
+2025-12-14 17:13:27,774 [INFO] Máy chủ Bot đang khởi động...
+2025-12-14 17:13:32,123 [INFO] Đã sync 4 slash commands!
+2025-12-14 17:13:32,148 [INFO] DB initialized (messages + user_notes tables)
+2025-12-14 17:13:32,148 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-14 17:13:32,149 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-14 17:13:32,149 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-14 17:13:32,150 [INFO] Dung lượng trống: 590667 MB. Không cần dọn dẹp file local.
+2025-12-14 17:13:32,151 [INFO] DB backed up to D:\Users\Downloads\Emojis\Gemini-Bot-Discord-azizu1012-production\chat_history_backup.db
+2025-12-14 17:13:32,152 [INFO] Tingyun#4200 online!
+2025-12-14 17:16:25,746 [INFO] Đã thiết lập 5 Gemini API keys cho Failover.
+2025-12-14 17:16:26,662 [INFO] Khởi tạo server keep-alive...
+2025-12-14 17:16:26,663 [INFO] Máy chủ Bot đang khởi động...
+2025-12-14 17:16:31,089 [INFO] Đã sync 4 slash commands!
+2025-12-14 17:16:31,090 [INFO] DB initialized (messages + user_notes tables)
+2025-12-14 17:16:31,091 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-14 17:16:31,091 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-14 17:16:31,092 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-14 17:16:31,092 [INFO] Dung lượng trống: 590667 MB. Không cần dọn dẹp file local.
+2025-12-14 17:16:31,093 [INFO] DB backed up to D:\Users\Downloads\Emojis\Gemini-Bot-Discord-azizu1012-production\chat_history_backup.db
+2025-12-14 17:16:31,094 [INFO] Tingyun#4200 online!
+2025-12-14 17:16:34,560 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: <@1449666892586291220> check xem có còn lặp lại ti...
+2025-12-14 17:16:34,560 [INFO] [DM ADMIN] Target: None, Content: None
+2025-12-14 17:16:34,561 [WARNING] [DM ADMIN] Failed to parse target/content: check xem có còn lặp lại tin nhắn không
+2025-12-14 17:16:34,566 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:16:34,578 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:16:37,236 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:16:37,236 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:16:37,236 [INFO] 1. **TỰ LOG**: Mục tiêu: Xác nhận với người dùng về việc tránh lặp lại tin nhắn. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:16:37,237 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:16:37,836 [INFO] AI reply in 3.26s
+2025-12-14 17:16:51,649 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: ý là tin nhắn tôi còn lặp không...
+2025-12-14 17:16:51,650 [INFO] [DM ADMIN] Target: None, Content: None
+2025-12-14 17:16:51,650 [WARNING] [DM ADMIN] Failed to parse target/content: ý là tin nhắn tôi còn lặp không
+2025-12-14 17:16:51,655 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:16:51,655 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:16:54,084 [INFO] [TƯƠNG TÁC] User mainghiengame (1176189867856769109) - Type: MENTION - Content: <@1449666892586291220> bot ms à...
+2025-12-14 17:16:54,091 [INFO] User 1176189867856769109 sent a message
+2025-12-14 17:16:54,091 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:16:55,388 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:16:55,388 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:16:55,388 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user về việc tin nhắn của họ có bị lặp lại không. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: Không có tool nào để kiểm tra tin nhắn lặp lại của user.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:16:55,389 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:16:55,947 [INFO] AI reply in 4.29s
+2025-12-14 17:16:56,188 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:16:56,188 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1176189867856769109 ---
+2025-12-14 17:16:56,188 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi chào hỏi. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:16:56,188 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:16:56,654 [INFO] AI reply in 2.56s
+2025-12-14 17:17:50,868 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: ví dụ khi tôi bảo như vầy thì còn lặp không "ý là ...
+2025-12-14 17:17:50,868 [INFO] [DM ADMIN] Target: 677157717160361994, Content: ví dụ khi tôi bảo như vầy thì còn lặp không "ý là tin tôi còn lặp không" thì tnh "ý là tin tôi còn lặp khôngý là tin tôi còn lặp không", bạn thấy ko
+2025-12-14 17:17:51,274 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:17:51,275 [ERROR] KEY 1 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:17:51,275 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-14 17:17:51,276 [ERROR] KEY 2 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:17:51,276 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-14 17:17:51,277 [ERROR] KEY 3 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:17:51,277 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-14 17:17:51,277 [ERROR] KEY 4 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:17:51,277 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-14 17:17:51,278 [ERROR] KEY 5 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:17:52,891 [ERROR] DM error: 403 Forbidden (error code: 50007): Cannot send messages to this user
+2025-12-14 17:18:15,047 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: có bảo gửi DM đâu...
+2025-12-14 17:18:15,048 [INFO] [DM ADMIN] Target: None, Content: None
+2025-12-14 17:18:15,048 [WARNING] [DM ADMIN] Failed to parse target/content: có bảo gửi DM đâu
+2025-12-14 17:18:15,053 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:18:15,053 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:18:18,660 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:18:18,661 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:18:18,661 [INFO] 1. **TỰ LOG**: Mục tiêu: Xác nhận lại việc người dùng không nói về DM và hiểu lại ý của người dùng. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: Người dùng đã sửa lỗi hiểu lầm về "DM" của tôi.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:18:18,661 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:18:21,023 [INFO] AI reply in 5.97s
+2025-12-14 17:18:28,187 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: ví dụ khi tôi bảo như vầy thì còn lặp không "ý là ...
+2025-12-14 17:18:28,187 [INFO] [DM ADMIN] Target: 677157717160361994, Content: ví dụ khi tôi bảo như vầy thì còn lặp không "ý là tin tôi còn lặp không" thì tnh "ý là tin tôi còn lặp khôngý là tin tôi còn lặp không", bạn thấy ko
+2025-12-14 17:18:28,507 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:18:28,507 [ERROR] KEY 1 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:18:28,508 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-14 17:18:28,508 [ERROR] KEY 2 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:18:28,509 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-14 17:18:28,509 [ERROR] KEY 3 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:18:28,509 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-14 17:18:28,509 [ERROR] KEY 4 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:18:28,510 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-14 17:18:28,510 [ERROR] KEY 5 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:18:29,199 [ERROR] DM error: 403 Forbidden (error code: 50007): Cannot send messages to this user
+2025-12-14 17:19:05,391 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: ví dụ khi tôi bảo như vầy thì còn lặp không "ý là ...
+2025-12-14 17:19:05,391 [INFO] [DM ADMIN] Target: 677157717160361994, Content: ví dụ khi tôi bảo như vầy thì còn lặp không "ý là tin tôi còn lặp không" thì tnh "ý là tin tôi còn lặp khôngý là tin tôi còn lặp không", bạn thấy ko
+2025-12-14 17:19:05,829 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:19:05,830 [ERROR] KEY 1 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:19:05,831 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-14 17:19:05,831 [ERROR] KEY 2 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:19:05,831 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-14 17:19:05,832 [ERROR] KEY 3 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:19:05,832 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-14 17:19:05,832 [ERROR] KEY 4 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:19:05,832 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-14 17:19:05,833 [ERROR] KEY 5 LỖI KẾT NỐI/API: contents must not be empty
+2025-12-14 17:19:06,316 [ERROR] DM error: 403 Forbidden (error code: 50007): Cannot send messages to this user
+2025-12-14 17:19:11,955 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: cccccccccccccc...
+2025-12-14 17:19:11,960 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:19:11,960 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:19:14,355 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:19:14,356 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-14 17:19:14,356 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-14 17:19:14,356 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-14 17:19:14,356 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:19:14,982 [INFO] AI reply in 3.02s
+2025-12-14 17:19:32,969 [WARNING] Lệnh không tồn tại: '!stop' từ User: kohaku527
+2025-12-14 17:20:35,644 [INFO] Đã thiết lập 5 Gemini API keys cho Failover.
+2025-12-14 17:20:36,583 [INFO] Khởi tạo server keep-alive...
+2025-12-14 17:20:36,584 [INFO] Máy chủ Bot đang khởi động...
+2025-12-14 17:20:40,791 [INFO] Đã sync 4 slash commands!
+2025-12-14 17:20:40,792 [INFO] DB initialized (messages + user_notes tables)
+2025-12-14 17:20:40,792 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-14 17:20:40,793 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-14 17:20:40,793 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-14 17:20:40,793 [INFO] Dung lượng trống: 590667 MB. Không cần dọn dẹp file local.
+2025-12-14 17:20:40,795 [INFO] DB backed up to D:\Users\Downloads\Emojis\Gemini-Bot-Discord-azizu1012-production\chat_history_backup.db
+2025-12-14 17:20:40,796 [INFO] Tingyun#4200 online!
+2025-12-14 17:20:44,825 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: lặp lại tin nhắn này...
+2025-12-14 17:20:44,825 [INFO] [DM ADMIN] Target: None, Content: None
+2025-12-14 17:20:44,825 [WARNING] [DM ADMIN] Failed to parse target/content: lặp lại tin nhắn này
+2025-12-14 17:20:44,832 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:20:44,843 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:20:48,923 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:20:48,923 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:20:48,923 [INFO] 1. **TỰ LOG**: Mục tiêu: Lặp lại tin nhắn user. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: Tin nhắn cần lặp lại là "cccccccccccccc".
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:20:48,924 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:20:49,567 [INFO] AI reply in 4.72s
+2025-12-14 17:23:28,562 [INFO] Đã thiết lập 5 Gemini API keys cho Failover.
+2025-12-14 17:23:29,479 [INFO] Khởi tạo server keep-alive...
+2025-12-14 17:23:29,480 [INFO] Máy chủ Bot đang khởi động...
+2025-12-14 17:23:33,561 [INFO] Đã sync 4 slash commands!
+2025-12-14 17:23:33,562 [INFO] DB initialized (messages + user_notes tables)
+2025-12-14 17:23:33,562 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-14 17:23:33,563 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-14 17:23:33,563 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-14 17:23:33,564 [INFO] Dung lượng trống: 590667 MB. Không cần dọn dẹp file local.
+2025-12-14 17:23:33,565 [INFO] DB backed up to D:\Users\Downloads\Emojis\Gemini-Bot-Discord-azizu1012-production\chat_history_backup.db
+2025-12-14 17:23:33,565 [INFO] Tingyun#4200 online!
+2025-12-14 17:23:37,223 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: chó tingyun...
+2025-12-14 17:23:37,229 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:23:37,242 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:23:39,558 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:23:39,559 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:23:39,559 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời lại từ "chó". Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:23:39,559 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:23:40,104 [INFO] AI reply in 2.86s
+2025-12-14 17:24:28,464 [WARNING] Lệnh không tồn tại: '!stop' từ User: kohaku527
+2025-12-14 17:26:54,888 [INFO] Đã thiết lập 5 Gemini API keys cho Failover.
+2025-12-14 17:26:55,910 [INFO] Khởi tạo server keep-alive...
+2025-12-14 17:26:55,910 [INFO] Máy chủ Bot đang khởi động...
+2025-12-14 17:27:00,111 [INFO] Đã sync 4 slash commands!
+2025-12-14 17:27:00,112 [INFO] DB initialized (messages + user_notes tables)
+2025-12-14 17:27:00,112 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-14 17:27:00,112 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-14 17:27:00,113 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-14 17:27:00,113 [INFO] Dung lượng trống: 590667 MB. Không cần dọn dẹp file local.
+2025-12-14 17:27:00,115 [INFO] DB backed up to D:\Users\Downloads\Emojis\Gemini-Bot-Discord-azizu1012-production\chat_history_backup.db
+2025-12-14 17:27:00,115 [INFO] Tingyun#4200 online!
+2025-12-14 17:27:08,643 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: con chó tingyun...
+2025-12-14 17:27:08,649 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:27:08,661 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:27:11,153 [INFO] TOOL GỌI: web_search | Args: {'query': 'Tingyun Honkai Star Rail dog meaning'} | User: 1414457651676581899
+2025-12-14 17:27:11,153 [INFO] CALLING 3x CSE SMART SEARCH for 'Tingyun Honkai Star Rail dog meaning' (mode: general)
+2025-12-14 17:27:11,153 [INFO] Phân loại: GAMING. Chạy search cho: 'Tingyun Honkai Star Rail dog meaning'
+2025-12-14 17:27:11,153 [INFO] Queries: Q1='Tingyun Honkai Star Rail dog meaning', Q2='Tingyun Honkai Star Rail dog meaning leaks OR speculation', Q3='Tingyun Honkai Star Rail dog meaning roadmap OR update'
+2025-12-14 17:27:12,253 [INFO] CSE0 trả về 3 kết quả hợp lệ.
+2025-12-14 17:27:12,287 [INFO] CSE1 trả về 3 kết quả hợp lệ.
+2025-12-14 17:27:12,299 [INFO] CSE2 trả về 3 kết quả hợp lệ.
+2025-12-14 17:27:12,300 [INFO] Hoàn tất tìm kiếm 1 subquery và đã lưu vào cache.
+2025-12-14 17:27:16,818 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:27:16,819 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:27:16,819 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về "con chó Tingyun". Chủ đề từ Tool: GAMING. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về nhân vật Tingyun trong Honkai: Star Rail, nhưng không có giải thích trực tiếp về cụm từ "con chó Tingyun".
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:27:16,819 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:27:17,552 [INFO] AI reply in 8.89s
+2025-12-14 17:28:03,845 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: MENTION - Content: Cho nó promt đổi tên nó là tingyun vs mô tả nó là ...
+2025-12-14 17:28:03,850 [INFO] User 453591582466375681 sent a message
+2025-12-14 17:28:03,850 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:28:07,036 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:28:07,036 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-14 17:28:07,036 [INFO] 1. **TỰ LOG**: Mục tiêu: Giải thích rằng không thể đổi tên bot và tìm kiếm thông tin về Tingyun. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: Bot không thể đổi tên, cần tìm kiếm thông tin về Tingyun.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:28:07,036 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:28:07,690 [INFO] AI reply in 3.84s
+2025-12-14 17:40:59,825 [INFO] Đã thiết lập 5 Gemini API keys cho Failover.
+2025-12-14 17:41:00,791 [INFO] Khởi tạo server keep-alive...
+2025-12-14 17:41:00,792 [INFO] Máy chủ Bot đang khởi động...
+2025-12-14 17:41:05,089 [INFO] Đã sync 4 slash commands!
+2025-12-14 17:41:05,090 [INFO] DB initialized (messages + user_notes tables)
+2025-12-14 17:41:05,091 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-14 17:41:05,091 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-14 17:41:05,092 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-14 17:41:05,092 [INFO] Dung lượng trống: 590667 MB. Không cần dọn dẹp file local.
+2025-12-14 17:41:05,093 [INFO] DB backed up to D:\Users\Downloads\Emojis\Gemini-Bot-Discord-azizu1012-production\chat_history_backup.db
+2025-12-14 17:41:05,094 [INFO] Tingyun#4200 online!
+2025-12-14 17:41:16,132 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello vợ yêu tingyun...
+2025-12-14 17:41:16,138 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:41:16,150 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:41:19,279 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:41:19,279 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:41:19,279 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời lời chào thân mật từ ân công. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:41:19,279 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:41:19,931 [INFO] AI reply in 3.78s
+2025-12-14 17:41:50,474 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: em có dâm k Tingyun...
+2025-12-14 17:41:50,479 [INFO] User 1414457651676581899 sent a message
+2025-12-14 17:41:50,479 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-14 17:41:53,516 [INFO] KEY 1 THÀNH CÔNG!
+2025-12-14 17:41:53,516 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-14 17:41:53,516 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi nhạy cảm một cách khéo léo và lịch sự, giữ vững tính cách Tingyun. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-14 17:41:53,516 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-14 17:41:54,239 [INFO] AI reply in 3.76s
