@@ -696,15 +696,15 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
 
     try:
         start = datetime.now()
-        
-        # GỌI API (Không còn truyền gemini_file_objects nữa)
-        reply = await run_gemini_api(
-            messages=messages_with_system_prompt,
-            model_name=MODEL_NAME,
-            user_id=user_id,
-            temperature=0.7,
-            max_tokens=2000
-        )
+        async with message.channel.typing():
+            # GỌI API (Không còn truyền gemini_file_objects nữa)
+            reply = await run_gemini_api(
+                messages=messages_with_system_prompt,
+                model_name=MODEL_NAME,
+                user_id=user_id,
+                temperature=0.7,
+                max_tokens=2000
+            )
         
         if reply.startswith("Lỗi:"):
             await message.reply(reply)
@@ -755,8 +755,13 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             # Bỏ các dòng meta nếu chứa các cụm THINKING/TỰ LOG/PHÂN TÍCH/... (không chỉ đầu dòng)
             if meta_pattern.search(stripped):
                 continue
-            cleaned_lines.append(line)
+            cleaned_lines.append(stripped)
         reply_final = "\n".join(cleaned_lines).strip()
+
+        # Phòng hờ nếu meta vẫn lọt, cắt bỏ mọi dòng còn chứa meta
+        if meta_pattern.search(reply_final):
+            safe_lines = [ln.strip() for ln in reply_final.splitlines() if ln.strip() and not meta_pattern.search(ln)]
+            reply_final = "\n".join(safe_lines).strip()
 
         if not reply_final:
             logger.warning(f"LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: {user_id}")
