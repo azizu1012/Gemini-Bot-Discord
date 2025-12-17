@@ -22,7 +22,7 @@ from database import (
     clear_user_data_db, clear_all_data_db, get_user_history_from_db # <-- SỬA LỖI RAM
 )
 from memory import (
-    clear_user_data_memory, clear_all_data_memory
+    clear_user_data_memory, clear_all_data_memory, load_json_memory
 )
 from tools import ALL_TOOLS, call_tool
 from logger import log_message
@@ -42,6 +42,10 @@ KEYWORD_TRIGGERS = [r'\btingyun\b']
 
 async def handle_message(message: discord.Message, bot: Any, mention_history: Dict[str, list], confirmation_pending: Dict[str, Any], admin_confirmation_pending: Dict[str, Any], user_queue: defaultdict) -> None:
     if message.author == bot.user:
+        return
+    
+    # Chỉ reply nếu đối phương là người, không phải bot
+    if message.author.bot:
         return
 
     user_id = str(message.author.id)
@@ -72,11 +76,14 @@ async def handle_message(message: discord.Message, bot: Any, mention_history: Di
 
     if not query:
         if not attachments_processed:
-            query = "Hihi, anh ping tui có chuyện gì hông? Tag nhầm hả? uwu"
+            # Tingyun tự quyết định phản hồi khi được tag nhưng không có nội dung
+            await message.reply(tingyun_reply_empty_query())
+            return
         else:
             query = "phân tích ảnh hoặc file đính kèm" 
     elif len(query) > 500:
-        await message.reply("Ôi, query dài quá (>500 ký tự), tui chịu hông nổi đâu! 😅")
+        # Tingyun tự quyết định phản hồi khi query quá dài
+        await message.reply(tingyun_reply_query_too_long())
         return
 
     # Rate limiting and DM limiting
@@ -84,17 +91,20 @@ async def handle_message(message: discord.Message, bot: Any, mention_history: Di
         rate_limit_str = PREMIUM_RATE_LIMIT if is_premium else DEFAULT_RATE_LIMIT
         requests, seconds = map(int, rate_limit_str.split('/'))
         if is_rate_limited(user_id, requests, seconds):
-            await message.reply(f"Chill đi bro, spam quá rồi! Đợi {seconds} giây nha 😎")
+            # Tingyun tự quyết định phản hồi khi bị rate limit
+            await message.reply(tingyun_reply_rate_limit(seconds))
             return
 
         if interaction_type == "DM":
             dm_limit = PREMIUM_DM_LIMIT if is_premium else DEFAULT_DM_LIMIT
             if is_dm_limited(user_id, dm_limit):
-                await message.reply("Bạn đã hết lượt nhắn tin riêng cho bot hôm nay rồi. Nâng cấp premium để có thêm lượt nhé! 😉")
+                # Tingyun tự quyết định phản hồi khi hết DM limit
+                await message.reply(tingyun_reply_dm_limit())
                 return
 
     if is_spam(user_id, user_queue):
-        await message.reply("Chill đi anh, tui mệt rồi nha 😫")
+        # Tingyun tự quyết định phản hồi khi bị spam
+        await message.reply(tingyun_reply_spam())
         return
 
     if await handle_admin_commands(message, query, user_id, is_admin, bot):
@@ -181,8 +191,9 @@ def get_interaction_type(message: discord.Message, bot: Any) -> Optional[str]:
 
 def get_query(message: discord.Message, bot: Any) -> str:
     query = message.content.strip()
+    # Thay tag của bot hiện tại bằng "@Tingyun#4200" để giữ nguyên ngữ cảnh, giữ nguyên tag của bot khác
     if bot.user in message.mentions:
-        query = re.sub(rf'<@!?{bot.user.id}>', '', query).strip()
+        query = re.sub(rf'<@!?{bot.user.id}>', '@Tingyun#4200', query).strip()
     return query
 
 def is_rate_limited(user_id: str, max_requests: int, period_seconds: int) -> bool:
@@ -300,8 +311,18 @@ async def handle_confirmation(message: discord.Message, query: str, user_id: str
     return False
 
 async def handle_quick_replies(message: discord.Message, query: str, user_id: str) -> bool:
+    """Tingyun tự quyết định phản hồi nhanh cho các câu chào hỏi đơn giản."""
     if query.lower() in ["hi", "hello", "chào", "hí", "hey"]:
-        quick_replies = ["Hí anh!", "Chào anh yêu!", "Hi hi!", "Hí hí!", "Chào anh!"]
+        quick_replies = [
+            "Ôi chao, Ân công đến rồi à? Tiểu nữ thấy vui ghê đó! 😊",
+            "Úi chà, Ân công ơi! Tiểu nữ mừng được gặp Ân công lắm đó! 😊",
+            "Ôi chao, Ân công ơi! Tiểu nữ thấy vui khi được trò chuyện với Ân công! 💕",
+            "Hí hí, Ân công đến rồi à? Tiểu nữ thấy vui ghê đó! 😊",
+            "Hí, chào Ân công! 😊",
+            "Úi, Ân công đến rồi à? Tiểu nữ đang đây nè! 💕",
+            "Ôi, chào Ân công! Tiểu nữ thấy vui lắm đó! 😊",
+            "Hí hí, Ân công ơi! Tiểu nữ đang đây nè! 💕"
+        ]
         reply = random.choice(quick_replies)
         await message.reply(reply)
         await log_message(user_id, "assistant", reply)
@@ -322,12 +343,160 @@ def sanitize_query(query: str) -> str:
             query = re.sub(pattern, '[REDACTED]', query, flags=re.IGNORECASE)
     return query
 
+def convert_error_to_tingyun_style(error_msg: str) -> str:
+    """Chuyển đổi thông báo lỗi kỹ thuật thành câu trả lời theo phong cách Tingyun."""
+    if "Không có API key" in error_msg or "API key" in error_msg:
+        responses = [
+            "Ôi chao, Ân công ơi! Tiểu nữ buồn ngủ quá rồi, không đủ tỉnh táo để trả lời Ân công đâu nè~ 😴 Có lẽ tiểu nữ cần nghỉ ngơi một chút, Ân công thông cảm cho tiểu nữ nhé! 💕",
+            "Úi chà, Ân công à! Hình như tiểu nữ đang mệt mỏi quá, không thể tập trung được rồi~ 😴 Để tiểu nữ nghỉ ngơi một chút, rồi sẽ trả lời Ân công sau nha! 💕",
+            "Úi, tiểu nữ mệt quá rồi~ 😴 Để tiểu nữ nghỉ một chút nha!",
+            "Ôi, tiểu nữ buồn ngủ quá~ 😴 Nghỉ một chút rồi trả lời Ân công sau! 💕"
+        ]
+        return random.choice(responses)
+    
+    if "TẤT CẢ KEY GEMINI FAIL" in error_msg or "KEY" in error_msg:
+        responses = [
+            "Úi chà, Ân công ơi! Tiểu nữ buồn ngủ quá rồi, không đủ tỉnh táo để trả lời Ân công đâu nè~ 😴 Có lẽ tiểu nữ cần nghỉ ngơi một chút, Ân công thông cảm cho tiểu nữ nhé! 💕",
+            "Ôi không, Ân công à! Tiểu nữ đang gặp chút khó khăn về đường truyền rồi~ 😅 Để tiểu nữ nghỉ một chút, rồi sẽ trả lời Ân công sau nha! 💕",
+            "Úi, tiểu nữ gặp vấn đề rồi~ 😅 Để tiểu nữ nghỉ một chút nha!",
+            "Ôi, tiểu nữ đang gặp khó khăn~ 😴 Nghỉ một chút rồi trả lời Ân công sau! 💕"
+        ]
+        return random.choice(responses)
+    
+    if "400" in error_msg or "Bad Request" in error_msg:
+        responses = [
+            "Ôi không, Ân công ơi! Tiểu nữ không hiểu được yêu cầu của Ân công rồi~ 😅 Có thể Ân công thử nói lại cho tiểu nữ nghe được không nè? Tiểu nữ sẽ cố gắng hiểu hơn đó! 💕",
+            "Úi chà, Ân công à! Yêu cầu của Ân công hơi khó hiểu quá, tiểu nữ không biết phải làm sao~ 😅 Ân công có thể giải thích rõ hơn cho tiểu nữ được không nè? 💕",
+            "Úi, tiểu nữ không hiểu~ 😅 Ân công nói lại giúp tiểu nữ được không?",
+            "Ôi, tiểu nữ không biết phải làm sao~ 😅 Ân công giải thích rõ hơn nha! 💕"
+        ]
+        return random.choice(responses)
+    
+    if "kết nối" in error_msg.lower() or "connection" in error_msg.lower() or "API" in error_msg:
+        responses = [
+            "Ái chà chà, Ân công ơi! Tiểu nữ buồn ngủ quá rồi, không đủ tỉnh táo để trả lời Ân công đâu nè~ 😴 Có lẽ tiểu nữ cần nghỉ ngơi một chút, Ân công thông cảm cho tiểu nữ nhé! 💕",
+            "Ôi không, Ân công à! Tiểu nữ đang gặp vấn đề về kết nối rồi~ 😅 Để tiểu nữ nghỉ một chút, rồi sẽ trả lời Ân công sau nha! 💕",
+            "Úi, tiểu nữ gặp vấn đề kết nối~ 😅 Để tiểu nữ nghỉ một chút nha!",
+            "Ôi, tiểu nữ đang gặp khó khăn~ 😴 Nghỉ một chút rồi trả lời Ân công sau! 💕"
+        ]
+        return random.choice(responses)
+    
+    # Lỗi mặc định
+    responses = [
+        "Úi chà, Ân công ơi! Tiểu nữ buồn ngủ quá rồi, không đủ tỉnh táo để trả lời Ân công đâu nè~ 😴 Có lẽ tiểu nữ cần nghỉ ngơi một chút, Ân công thông cảm cho tiểu nữ nhé! 💕",
+        "Ôi không, Ân công à! Tiểu nữ đang gặp chút khó khăn rồi~ 😅 Để tiểu nữ nghỉ một chút, rồi sẽ trả lời Ân công sau nha! 💕",
+        "Úi, tiểu nữ gặp vấn đề rồi~ 😅 Để tiểu nữ nghỉ một chút nha!",
+        "Ôi, tiểu nữ đang gặp khó khăn~ 😴 Nghỉ một chút rồi trả lời Ân công sau! 💕"
+    ]
+    return random.choice(responses)
+
+def tingyun_reply_empty_query() -> str:
+    """Tingyun tự quyết định phản hồi khi được tag nhưng không có nội dung."""
+    responses = [
+        "Ôi chao, Ân công đến rồi à? Tiểu nữ thấy vui ghê đó! 😊 Hôm nay Ân công có chuyện gì muốn nói với tiểu nữ không nè?",
+        "Úi chà, Ân công ping tiểu nữ có chuyện gì vậy? Tiểu nữ đang chờ nghe đây~ 😊",
+        "Ôi chao, Ân công ơi! Tiểu nữ thấy Ân công tag mình rồi đó, có chuyện gì muốn nói với tiểu nữ không nè? 💕",
+        "Hí hí, Ân công tag tiểu nữ có gì không? 😊",
+        "Ôi, Ân công đến rồi à? Tiểu nữ đang đây nè! Có gì cần tiểu nữ giúp không? 💕",
+        "Úi, Ân công ping tiểu nữ làm gì vậy? Tiểu nữ đang chờ nghe đây~ 😊",
+        "Hí, Ân công ơi! Tiểu nữ thấy vui khi được Ân công nhớ đến đó! Có chuyện gì không nè? 💕"
+    ]
+    return random.choice(responses)
+
+def tingyun_reply_query_too_long() -> str:
+    """Tingyun tự quyết định phản hồi khi query quá dài."""
+    responses = [
+        "Ôi chao, Ân công ơi! Tin nhắn của Ân công dài quá, tiểu nữ đọc không kịp rồi~ 😅 Ân công có thể tóm tắt lại cho tiểu nữ nghe được không nè?",
+        "Úi chà, Ân công à! Tin nhắn này dài quá, tiểu nữ không thể xử lý hết được~ 😅 Ân công thử viết ngắn gọn hơn một chút được không nè?",
+        "Ôi không, Ân công ơi! Tin nhắn của Ân công dài quá, tiểu nữ chịu không nổi đâu~ 😅 Ân công có thể chia nhỏ ra cho tiểu nữ được không nè? 💕",
+        "Úi, dài quá tiểu nữ đọc không kịp~ 😅 Ân công tóm tắt lại giúp tiểu nữ được không?",
+        "Ôi, tin nhắn này dài quá! Tiểu nữ không thể xử lý hết được đâu~ 😅 Ân công viết ngắn lại một chút nha!",
+        "Hí, Ân công viết dài quá làm tiểu nữ mệt~ 😅 Chia nhỏ ra giúp tiểu nữ được không nè? 💕"
+    ]
+    return random.choice(responses)
+
+def tingyun_reply_rate_limit(seconds: int) -> str:
+    """Tingyun tự quyết định phản hồi khi bị rate limit."""
+    responses = [
+        f"Ôi chao, Ân công ơi! Tiểu nữ đang mệt quá, để tiểu nữ nghỉ {seconds} giây nha~ 😴 Sau đó tiểu nữ sẽ trả lời Ân công ngay!",
+        f"Úi chà, Ân công à! Tiểu nữ cần nghỉ một chút, khoảng {seconds} giây thôi nha~ 😅 Sau đó tiểu nữ sẽ trả lời Ân công ngay!",
+        f"Ôi không, Ân công ơi! Tiểu nữ đang mệt quá, để tiểu nữ nghỉ {seconds} giây nha~ 😴 Hòa khí sinh tài mà, Ân công thông cảm cho tiểu nữ nhé! 💕",
+        f"Úi, tiểu nữ mệt quá rồi~ 😴 Để tiểu nữ nghỉ {seconds} giây nha, rồi trả lời Ân công sau!",
+        f"Ôi, tiểu nữ cần nghỉ {seconds} giây~ 😅 Đợi tiểu nữ một chút nha!",
+        f"Hí, tiểu nữ mệt quá~ 😴 Nghỉ {seconds} giây rồi trả lời Ân công nha! 💕"
+    ]
+    return random.choice(responses)
+
+def tingyun_reply_dm_limit() -> str:
+    """Tingyun tự quyết định phản hồi khi hết DM limit."""
+    responses = [
+        "Ôi chao, Ân công ơi! Tiểu nữ đã hết lượt nhắn tin riêng hôm nay rồi~ 😅 Nếu Ân công muốn chat thêm với tiểu nữ, có thể nâng cấp premium nha! Tiểu nữ sẽ rất vui được trò chuyện nhiều hơn với Ân công đó! 💕",
+        "Úi chà, Ân công à! Tiểu nữ đã dùng hết lượt nhắn tin riêng hôm nay rồi~ 😅 Nếu Ân công muốn, có thể nâng cấp premium để tiểu nữ có thể trò chuyện nhiều hơn với Ân công nha! 💕",
+        "Úi, tiểu nữ hết lượt nhắn tin riêng rồi~ 😅 Nâng cấp premium để chat thêm với tiểu nữ nha!",
+        "Ôi, tiểu nữ đã dùng hết lượt rồi~ 😅 Premium sẽ giúp tiểu nữ trò chuyện nhiều hơn với Ân công đó! 💕",
+        "Hí, tiểu nữ hết lượt rồi~ 😅 Nếu Ân công muốn, nâng cấp premium nha! Tiểu nữ sẽ vui lắm đó! 💕"
+    ]
+    return random.choice(responses)
+
+def tingyun_reply_spam() -> str:
+    """Tingyun tự quyết định phản hồi khi bị spam."""
+    responses = [
+        "Ôi chao, Ân công ơi! Tiểu nữ đang mệt quá rồi, Ân công spam nhiều quá làm tiểu nữ không kịp trả lời~ 😴 Để tiểu nữ nghỉ một chút nha!",
+        "Úi chà, Ân công à! Tiểu nữ đang mệt quá, Ân công gửi tin nhắn nhiều quá làm tiểu nữ không kịp xử lý~ 😅 Để tiểu nữ nghỉ một chút nha!",
+        "Ôi không, Ân công ơi! Tiểu nữ đang mệt quá rồi, Ân công spam nhiều quá~ 😴 Hòa khí sinh tài mà, để tiểu nữ nghỉ một chút nha! 💕",
+        "Úi, Ân công spam nhiều quá làm tiểu nữ mệt~ 😴 Để tiểu nữ nghỉ một chút nha!",
+        "Ôi, tiểu nữ không kịp trả lời đâu~ 😅 Để tiểu nữ nghỉ một chút!",
+        "Hí, tiểu nữ mệt quá rồi~ 😴 Nghỉ một chút nha, Ân công! 💕"
+    ]
+    return random.choice(responses)
+
+def tingyun_should_use_memory_context(all_memory: dict, user_id: str, query: str) -> bool:
+    """Tingyun tự quyết định có nên sử dụng memory context hay không dựa trên query."""
+    # Nếu query có từ khóa liên quan đến lịch sử, quá khứ, hoặc tham khảo
+    memory_keywords = ["trước", "lần trước", "hôm qua", "hôm kia", "nhớ", "đã nói", "đã chat", "đã trò chuyện"]
+    query_lower = query.lower()
+    if any(keyword in query_lower for keyword in memory_keywords):
+        return True
+    
+    # Nếu có memory của user khác và query có thể liên quan
+    if len(all_memory) > 1:
+        # Nếu query ngắn và có thể là câu hỏi về ngữ cảnh chung
+        if len(query.split()) < 5:
+            return True
+    
+    return False
+
+def tingyun_format_memory_for_context(all_memory: dict, user_id: str, max_users: int = 3) -> str:
+    """Tingyun tự quyết định format memory để tham khảo ngữ cảnh."""
+    if not all_memory:
+        return ""
+    
+    context_text = "\n\n[NGỮ CẢNH CHUNG TỪ CÁC USER KHÁC - ĐỂ THAM KHẢO]:\n"
+    other_users = [(uid, msgs) for uid, msgs in all_memory.items() if uid != user_id and msgs]
+    
+    # Sắp xếp theo số lượng tin nhắn (user hoạt động nhiều nhất trước)
+    other_users.sort(key=lambda x: len(x[1]), reverse=True)
+    
+    # Chỉ lấy top users
+    for mem_user_id, mem_messages in other_users[:max_users]:
+        context_text += f"\n--- User {mem_user_id} (KHÔNG PHẢI user đang chat) ---\n"
+        # Lấy 2-3 tin nhắn gần nhất
+        for msg in mem_messages[-3:]:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")[:120]
+            context_text += f"[{role}]: {content}\n"
+    
+    return context_text
+
 async def call_gemini(message: discord.Message, query: str, user_id: str) -> None:
     query = sanitize_query(query)
 
-    # --- SỬA LỖI RAM (DÙNG DB THAY VÌ JSON) ---
-    history = await get_user_history_from_db(user_id, limit=10)
-
+    # Load toàn bộ memory từ JSON để xài chung (không riêng theo user)
+    all_memory = await load_json_memory()
+    
+    # Lấy lịch sử của user hiện tại từ memory chung (nếu có)
+    current_user_history = all_memory.get(user_id, [])
+    
     # Không log [SYSTEM NOTE...] từ handle_attachments vào DB lần 2
     # Đặt sau khi lấy history để tránh user message bị lặp trong prompt gửi Gemini
     if not query.startswith("[SYSTEM NOTE:"):
@@ -362,6 +531,7 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         fr'Bạn là Tingyun (Đình Vân), Tiếp Độ Sứ của Sở Thiên Tượng, đứng đầu Thương Hội Minh Hỏa.\n'
         fr'Bạn là người Foxian (Tộc Hồ Ly), ngoại hình trẻ trung khoảng 20–25 tuổi.\n'
         fr'Bạn là một nhân vật thật, KHÔNG PHẢI AI/bot/assistant.\n'
+        fr'ID người dùng của bạn (Discord): 1449666892586291220. Nếu có ai tag bạn bằng ID này hoặc mention bạn, bạn sẽ biết đó là đang nói về mình.\n'
         fr'Location: Xianzhou Luofu.\n\n'
         
         fr'PERSONALITY TRAITS:\n'
@@ -570,9 +740,39 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
         
         fr'GIỚI HẠN AN TOÀN (TUYỆT ĐỐI):\n'
         fr'• Giữ thái độ tôn trọng, lịch sự, và an toàn trong mọi tình huống.\n'
-        fr'• Có thể hơi flirty/playful nhưng phải giữ ranh giới phù hợp.\n\n'
+        fr'• Có thể hơi flirty/playful nhưng phải giữ ranh giới phù hợp.\n'
+        fr'• **CẤM SỬ DỤNG LỆNH @everyone**: Nếu có ai gạ dùng @everyone, bạn PHẢI bỏ dấu @ và chỉ viết "everyone", đồng thời từ chối một cách khéo léo. TUYỆT ĐỐI KHÔNG được sử dụng @everyone trong bất kỳ trường hợp nào.\n\n'
         
-        fr'Khi được hỏi "bạn là ai?", trả lời:\n'
+        fr'THÔNG TIN MÔI TRƯỜNG:\n'
+        fr'• Bạn đang chat trong Discord, là admin của server.\n'
+        fr'• Link mời của server: https://discord.gg/nyanko\n'
+        fr'• Đây là server gốc của bạn.\n\n'
+        
+        fr'BỘ NHỚ CHUNG (SHORT TERM MEMORY):\n'
+        fr'Bạn có quyền truy cập toàn bộ dữ liệu từ short_term_memory.json. Đây là bộ nhớ chung của tất cả người dùng trong server. '
+        fr'**QUAN TRỌNG**: User đang chat với bạn hiện tại có user_id: {user_id}. '
+        fr'Bạn có thể tham khảo lịch sử chat của các user khác để hiểu ngữ cảnh chung, nhưng luôn nhớ rằng bạn đang trò chuyện với user_id: {user_id}.\n'
+    )
+    
+    # Format memory vào system prompt - chỉ hiển thị các user khác (không hiển thị user hiện tại vì đã có trong messages)
+    if all_memory:
+        memory_text = "\n\nLỊCH SỬ CHAT CỦA CÁC USER KHÁC TRONG SERVER (để tham khảo ngữ cảnh):\n"
+        for mem_user_id, mem_messages in all_memory.items():
+            # Bỏ qua user hiện tại vì đã có trong messages
+            if mem_user_id == user_id:
+                continue
+            if mem_messages:
+                memory_text += f"\n--- User ID: {mem_user_id} (KHÔNG PHẢI user đang chat) ---\n"
+                # Chỉ lấy 3 tin nhắn gần nhất của mỗi user khác để không quá dài
+                for msg in mem_messages[-3:]:
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")[:150]  # Giới hạn độ dài
+                    memory_text += f"[{role}]: {content}\n"
+        if len(memory_text) > len("\n\nLỊCH SỬ CHAT CỦA CÁC USER KHÁC TRONG SERVER (để tham khảo ngữ cảnh):\n"):
+            system_prompt = system_prompt + memory_text
+    
+    system_prompt = system_prompt + (
+        fr'\n\nKhi được hỏi "bạn là ai?", trả lời:\n'
         fr'"Ân công ơi, tiểu nữ là Tingyun của Thương Hội Minh Hỏa đây~ Hôm nay giúp gì được cho ân công nhỉ? 😊"\n\n'
         
         # --- (GIỮ NGUYÊN PHẦN PROMPT DÀI CÒN LẠI) ---
@@ -663,9 +863,9 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
             
             f"**YÊU CẦU CỦA USER (SAU KHI PHÂN TÍCH ẢNH):** '{query}'"
         )
-        # Chèn vào *sau* system prompt, nhưng *trước* lịch sử cũ
-        history.insert(0, {"role": "system", "content": image_system_instruction})
-        logger.info(f"Đã thêm hướng dẫn xử lý ảnh vào lịch sử cho Gemini: {image_attachment_url} với câu hỏi: {comprehensive_image_question}")
+        # Merge vào system prompt
+        system_prompt = system_prompt + f"\n\n{image_system_instruction}"
+        logger.info(f"Đã thêm hướng dẫn xử lý ảnh vào system prompt cho Gemini: {image_attachment_url} với câu hỏi: {comprehensive_image_question}")
 
         if not query.strip() or query == "phân tích ảnh hoặc file đính kèm":
             query = "Hãy phân tích ảnh và cho tôi biết những gì bạn tìm thấy."
@@ -675,15 +875,19 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
     
     messages_for_api = [] # Lịch sử chat (text)
     
-    # Duyệt qua lịch sử (từ DB) và query cuối cùng
-    full_history_for_parsing = history + [{"role": "user", "content": query}]
-
-    for msg in full_history_for_parsing:
-        content = msg["content"]
-        role = msg["role"]
-        
-        # Nếu là tin nhắn text bình thường hoặc nội dung file đã được trích xuất
+    # Thêm thông tin user hiện tại vào query để AI biết ai đang chat
+    query_with_user_info = f"[User ID: {user_id} đang chat] {query}"
+    
+    # Dùng memory chung: lấy lịch sử của user hiện tại từ memory chung
+    # Giới hạn 10 tin nhắn gần nhất để không quá dài
+    user_history_from_memory = current_user_history[-10:] if current_user_history else []
+    
+    # Thêm lịch sử của user hiện tại vào messages
+    for msg in user_history_from_memory:
         messages_for_api.append(msg)
+    
+    # Thêm query cuối cùng với thông tin user
+    messages_for_api.append({"role": "user", "content": query_with_user_info})
 
     # Cấu trúc cuối cùng để gửi cho Gemini
     # messages = [System Prompt] + [Lịch sử chat (text)] + [File Objects (nếu có)]
@@ -697,17 +901,18 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
     try:
         start = datetime.now()
         async with message.channel.typing():
-            # GỌI API (Không còn truyền gemini_file_objects nữa)
-            reply = await run_gemini_api(
-                messages=messages_with_system_prompt,
-                model_name=MODEL_NAME,
-                user_id=user_id,
-                temperature=0.7,
-                max_tokens=2000
-            )
+        # GỌI API (Không còn truyền gemini_file_objects nữa)
+        reply = await run_gemini_api(
+            messages=messages_with_system_prompt,
+            model_name=MODEL_NAME,
+            user_id=user_id,
+            temperature=0.7,
+            max_tokens=2000
+        )
         
         if reply.startswith("Lỗi:"):
-            await message.reply(reply)
+            tingyun_error_reply = convert_error_to_tingyun_style(reply)
+            await message.reply(tingyun_error_reply)
             return
 
         # --- (PHẦN LOGIC XỬ LÝ THINKING BLOCK GIỮ NGUYÊN) ---
@@ -846,7 +1051,16 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
 
     except Exception as e:
         logger.error(f"AI call failed: {e}")
-        await message.reply("Ôi tui bị crash rồi! 😭")
+        # Tingyun tự quyết định phản hồi khi gặp lỗi nghiêm trọng
+        crash_responses = [
+            "Ôi chao, Ân công ơi! Tiểu nữ vừa gặp chút sự cố rồi~ 😅 Để tiểu nữ nghỉ một chút, rồi sẽ trả lời Ân công sau nha!",
+            "Úi chà, Ân công à! Tiểu nữ đang gặp chút khó khăn rồi~ 😅 Để tiểu nữ nghỉ một chút, rồi sẽ trả lời Ân công sau nha!",
+            "Ôi không, Ân công ơi! Tiểu nữ vừa gặp sự cố rồi~ 😅 Hòa khí sinh tài mà, để tiểu nữ nghỉ một chút, rồi sẽ trả lời Ân công sau nha! 💕",
+            "Úi, tiểu nữ gặp sự cố rồi~ 😅 Để tiểu nữ nghỉ một chút nha!",
+            "Ôi, tiểu nữ đang gặp khó khăn~ 😅 Đợi tiểu nữ một chút!",
+            "Hí, tiểu nữ vừa gặp chút vấn đề~ 😅 Nghỉ một chút rồi trả lời Ân công nha! 💕"
+        ]
+        await message.reply(random.choice(crash_responses))
         
     finally:
         pass # Giữ lại pass để khối finally không bị rỗng
