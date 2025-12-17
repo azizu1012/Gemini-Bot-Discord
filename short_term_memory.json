@@ -1,10 +1,6 @@
 {
   "1414457651676581899": [
     {
-      "role": "user",
-      "content": "Tingyun vô chơi chung nối chữ nè"
-    },
-    {
       "role": "assistant",
       "content": "Ôi chao, Ân công ơi! Nối chữ hả? Nghe *vui vẻ* quá đi à! Tiểu nữ cũng thích mấy trò chơi *thú vị* như vầy lắm đó nha! 😊\nĐể tiểu nữ bắt đầu trước nha: **\"Hòa khí\"** nè!\nĐến lượt Ân công đó nha! Chữ tiếp theo phải bắt đầu bằng chữ \"I\" đó! Mau mau lên nào, tiểu nữ đang hóng lắm đó! 💕"
     },
@@ -39,6 +35,10 @@
     {
       "role": "user",
       "content": "Ngại hỏ"
+    },
+    {
+      "role": "user",
+      "content": "hello tingyun"
     }
   ],
   "275238934030712832": [
@@ -48,10 +48,6 @@
     }
   ],
   "1176189867856769109": [
-    {
-      "role": "user",
-      "content": "[SYSTEM NOTE: Đã tự động lưu 1 ảnh của user vào bộ nhớ dài hạn (user_notes). Các URL ảnh: https://cdn.discordapp.com/attachments/1448637997846106183/1449743137735053312/Screenshot_2025-12-14-19-41-08-936_com.discord.jpg?ex=69400202&is=693eb082&hm=64bb4a10f269ba2d7d990822f30c786c43b20759f441edab7e6c5f6807dd552f&. User có thể hỏi về nội dung ảnh này."
-    },
     {
       "role": "user",
       "content": "[SYSTEM NOTE: Đã tự động lưu 1 ảnh của user vào bộ nhớ dài hạn (user_notes). Các URL ảnh: https://cdn.discordapp.com/attachments/1448637997846106183/1449798971470909460/FB_IMG_1765711048925.jpg?ex=69403602&is=693ee482&hm=747beae56aa4bdf9649329aa926ca162fa8d1fafd0da6e159b7dc6c861036db3&. User có thể hỏi về nội dung ảnh này."
@@ -87,6 +83,10 @@
     {
       "role": "user",
       "content": "[SYSTEM NOTE: Đã xử lý 1 file dữ liệu. Thông tin xử lý:\nFile: lv_7575507451777125685_20251214152003.mp4 - Trạng thái: [LƯU Ý: File 'lv_7575507451777125685_20251214152003.mp4' có định dạng '.mp4' không được hỗ trợ trích xuất văn bản. Chỉ hỗ trợ .txt và .pdf.]]"
+    },
+    {
+      "role": "user",
+      "content": "@Tingyun#4200 love you"
     }
   ],
   "970626073199005717": [

@@ -40,14 +40,32 @@ GEMINI_API_KEY_TEST = os.getenv('GEMINI_API_KEY_TEST')
 GEMINI_API_KEY_BACKUP = os.getenv('GEMINI_API_KEY_BACKUP')
 GEMINI_API_KEY_EXTRA1 = os.getenv('GEMINI_API_KEY_EXTRA1')
 GEMINI_API_KEY_EXTRA2 = os.getenv('GEMINI_API_KEY_EXTRA2')
+GEMINI_API_KEY_EXTRA3 = os.getenv('GEMINI_API_KEY_EXTRA3')
+GEMINI_API_KEY_EXTRA4 = os.getenv('GEMINI_API_KEY_EXTRA4')
+GEMINI_API_KEY_EXTRA5 = os.getenv('GEMINI_API_KEY_EXTRA5')
+GEMINI_API_KEY_EXTRA6 = os.getenv('GEMINI_API_KEY_EXTRA6')
+GEMINI_API_KEY_EXTRA7 = os.getenv('GEMINI_API_KEY_EXTRA7')
+GEMINI_API_KEY_EXTRA8 = os.getenv('GEMINI_API_KEY_EXTRA8')
+GEMINI_API_KEY_EXTRA9 = os.getenv('GEMINI_API_KEY_EXTRA9')
+GEMINI_API_KEY_EXTRA10 = os.getenv('GEMINI_API_KEY_EXTRA10')
 
+# Chỉ lấy các key có giá trị (không None và không rỗng)
+# Tự động bỏ qua các key không có trong .env
 GEMINI_API_KEYS = [key for key in [
     GEMINI_API_KEY_PROD,
     GEMINI_API_KEY_TEST,
     GEMINI_API_KEY_BACKUP,
     GEMINI_API_KEY_EXTRA1,
-    GEMINI_API_KEY_EXTRA2
-] if key]
+    GEMINI_API_KEY_EXTRA2,
+    GEMINI_API_KEY_EXTRA3,
+    GEMINI_API_KEY_EXTRA4,
+    GEMINI_API_KEY_EXTRA5,
+    GEMINI_API_KEY_EXTRA6,
+    GEMINI_API_KEY_EXTRA7,
+    GEMINI_API_KEY_EXTRA8,
+    GEMINI_API_KEY_EXTRA9,
+    GEMINI_API_KEY_EXTRA10
+] if key and key.strip()]  # Bỏ qua None, empty string, và string chỉ có khoảng trắng
 
 if not GEMINI_API_KEYS:
     logger.error("Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.")

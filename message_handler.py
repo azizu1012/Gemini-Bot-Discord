@@ -901,14 +901,14 @@ async def call_gemini(message: discord.Message, query: str, user_id: str) -> Non
     try:
         start = datetime.now()
         async with message.channel.typing():
-        # GỌI API (Không còn truyền gemini_file_objects nữa)
-        reply = await run_gemini_api(
-            messages=messages_with_system_prompt,
-            model_name=MODEL_NAME,
-            user_id=user_id,
-            temperature=0.7,
-            max_tokens=2000
-        )
+            # GỌI API (Không còn truyền gemini_file_objects nữa)
+            reply = await run_gemini_api(
+                messages=messages_with_system_prompt,
+                model_name=MODEL_NAME,
+                user_id=user_id,
+                temperature=0.7,
+                max_tokens=2000
+            )
         
         if reply.startswith("Lỗi:"):
             tingyun_error_reply = convert_error_to_tingyun_style(reply)
