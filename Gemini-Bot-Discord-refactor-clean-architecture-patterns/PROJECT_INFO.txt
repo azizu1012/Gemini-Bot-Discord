@@ -1,0 +1,42 @@
+Discord Bot - Tingyun Character (Honkai: Star Rail)
+=====================================================
+
+Structure:
+----------
+main.py                    - Entry point
+src/
+  ├── core/               - Config, logger
+  ├── handlers/           - Bot core, message handling, server
+  ├── services/           - API calls, memory, tools, caching
+  ├── managers/           - Managers (cache, notes, premium, cleanup)
+  ├── database/           - Database repository
+  ├── tools/              - Tool definitions
+  └── instructions/       - Prompt/instructions for model
+data/                      - Persistent data (memory, cache)
+uploaded_files/            - User uploaded files
+
+Key Components:
+---------------
+- thinking_cache.py       - Cache THINKING blocks
+- dual_api_strategy.py    - Optimize API calls (2-call max)
+- enhanced_thinking_handler.py - THINKING block orchestration
+- api_key_manager.py      - Manage API keys with rate limiting
+- message_handler.py      - Discord message processing
+
+Features:
+---------
+✅ Optimized 2-call API strategy (60-80% fewer calls)
+✅ THINKING block caching
+✅ Automatic search fallback
+✅ User note persistence
+✅ Rate limiting & API key management
+✅ Premium user support
+✅ File upload & parsing
+
+To Run:
+-------
+1. Set DISCORD_TOKEN in .env
+2. Set GEMINI_API_KEYS in .env
+3. python main.py
+
+Dependencies: See requirements.txt
