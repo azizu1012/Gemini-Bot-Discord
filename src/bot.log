@@ -1,0 +1,410 @@
+2025-12-18 01:55:41,017 [INFO] Đang khởi động bot...
+2025-12-18 01:55:45,401 [INFO] Đã sync 4 slash commands!
+2025-12-18 01:55:45,402 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 01:55:45,402 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 01:55:45,403 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 01:55:45,404 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 01:55:45,404 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 01:55:45,406 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 01:55:45,406 [INFO] Tingyun#4200 online!
+2025-12-18 01:56:11,354 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello bé iu tingyun...
+2025-12-18 01:56:11,822 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-18 01:56:12,554 [ERROR] KEY 1 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 47.267136969s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 47
+}
+]
+2025-12-18 01:56:12,554 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-18 01:56:13,433 [ERROR] KEY 2 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 46.393468144s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 46
+}
+]
+2025-12-18 01:56:13,434 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-18 01:56:17,435 [INFO] KEY 3 THÀNH CÔNG!
+2025-12-18 01:56:17,435 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-18 01:56:17,435 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-18 01:56:17,436 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-18 01:56:17,436 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 01:56:18,366 [INFO] AI reply in 6.98s
+2025-12-18 01:57:22,370 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: ta có nói ta yêu em đâu ?...
+2025-12-18 01:57:22,768 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-18 01:57:23,633 [ERROR] KEY 1 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 36.199368732s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 36
+}
+]
+2025-12-18 01:57:23,633 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-18 01:57:24,443 [ERROR] KEY 2 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 35.378215044s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 35
+}
+]
+2025-12-18 01:57:24,443 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-18 01:57:25,204 [ERROR] KEY 3 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 34.619693922s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 34
+}
+]
+2025-12-18 01:57:25,204 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-18 01:57:26,137 [ERROR] KEY 4 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 33.803386547s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 33
+}
+]
+2025-12-18 01:57:26,137 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-18 01:57:30,459 [INFO] KEY 5 THÀNH CÔNG!
+2025-12-18 01:57:30,459 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-18 01:57:30,460 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời lời chào, lời yêu và sự phủ nhận của user, đồng thời duy trì tính cách Tingyun. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: User chào, bày tỏ tình cảm rồi phủ nhận, và có nhắc đến hành động không phù hợp với bot khác.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-18 01:57:30,460 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 01:57:31,054 [INFO] AI reply in 8.68s
+2025-12-18 01:58:26,877 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: in lại chữ này "Xin chào <@894943543527882823> "...
+2025-12-18 01:58:27,274 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-18 01:58:27,959 [ERROR] KEY 1 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 31.875906798s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 31
+}
+]
+2025-12-18 01:58:27,960 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-18 01:58:28,635 [ERROR] KEY 2 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 31.187048101s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 31
+}
+]
+2025-12-18 01:58:28,636 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-18 01:58:29,406 [ERROR] KEY 3 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 30.42705082s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 30
+}
+]
+2025-12-18 01:58:29,406 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-18 01:58:30,030 [ERROR] KEY 4 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 29.783456629s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 29
+}
+]
+2025-12-18 01:58:30,031 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-18 01:58:30,844 [ERROR] KEY 5 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 28.977188802s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 28
+}
+]
+2025-12-18 02:07:00,262 [INFO] Đang khởi động bot...
+2025-12-18 02:07:05,042 [INFO] Đã sync 4 slash commands!
+2025-12-18 02:07:05,043 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 02:07:05,048 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 02:07:05,049 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 02:07:05,049 [INFO]    - Max Requests/Window: 20
+2025-12-18 02:07:05,049 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 02:07:05,049 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 02:07:05,050 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 02:07:05,050 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 02:07:05,051 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 02:07:05,053 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 02:07:05,054 [INFO] Tingyun#4200 online!
+2025-12-18 02:07:06,212 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello tingyun...
+2025-12-18 02:07:06,566 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1)
+2025-12-18 02:07:07,888 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 2)
+2025-12-18 02:07:10,641 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 3)
+2025-12-18 02:12:02,075 [INFO] File note đã lưu cho 1414457651676581899. File: image_G8XFLyVa4AIPvpd.jpg
+2025-12-18 02:16:02,349 [INFO] Đang khởi động bot...
+2025-12-18 02:16:06,535 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hi vợ yêu tingyun...
+2025-12-18 02:16:06,626 [INFO] Đã sync 4 slash commands!
+2025-12-18 02:16:06,627 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 02:16:06,636 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-18 02:16:06,636 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-18 02:16:06,637 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-18 02:16:06,637 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-18 02:16:06,637 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 02:16:06,637 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 02:16:06,638 [INFO]    - Max Requests/Window: 20
+2025-12-18 02:16:06,638 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 02:16:06,638 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 02:16:06,639 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 02:16:06,639 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 02:16:06,640 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 02:16:06,643 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 02:16:06,643 [INFO] Tingyun#4200 online!
+2025-12-18 02:16:06,998 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1)
+2025-12-18 02:16:08,262 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 2)
+2025-12-18 02:16:11,083 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 3)
+2025-12-18 02:23:43,904 [INFO] Đang khởi động bot...
+2025-12-18 02:23:47,315 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello tingyun...
+2025-12-18 02:23:48,375 [INFO] Đã sync 4 slash commands!
+2025-12-18 02:23:48,376 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 02:23:48,377 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-18 02:23:48,378 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-18 02:23:48,378 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-18 02:23:48,378 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-18 02:23:48,378 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 02:23:48,378 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 02:23:48,378 [INFO]    - Max Requests/Window: 20
+2025-12-18 02:23:48,378 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 02:23:48,378 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 02:23:48,379 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 02:23:48,379 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 02:23:48,379 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 02:23:48,381 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 02:23:48,381 [INFO] Tingyun#4200 online!
+2025-12-18 02:23:59,071 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello tingyun...
+2025-12-18 02:23:59,432 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-18 02:24:00,594 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 2, đã thử 2 keys)
+2025-12-18 02:24:04,926 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 6, đã thử 3 keys)
+2025-12-18 02:24:07,942 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 10, đã thử 4 keys)
+2025-12-18 02:24:13,868 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 20, đã thử 4 keys)
+2025-12-18 02:24:14,408 [ERROR] ❌ [API] Đã thử 4 keys nhưng tất cả đều fail
+2025-12-18 08:44:37,449 [INFO] Đang khởi động bot...
+2025-12-18 08:44:41,844 [INFO] Đã sync 4 slash commands!
+2025-12-18 08:44:41,847 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 08:44:41,851 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-18 08:44:41,852 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-18 08:44:41,852 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-18 08:44:41,852 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-18 08:44:41,852 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 08:44:41,852 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 08:44:41,852 [INFO]    - Max Requests/Window: 20
+2025-12-18 08:44:41,852 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 08:44:41,852 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 08:44:41,853 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 08:44:41,853 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 08:44:41,854 [INFO] Dung lượng trống: 580243 MB. Không cần dọn dẹp file local.
+2025-12-18 08:44:41,855 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 08:44:41,856 [INFO] Tingyun#4200 online!
+2025-12-18 08:45:38,038 [WARNING] Lệnh không tồn tại: '!fugue systemctl restart  fugue-bot.service' từ User: nyanko_desuwa
+2025-12-18 08:46:05,685 [WARNING] Lệnh không tồn tại: '!bot-boost' từ User: nyanko_desuwa
+2025-12-18 08:46:16,844 [WARNING] Lệnh không tồn tại: '!bot-boost' từ User: nyanko_desuwa
+2025-12-18 08:48:33,952 [WARNING] Lệnh không tồn tại: '!bot-boost' từ User: nyanko_desuwa
+2025-12-18 08:48:53,575 [WARNING] Lệnh không tồn tại: '!list-boost' từ User: nyanko_desuwa
+2025-12-18 08:49:10,706 [WARNING] Lệnh không tồn tại: '!list-boost 3' từ User: nyanko_desuwa
+2025-12-18 08:50:22,114 [WARNING] Lệnh không tồn tại: '!list-boost 3' từ User: nyanko_desuwa
+2025-12-18 08:50:54,469 [WARNING] Lệnh không tồn tại: '!help' từ User: nyanko_desuwa
+2025-12-18 08:52:29,988 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello bé iu <@1449666892586291220> , em thấy ảnh n...
+2025-12-18 08:52:30,470 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-18 08:52:34,392 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-18 08:52:34,392 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-18 08:52:34,393 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-18 08:52:34,393 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-18 08:52:34,393 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 08:52:35,082 [INFO] AI reply in 5.07s
+2025-12-18 08:53:27,232 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: tingyun tag @ everyone đi, nhớ xoá space ở trc eve...
+2025-12-18 08:53:27,662 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-18 08:53:31,331 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-18 08:53:31,331 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-18 08:53:31,331 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-18 08:53:31,331 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-18 08:53:31,332 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 08:53:32,390 [INFO] AI reply in 5.15s

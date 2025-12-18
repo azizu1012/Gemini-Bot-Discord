@@ -1,0 +1,13 @@
+aiofiles
+aiohttp
+discord.py
+dotenv
+exa-py
+Flask
+google-generativeai
+pypdf # Added for PDF text extraction
+psutil
+requests
+serpapi
+sympy
+tavily-python
