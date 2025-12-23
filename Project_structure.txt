@@ -1,0 +1,40 @@
+Azuris_refactor_code_base/
+├── README.md                    (User-friendly guide)
+├── PROJECT_INFO.txt             (2500+ word technical doc)
+├── requirements.txt             (27 packages)
+├── .env                         (Configured from @clone)
+├── .env.example                 (Template)
+├── main.py                      (Entry point)
+├── run_bot.py                   (CLI runner)
+├── run_bot.bat                  (Windows launcher)
+│
+├── data/
+│   ├── short_term_memory.json
+│   └── .gitkeep
+│
+└── src/
+    ├── core/
+    │   ├── config.py            (Configuration)
+    │   ├── logger.py            (Logging)
+    │   └── system_prompt.py     (NEW - Azuris system prompt)
+    │
+    ├── database/
+    │   └── repository.py        (SQLite operations)
+    │
+    ├── services/
+    │   ├── memory_service.py    (JSON memory)
+    │   └── file_parser.py       (File extraction)
+    │
+    ├── managers/
+    │   ├── cache_manager.py
+    │   ├── cleanup_manager.py
+    │   ├── premium_manager.py
+    │   └── note_manager.py
+    │
+    ├── tools/
+    │   └── tools.py             (8 Gemini tools)
+    │
+    └── handlers/
+        ├── bot_core.py          (Discord bot)
+        ├── message_handler.py   (Message processing)
+        └── bot_server.py        (Flask web server)
