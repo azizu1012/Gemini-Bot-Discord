@@ -297,19 +297,6 @@ class ToolsManager:
                     }
                 )
             ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
-                    name="list_google_drive_files",
-                    description="Liệt kê các tệp trong một thư mục cụ thể trên Google Drive. Trả về danh sách tên tệp và ID.",
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "folder_id": {"type": "string", "description": "ID của thư mục Google Drive cần liệt kê. Để trống để liệt kê từ thư mục gốc 'My Drive'."}
-                        },
-                        "required": []
-                    }
-                )
-            ]),
         ]
     
     def get_web_search_cache(self, query: str):
@@ -520,57 +507,6 @@ class ToolsManager:
                 return f"Đã xảy ra lỗi không mong muốn khi xử lý hình ảnh: {e}"
         
         return f"Lỗi: Đã thử lại {MAX_RETRIES} lần nhưng không thể kết nối đến dịch vụ nhận diện hình ảnh do giới hạn rate."
-    
-    async def run_list_google_drive_files(self, folder_id: str = None):
-        """List files in Google Drive folder."""
-        self.logger.info(f"Starting to list Google Drive files for folder_id: {folder_id}")
-        
-        if not await asyncio.to_thread(os.path.exists, self.SERVICE_ACCOUNT_FILE):
-            return "Lỗi: Không tìm thấy tệp credentials.json. Vui lòng đảm bảo tệp tồn tại trong thư mục gốc."
-        
-        try:
-            creds = await asyncio.to_thread(
-                Credentials.from_service_account_file,
-                self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES
-            )
-            
-            service = await asyncio.to_thread(build, 'drive', 'v3', credentials=creds)
-            
-            q_folder = f"'{folder_id}' in parents" if folder_id else "'root' in parents"
-            
-            results = await asyncio.to_thread(
-                lambda: service.files().list(
-                    q=f"{q_folder} and trashed=false",
-                    pageSize=30,
-                    fields="nextPageToken, files(id, name, mimeType, webViewLink)"
-                ).execute()
-            )
-            
-            items = results.get('files', [])
-            
-            if not items:
-                return "Không tìm thấy tệp nào trong thư mục này."
-            
-            file_list = []
-            for item in items:
-                file_list.append({
-                    "name": item['name'],
-                    "id": item['id'],
-                    "type": item['mimeType'],
-                    "url": item.get('webViewLink', 'N/A')
-                })
-            
-            self.logger.info(f"Found {len(file_list)} files on Google Drive.")
-            return json.dumps(file_list, ensure_ascii=False, indent=2)
-        
-        except HttpError as error:
-            self.logger.error(f"Google Drive API error: {error}")
-            if error.resp.status == 404:
-                return f"Lỗi: Không tìm thấy thư mục với ID '{folder_id}'. Hãy chắc chắn ID là chính xác và đã được chia sẻ với bot."
-            return f"Đã xảy ra lỗi khi truy cập Google Drive: {error}"
-        except Exception as e:
-            self.logger.error(f"Unknown error with Google Drive: {e}")
-            return f"Đã xảy ra lỗi không mong muốn: {e}"
     
     async def _search_cse(self, query: str, cse_id: str, api_key: str, index: int = 0, start_idx: int = 1, force_lang: str = None):
         """Search using Google Custom Search Engine."""
@@ -844,7 +780,7 @@ class ToolsManager:
     async def call_tool(self, function_call, user_id: str):
         """Dispatch tool calls to appropriate handlers."""
         name = function_call.name
-        args = dict(function_call.args)
+        args = dict(function_call.args) if function_call.args else {}
         self.logger.info(f"TOOL CALLED: {name} | Args: {args} | User: {user_id}")
         
         try:
@@ -878,11 +814,7 @@ class ToolsManager:
                 if not image_url or not question:
                     return "Lỗi: 'image_url' và 'question' không được rỗng cho image_recognition."
                 return await self.run_image_recognition(image_url, question)
-            
-            elif name == "list_google_drive_files":
-                folder_id = args.get("folder_id")
-                return await self.run_list_google_drive_files(folder_id)
-            
+
             else:
                 return "Tool không tồn tại!"
         

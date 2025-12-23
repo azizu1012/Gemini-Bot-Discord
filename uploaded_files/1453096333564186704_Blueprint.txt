@@ -1,0 +1,74 @@
+Đây là **Blueprint (Sơ đồ chi tiết)** toàn bộ các bước để nâng cấp hệ thống của bot của bạn, bao gồm hệ thống **Premium Tier** mới và cơ chế **Google Drive Sync** bền vững.
+
+Bạn có thể sao chép cấu trúc này và cung cấp cho coder nội bộ.
+
+## 1\. Google Drive Sync (Bền vững Dữ liệu) 💾
+
+Mục tiêu: Đồng bộ 3 file quan trọng: `chat_history.db` (chứa Notes), `premium_users.json`, `short_term_memory.json`.
+
+-----
+
+### File: `config.py`
+
+| Vị trí | Hành động | Chi tiết Thay đổi |
+| :--- | :--- | :--- |
+| THÊM | **Google Drive Cấu hình** | ` python # --- GOOGLE DRIVE SYNC --- DRIVE_FOLDER_ID = os.getenv('DRIVE_FOLDER_ID', 'YOUR_DRIVE_FOLDER_ID') # Cần thêm vào .env  ` |
+
+### File: `database.py`
+
+| Vị trí | Hành động | Chi tiết Thay đổi |
+| :--- | :--- | :--- |
+| THÊM | **Import** | `from config import DB_PATH, logger, DRIVE_FOLDER_ID` |
+| THÊM | **Logic Drive API** | Thêm các hàm `_gdrive_upload(local_path, drive_name, folder_id)` và `_gdrive_download(drive_name, local_path, folder_id)`. **Cần thay thế Stub bằng code Google Drive API (ví dụ: `pydrive2`) thực tế.** |
+| THÊM | **Hàm Sync chính** | Thêm 2 hàm `async def sync_data_to_gdrive()` (upload 3 file) và `async def sync_data_from_gdrive()` (download 3 file, overwrite local). |
+
+### File: `bot_core.py`
+
+| Vị trí | Hành động | Chi tiết Thay đổi |
+| :--- | :--- | :--- |
+| THÊM | **Import** | `from discord.ext import commands, tasks` <br> `from database import init_db, cleanup_db, sync_data_to_gdrive, sync_data_from_gdrive` |
+| THÊM | **Lịch trình Sync** | Thêm `@tasks.loop(hours=1)` **`drive_sync_scheduler()`**.<br> - **3:00 sáng (giờ server)**: Chạy `sync_data_from_gdrive()` và `init_json_memory()` (tải lại memory sau khi DB được khôi phục).<br> - **17:00 chiều (giờ server)**: Chạy `sync_data_to_gdrive()` (sao lưu). |
+| SỬA ĐỔI | **`on_ready()`** | Khởi động lịch trình: `if not drive_sync_scheduler.is_running(): drive_sync_scheduler.start()`. |
+
+-----
+
+## 2\. Hệ thống Premium Tier và Quản lý dữ liệu (Note) 🏆
+
+### File: `config.py`
+
+| Vị trí | Hành động | Chi tiết Thay đổi |
+| :--- | :--- | :--- |
+| SỬA ĐỔI | **Tier Định nghĩa** | Thay thế `PREMIUM_RATE_LIMIT` cũ bằng dictionary `PREMIUM_TIERS` mới: <br>` python PREMIUM_TIERS = { "VIP_0": {"RATE_LIMIT": "20/60", "DM_LIMIT": 15, "NAME": "Standard Premium"}, "VIP_1": {"RATE_LIMIT": "40/60", "DM_LIMIT": 30, "NAME": "Gold VIP"}, "VIP_3": {"RATE_LIMIT": "INF/60", "DM_LIMIT": 99999, "NAME": "Diamond VIP", "CAN_DM_OTHER_USER": True} } DEFAULT_TIER = "FREE"  ` |
+| THÊM | **Hàm Getters** | Thêm các hàm helper như `get_user_tier_limits(tier)` và `can_dm_other_user(tier)`. |
+
+### File: `premium_manager.py`
+
+| Vị trí | Hành động | Chi tiết Thay đổi |
+| :--- | :--- | :--- |
+| SỬA ĐỔI | **Cấu trúc Dữ liệu** | Thay đổi logic load/save để xử lý **`Dict[str, str]`** (User ID -\> Tier Name) thay vì `List[str]`. |
+| THÊM | **`get_user_tier(user_id)`** | Trả về Tier Name (`VIP_X` hoặc `FREE`). |
+| THÊM | **`update_user_tier(user_id, tier_name)`** | Cập nhật Tier cho User. |
+| SỬA ĐỔI | **`remove_premium_user`** | Nếu user bị xóa, phải đưa Tier về **`DEFAULT_TIER`** (`FREE`) thay vì xóa khỏi list. |
+
+### File: `database.py` (Bảo vệ Notes)
+
+| Vị trí | Hành động | Chi tiết Thay đổi |
+| :--- | :--- | :--- |
+| SỬA ĐỔI | **`clear_all_data_db()`** | **Xóa dòng `c.execute("DELETE FROM user_notes")`**. Chỉ xóa `messages` (lịch sử chat). |
+| SỬA ĐỔI | **`clear_user_data_db(user_id)`** | **Xóa dòng `c.execute("DELETE FROM user_notes WHERE user_id = ?")`**. Chỉ xóa `messages` của User đó. |
+
+### File: `bot_core.py` (Lệnh Slash)
+
+| Vị trí | Lệnh / Biến | Chi tiết Logic |
+| :--- | :--- | :--- |
+| THÊM | **Biến Global** | `UPGRADE_TOKENS: Dict[str, str] = {} # {token_hash: tier_name}` |
+| THÊM | **Lệnh Admin** | **`/generate_token_upgrade tier:VIP_X`**: <br> 1. Kiểm tra Admin ID. <br> 2. Tạo `uuid` ngẫu nhiên. <br> 3. Hash token (`hashlib.sha256`). <br> 4. Lưu `hash: tier` vào `UPGRADE_TOKENS`. <br> 5. Gửi **token thô** cho Admin (ephemeral). |
+| THÊM | **Lệnh User** | **`/premium action:upgrade token:X`**: <br> 1. Hash token user nhập. <br> 2. Kiểm tra `UPGRADE_TOKENS`. <br> 3. Nếu OK, gọi `premium_manager.update_user_tier()`. <br> 4. **Xóa token khỏi `UPGRADE_TOKENS`**. |
+| THÊM | **Lệnh User** | **`/premium action:check`**: <br> 1. Gọi `premium_manager.get_user_tier()`. <br> 2. Hiển thị giới hạn từ `config.PREMIUM_TIERS`. |
+
+### File: `message_handler.py` (DM cho VIP\_3)
+
+| Vị trí | Hành động | Chi tiết Logic |
+| :--- | :--- | :--- |
+| THÊM | **Hàm kiểm tra** | Thêm hàm `is_dm_allowed_tier(user_id)` mới. <br> Logic: `return user_id == ADMIN_ID or config.can_dm_other_user(premium_manager.get_user_tier(user_id))` |
+| SỬA ĐỔI | **Xử lý DM** | Thay thế mọi lệnh kiểm tra quyền DM User khác (`if premium_manager.is_admin_user(user_id):`) bằng **`if is_dm_allowed_tier(user_id):`** để áp dụng cho VIP\_3. |

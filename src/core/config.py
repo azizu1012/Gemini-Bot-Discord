@@ -24,25 +24,18 @@ class Config:
         self.SUC_VIEN_USER_ID = os.getenv('SUC_VIEN_USER_ID', '')
         self.CHUI_USER_ID = os.getenv('CHUI_USER_ID', '')
         
-        # --- GEMINI API KEYS (MULTI-KEY STRATEGY) ---
-        self.GEMINI_API_KEY_PROD = os.getenv('GEMINI_API_KEY_PROD')
-        self.GEMINI_API_KEY_TEST = os.getenv('GEMINI_API_KEY_TEST')
-        self.GEMINI_API_KEY_BACKUP = os.getenv('GEMINI_API_KEY_BACKUP')
-        self.GEMINI_API_KEY_EXTRA1 = os.getenv('GEMINI_API_KEY_EXTRA1')
-        self.GEMINI_API_KEY_EXTRA2 = os.getenv('GEMINI_API_KEY_EXTRA2')
-        
-        self.GEMINI_API_KEYS = [key for key in [
-            self.GEMINI_API_KEY_PROD,
-            self.GEMINI_API_KEY_TEST,
-            self.GEMINI_API_KEY_BACKUP,
-            self.GEMINI_API_KEY_EXTRA1,
-            self.GEMINI_API_KEY_EXTRA2
-        ] if key]
+        # --- GEMINI API KEYS (DYNAMIC LOAD 1-15+) ---
+        self.GEMINI_API_KEYS = []
+        # Tự động load từ GEMINI_API_KEY_1 đến GEMINI_API_KEY_20
+        for i in range(1, 21): 
+            key = os.getenv(f'GEMINI_API_KEY_{i}')
+            if key:
+                self.GEMINI_API_KEYS.append(key)
         
         if not self.GEMINI_API_KEYS:
             self.logger.error("Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.")
         else:
-            self.logger.info(f"Đã thiết lập {len(self.GEMINI_API_KEYS)} Gemini API keys cho Failover.")
+            self.logger.info(f"✅ Đã thiết lập {len(self.GEMINI_API_KEYS)} Gemini API keys cho Smart Rotation.")
         
         # --- SEARCH API KEYS ---
         self.SERPAPI_API_KEY = os.getenv('SERPAPI_API_KEY')
