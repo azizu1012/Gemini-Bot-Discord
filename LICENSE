@@ -1,49 +1,89 @@
-GIẤY PHÉP HẠN CHẾ azizu1012
+AZURIS NON-COMMERCIAL LICENSE AGREEMENT (ANCL)
+Version 2.0 - Enterprise Edition
 
-THÔNG BÁO QUAN TRỌNG: Đây không phải là Giấy phép Mã nguồn mở. Việc Sử dụng cho Mục đích Thương mại bị NGHIÊM CẤM TUYỆT ĐỐI.
+COPYRIGHT (c) 2025 azizu1012. ALL RIGHTS RESERVED.
 
-Bản quyền (c) 2025 azizu1012. Bảo lưu mọi quyền.
+IMPORTANT - READ CAREFULLY: This End-User License Agreement ("Agreement") is a legal agreement between you (either an individual or a single entity) and azizu1012 ("Licensor") for the Azuris Discord Bot software product, which includes computer software and may include associated media, printed materials, and "online" or electronic documentation ("Software").
 
-MỞ ĐẦU
+BY INSTALLING, COPYING, OR OTHERWISE USING THE SOFTWARE, YOU AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT INSTALL OR USE THE SOFTWARE.
 
-Giấy phép Hạn chế azizu1012 này (sau đây gọi là "Giấy phép") quy định việc sử dụng Phần mềm (được định nghĩa dưới đây) do azizu1012 (sau đây gọi là "Bên Cấp phép") tạo ra và sở hữu. Bằng cách truy cập, sao chép, sửa đổi, hoặc sử dụng Phần mềm, người nhận (sau đây gọi là "Bên Được cấp phép") đồng ý bị ràng buộc bởi các điều khoản và điều kiện của Giấy phép này.
+ARTICLE 1. DEFINITIONS
+1.1. "Software" means the proprietary source code, object code, scripts, configuration files, and documentation provided by the Licensor under the name "Azuris Discord Bot".
+1.2. "Commercial Use" means any use of the Software for the purpose of direct or indirect financial gain, including but not limited to:
+     (a) Offering the Software as a service (SaaS) to third parties for a fee;
+     (b) Using the Software to support a business, enterprise, or commercial operation;
+     (c) Bundling the Software with other products or services that are sold or licensed for a fee;
+     (d) Soliciting donations, sponsorships, or "maintenance fees" specifically tied to the distribution or operation of this Software.
+1.3. "Non-Commercial Use" means personal, educational, or internal research use that does not involve Commercial Use.
+1.4. "Derivative Works" means any work based upon the Software, such as a revision, modification, translation, abridgment, condensation, or any other form in which the Software may be recast, transformed, or adapted.
 
-1. CÁC ĐỊNH NGHĨA
+ARTICLE 2. GRANT OF LICENSE
+2.1. License Grant. Subject to the terms and conditions of this Agreement, Licensor hereby grants to you a revocable, non-exclusive, non-transferable, non-sublicensable, worldwide license to install, execute, and modify the Software solely for your own Non-Commercial Use.
+2.2. Source Code. You may modify the source code of the Software for your own personal needs. However, any distribution of such modified source code (Derivative Works) must clearly state that it is a modification of the original Software and must remain subject to the terms of this Agreement.
 
-1.1. "Phần mềm" (Software) là mã nguồn gốc, tài liệu, các tệp đính kèm, và bất kỳ sửa đổi hoặc tác phẩm phái sinh nào được tạo ra sau đó bởi Bên Cấp phép.
-1.2. "Bên Cấp phép" (Licensor) là azizu1012.
-1.3. "Bên Được cấp phép" (Licensee) là bất kỳ cá nhân hoặc tổ chức nào thực hiện các quyền được cấp theo Giấy phép này.
-1.4. "Sử dụng" (Use) là việc thực hiện bất kỳ quyền nào bao gồm, nhưng không giới hạn, truy cập, thực thi, sao chép, hiển thị hoặc chạy Phần mềm.
-1.5. "Mục đích Thương mại" (Commercial Purpose) là bất kỳ việc sử dụng nào chủ yếu nhằm mục đích hoặc hướng tới lợi thế thương mại, lợi nhuận, bồi thường bằng tiền, hoặc các hoạt động tạo ra doanh thu. Điều này bao gồm, nhưng không giới hạn ở:
-     a) Bán Phần mềm, hoặc bất kỳ tác phẩm phái sinh nào của nó, trực tiếp hoặc gián tiếp.
-     b) Hợp nhất Phần mềm vào một sản phẩm hoặc dịch vụ được bán, cho thuê, hoặc cấp phép để kiếm lợi nhuận.
-     c) Cung cấp dịch vụ lưu trữ (hosting), tư vấn, hỗ trợ hoặc đào tạo mà giá trị cốt lõi liên quan trực tiếp đến các tính năng hoặc chức năng của Phần mềm.
-     d) Sử dụng Phần mềm trong quy trình làm việc kinh doanh hoặc cho các hoạt động của tổ chức mà việc sử dụng đó tạo ra doanh thu trực tiếp hoặc mang lại lợi thế tài chính cạnh tranh.
-     e) Thu phí để truy cập hoặc sử dụng bất kỳ ứng dụng nào sử dụng hoặc phụ thuộc vào Phần mềm, bất kể khoản phí đó có liên quan trực tiếp đến Phần mềm hay không.
-1.6. "Mục đích Phi Thương mại" (Non-Commercial Purpose) là bất kỳ việc sử dụng nào chỉ dành riêng cho việc học tập cá nhân, nghiên cứu học thuật, nghiên cứu riêng, hoặc phát triển và thử nghiệm nội bộ trong một tổ chức phi lợi nhuận, miễn là việc sử dụng đó không tạo ra doanh thu hoặc lợi thế tài chính cho Bên Được cấp phép.
+ARTICLE 3. RESTRICTIONS ON USE
+3.1. No Commercial Use. You may not use the Software, in whole or in part, for any Commercial Purpose without a separate, written Commercial License Agreement executed by the Licensor.
+3.2. No Re-branding. You may not remove, alter, or obscure any copyright notices, proprietary legends, trademark warnings, or author attributions (e.g., references to "Chad Gibiti" or "azizu1012") contained in the Software.
+3.3. No Sub-licensing. You may not rent, lease, lend, sell, redistribute, or sublicense the Software.
+3.4. Reverse Engineering. You may not reverse engineer, decompile, or disassemble any binary portions of the Software, except and only to the extent that such activity is expressly permitted by applicable law notwithstanding this limitation.
 
-2. CẤP PHÉP (CHỈ DÀNH CHO PHI THƯƠNG MẠI)
+ARTICLE 4. INTELLECTUAL PROPERTY RIGHTS
+4.1. Ownership. All title, ownership rights, and intellectual property rights in and to the Software (including but not limited to any images, photographs, animations, video, audio, music, text, and "applets" incorporated into the Software) are owned by the Licensor.
+4.2. Reservation of Rights. The Software is protected by copyright laws and international copyright treaties. All rights not expressly granted are reserved by the Licensor.
 
-2.1. Bên Cấp phép cấp cho Bên Được cấp phép một giấy phép giới hạn, không độc quyền, không thể chuyển nhượng, trên toàn thế giới để Sử dụng, sao chép, sửa đổi và phân phối Phần mềm CHỈ VỚI **Mục đích Phi Thương mại**, tuân thủ các điều khoản và điều kiện tại đây.
-2.2. Quyền sửa đổi bao gồm quyền tạo ra các Tác phẩm Phái sinh (Derivative Works), với điều kiện các tác phẩm đó cũng phải tuân thủ nghiêm ngặt giới hạn Phi Thương mại và được phân phối theo các điều khoản của Giấy phép này.
+ARTICLE 5. THIRD-PARTY COMPONENTS
+5.1. The Software may include third-party software components (e.g., Python libraries listed in requirements.txt). These components are subject to their respective license agreements. This Agreement does not modify or alter your rights and obligations under those third-party licenses.
 
-3. CÁC ĐIỀU CẤM VÀ HẠN CHẾ
+ARTICLE 6. INDEMNIFICATION
+6.1. You agree to indemnify, hold harmless, and defend the Licensor from and against any and all claims, lawsuits, and proceedings (collectively "Claims"), and all expenses, costs (including attorney's fees), judgments, damages, and other liabilities resulting from such Claims, that arise or result from your use or misuse of the Software, or your violation of this Agreement.
 
-3.1. SỬ DỤNG THƯƠNG MẠI BỊ CẤM TUYỆT ĐỐI: Bên Được cấp phép bị cấm rõ ràng thực hiện bất kỳ việc Sử dụng Phần mềm nào cho Mục đích Thương mại, trừ khi và cho đến khi một Thỏa thuận Cấp phép Thương mại bằng văn bản riêng biệt đã được bảo đảm từ Bên Cấp phép.
-3.2. CẤM LÁCH LUẬT: Bên Được cấp phép sẽ không được phép tìm cách lách giới hạn Mục đích Thương mại bằng cách:
-     a) Phân phối Phần mềm như một phần của một ứng dụng lớn hơn, vì lợi nhuận, và tuyên bố rằng bản thân cấu phần Phần mềm là phi thương mại.
-     b) Chấp nhận quyên góp hoặc thu phí "bảo trì" mà chủ yếu gắn liền với việc phân phối hoặc hỗ trợ Phần mềm.
-     c) Cấp phép Phần mềm theo bất kỳ Giấy phép Mã nguồn mở hoặc Giấy phép Công cộng nào khác.
-     d) Tuyên bố Phần mềm chỉ được sử dụng "nội bộ" nếu việc sử dụng nội bộ đó là một phần thiết yếu của mô hình kinh doanh tạo ra doanh thu.
-3.3. KỸ THUẬT ĐẢO NGƯỢC (REVERSE ENGINEERING): Kỹ thuật đảo ngược, dịch ngược (decompiling) hoặc tháo gỡ (disassembling) Phần mềm chỉ được phép trong phạm vi cần thiết để hiểu các chức năng của Phần mềm cho Mục đích Phi Thương mại. Bất kỳ phát hiện nào từ các hoạt động đó phải được giữ bí mật và không được sử dụng cho Mục đích Thương mại.
-3.4. TỪ CHỐI BẢO HÀNH: PHẦN MỀM ĐƯỢC CUNG CẤP "NGUYÊN TRẠNG," KHÔNG CÓ BẤT KỲ BẢO HÀNH NÀO, RÕ RÀNG HOẶC NGỤ Ý, BAO GỒM NHƯNG KHÔNG GIỚI HẠN, CÁC BẢO HÀNH VỀ KHẢ NĂNG THƯƠNG MẠI, SỰ PHÙ HỢP CHO MỘT MỤC ĐÍCH CỤ THỂ VÀ KHÔNG VI PHẠM.
+ARTICLE 7. TERMINATION
+7.1. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from the Licensor if you fail to comply with any term(s) of this Agreement.
+7.2. Upon termination of the Agreement, you shall cease all use of the Software and destroy all copies, full or partial, of the Software.
 
-4. NGHĨA VỤ CỦA BÊN ĐƯỢC CẤP PHÉP
+ARTICLE 8. DISCLAIMER OF WARRANTY
+THE SOFTWARE IS PROVIDED "AS IS" AND "WITH ALL FAULTS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH YOU. SHOULD THE SOFTWARE PROVE DEFECTIVE, YOU ASSUME THE ENTIRE COST OF ALL NECESSARY SERVICING OR REPAIR.
 
-4.1. GHI NHẬN TÁC GIẢ (ATTRIBUTION): Bên Được cấp phép phải giữ lại rõ ràng tất cả các thông báo bản quyền, thông báo bằng sáng chế, thông báo nhãn hiệu, và toàn bộ văn bản của Giấy phép này trong tất cả các bản sao hoặc các phần đáng kể của Phần mềm.
-4.2. THÔNG BÁO HẠN CHẾ: Bên Được cấp phép phải đưa ra một tuyên bố rõ ràng trong tài liệu hoặc tệp README của họ rằng mã nguồn gốc là: **"Độc quyền của azizu1012 và chỉ được giới hạn cho Mục đích Phi Thương mại."**
+ARTICLE 9. LIMITATION OF LIABILITY
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY SPECIAL, INCIDENTAL, INDIRECT, OR CONSEQUENTIAL DAMAGES WHATSOEVER (INCLUDING, WITHOUT LIMITATION, DAMAGES FOR LOSS OF BUSINESS PROFITS, BUSINESS INTERRUPTION, LOSS OF BUSINESS INFORMATION, OR ANY OTHER PECUNIARY LOSS) ARISING OUT OF THE USE OF OR INABILITY TO USE THE SOFTWARE, EVEN IF THE LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
 
-5. CHẤM DỨT
+ARTICLE 10. GENERAL PROVISIONS
+10.1. Severability. If any provision of this Agreement is held to be void, invalid, unenforceable, or illegal, the other provisions shall continue in full force and effect.
+10.2. Entire Agreement. This Agreement constitutes the entire agreement between you and the Licensor concerning the Software and supersedes all prior agreements or understandings.
 
-5.1. Giấy phép này sẽ chấm dứt ngay lập tức và tự động nếu Bên Được cấp phép vi phạm bất kỳ điều khoản nào, đặc biệt là các giới hạn về Sử dụng Thương mại.
-5.2. Khi chấm dứt, Bên Được cấp phép phải ngay lập tức chấm dứt mọi việc Sử dụng và hủy tất cả các bản sao Phần mềm đang nằm trong quyền sở hữu hoặc kiểm soát của họ.
+------------------------------------------------------------------------------------------------
+(BẢN TÓM TẮT TIẾNG VIỆT - MANG TÍNH THAM KHẢO)
+
+THỎA THUẬN CẤP PHÉP NGƯỜI DÙNG CUỐI AZURIS (ANCL)
+Phiên bản 2.0 - Doanh Nghiệp
+
+BẢN QUYỀN (c) 2025 azizu1012. BẢO LƯU MỌI QUYỀN.
+
+1. QUYỀN SỞ HỮU
+   Phần mềm này (bao gồm mã nguồn, tài liệu, và các tài nguyên đi kèm) là tài sản trí tuệ độc quyền của 
+   azizu1012. Bạn không được tự nhận là tác giả của phần mềm này dưới mọi hình thức.
+
+2. PHẠM VI SỬ DỤNG (PHI THƯƠNG MẠI)
+   Bạn được cấp quyền miễn phí để tải về, cài đặt, sửa đổi và sử dụng phần mềm này CHỈ CHO MỤC ĐÍCH 
+   CÁ NHÂN, HỌC TẬP HOẶC NGHIÊN CỨU. Mọi hành vi sử dụng nhằm mục đích sinh lợi nhuận đều bị cấm.
+
+3. NGHIÊM CẤM THƯƠNG MẠI HÓA
+   Trừ khi có văn bản thỏa thuận riêng, bạn KHÔNG ĐƯỢC PHÉP:
+   - Bán, cho thuê, hoặc cấp phép lại phần mềm.
+   - Sử dụng phần mềm để cung cấp dịch vụ có thu phí (SaaS, cài đặt thuê).
+   - Tích hợp phần mềm vào một sản phẩm thương mại.
+   - Nhận quyên góp (donate) gắn liền trực tiếp với việc phân phối bản sao của phần mềm này.
+
+4. BẢO VỆ THƯƠNG HIỆU VÀ TÁC GIẢ
+   Bạn phải giữ nguyên mọi thông báo bản quyền và tên tác giả ("Chad Gibiti" hoặc "azizu1012") trong 
+   mọi bản sao hoặc bản sửa đổi. Không được phép đổi tên bot và phát hành lại như một sản phẩm mới 
+   (Re-branding) để trục lợi.
+
+5. MIỄN TRỪ TRÁCH NHIỆM (AS-IS)
+   Phần mềm được cung cấp "NGUYÊN TRẠNG". Tác giả không chịu trách nhiệm cho bất kỳ thiệt hại nào 
+   (mất dữ liệu, hỏng phần cứng, lỗ hổng bảo mật, v.v.) phát sinh trong quá trình sử dụng. Bạn chấp nhận 
+   mọi rủi ro khi sử dụng phần mềm.
+
+6. CHẤM DỨT THỎA THUẬN
+   Giấy phép này sẽ tự động mất hiệu lực nếu bạn vi phạm bất kỳ điều khoản nào ở trên. Khi đó, bạn buộc 
+   phải gỡ bỏ và tiêu hủy mọi bản sao của phần mềm đang lưu trữ.
