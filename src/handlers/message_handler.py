@@ -28,7 +28,7 @@ class MessageHandler:
     
     # ✅ Global API Request Queue (to avoid 429 - Google Gemini 20 req/min limit)
     API_REQUEST_QUEUE = asyncio.Queue()
-    API_REQUEST_SEMAPHORE = asyncio.Semaphore(1)  # 1 request at a time
+    API_REQUEST_SEMAPHORE = asyncio.Semaphore(5)  # 1 request at a time
     LAST_API_REQUEST_TIME = 0.0
     MIN_REQUEST_INTERVAL = 2.0  # Minimum 2 seconds between requests (reduced for faster rotation)
     COOLDOWN_WINDOW = 1800  # 30 minutes
@@ -130,10 +130,26 @@ class MessageHandler:
             user_id = str(message.author.id)
             is_admin = user_id in self.config.ADMIN_USER_IDS
             
-            # ✅ Check rate limiting (BYPASS for ADMIN)
-            if not is_admin:
+            # ✅ Check rate limiting (BYPASS for ADMIN & PREMIUM)
+            is_premium = self.premium_mgr.is_premium_user(user_id) # Check xem có VIP không
+            
+            # Chỉ chặn nếu KHÔNG PHẢI Admin VÀ KHÔNG PHẢI Premium
+            if not is_admin and not is_premium:
                 now = datetime.now()
                 self.user_queue[user_id].append(now)
+                
+                # Remove old timestamps outside window
+                while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
+                    self.user_queue[user_id].popleft()
+                
+                # Rate Limit Logic
+                if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
+                    username = message.author.name
+                    # Log nhẹ thôi, debug cho đỡ rác
+                    self.logger.warning(f"User {user_id} ({username}) rate limited ({len(self.user_queue[user_id])}/{self.RATE_LIMIT_THRESHOLD})")
+                    # Tùy chọn: Gửi icon để user biết mình nói nhanh quá
+                    await message.add_reaction("⏳") 
+                    return
                 
                 # Remove old timestamps outside window
                 while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
