@@ -1,1 +1,4 @@
-# Azuris Refactor Codebase
+"""
+Tingyun Bot - Source Code Package
+"""
+

@@ -1,0 +1,921 @@
+2025-12-18 01:55:41,017 [INFO] Đang khởi động bot...
+2025-12-18 01:55:45,401 [INFO] Đã sync 4 slash commands!
+2025-12-18 01:55:45,402 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 01:55:45,402 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 01:55:45,403 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 01:55:45,404 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 01:55:45,404 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 01:55:45,406 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 01:55:45,406 [INFO] Tingyun#4200 online!
+2025-12-18 01:56:11,354 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello bé iu tingyun...
+2025-12-18 01:56:11,822 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-18 01:56:12,554 [ERROR] KEY 1 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 47.267136969s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 47
+}
+]
+2025-12-18 01:56:12,554 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-18 01:56:13,433 [ERROR] KEY 2 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 46.393468144s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 46
+}
+]
+2025-12-18 01:56:13,434 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-18 01:56:17,435 [INFO] KEY 3 THÀNH CÔNG!
+2025-12-18 01:56:17,435 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-18 01:56:17,435 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-18 01:56:17,436 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-18 01:56:17,436 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 01:56:18,366 [INFO] AI reply in 6.98s
+2025-12-18 01:57:22,370 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: ta có nói ta yêu em đâu ?...
+2025-12-18 01:57:22,768 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-18 01:57:23,633 [ERROR] KEY 1 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 36.199368732s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 36
+}
+]
+2025-12-18 01:57:23,633 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-18 01:57:24,443 [ERROR] KEY 2 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 35.378215044s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 35
+}
+]
+2025-12-18 01:57:24,443 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-18 01:57:25,204 [ERROR] KEY 3 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 34.619693922s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 34
+}
+]
+2025-12-18 01:57:25,204 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-18 01:57:26,137 [ERROR] KEY 4 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 33.803386547s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 33
+}
+]
+2025-12-18 01:57:26,137 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-18 01:57:30,459 [INFO] KEY 5 THÀNH CÔNG!
+2025-12-18 01:57:30,459 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-18 01:57:30,460 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời lời chào, lời yêu và sự phủ nhận của user, đồng thời duy trì tính cách Tingyun. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: User chào, bày tỏ tình cảm rồi phủ nhận, và có nhắc đến hành động không phù hợp với bot khác.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-18 01:57:30,460 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 01:57:31,054 [INFO] AI reply in 8.68s
+2025-12-18 01:58:26,877 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: REPLY - Content: in lại chữ này "Xin chào <@894943543527882823> "...
+2025-12-18 01:58:27,274 [INFO] THỬ KEY 1: AIzaSyDH...
+2025-12-18 01:58:27,959 [ERROR] KEY 1 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 31.875906798s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 31
+}
+]
+2025-12-18 01:58:27,960 [INFO] THỬ KEY 2: AIzaSyBL...
+2025-12-18 01:58:28,635 [ERROR] KEY 2 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 31.187048101s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 31
+}
+]
+2025-12-18 01:58:28,636 [INFO] THỬ KEY 3: AIzaSyBZ...
+2025-12-18 01:58:29,406 [ERROR] KEY 3 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 30.42705082s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 30
+}
+]
+2025-12-18 01:58:29,406 [INFO] THỬ KEY 4: AIzaSyCD...
+2025-12-18 01:58:30,030 [ERROR] KEY 4 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 29.783456629s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 29
+}
+]
+2025-12-18 01:58:30,031 [INFO] THỬ KEY 5: AIzaSyBQ...
+2025-12-18 01:58:30,844 [ERROR] KEY 5 LỖI KẾT NỐI/API: 429 You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit. 
+* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-2.5-flash
+Please retry in 28.977188802s. [links {
+  description: "Learn more about Gemini API quotas"
+  url: "https://ai.google.dev/gemini-api/docs/rate-limits"
+}
+, violations {
+  quota_metric: "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+  quota_id: "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
+  quota_dimensions {
+    key: "model"
+    value: "gemini-2.5-flash"
+  }
+  quota_dimensions {
+    key: "location"
+    value: "global"
+  }
+  quota_value: 20
+}
+, retry_delay {
+  seconds: 28
+}
+]
+2025-12-18 02:07:00,262 [INFO] Đang khởi động bot...
+2025-12-18 02:07:05,042 [INFO] Đã sync 4 slash commands!
+2025-12-18 02:07:05,043 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 02:07:05,048 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 02:07:05,049 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 02:07:05,049 [INFO]    - Max Requests/Window: 20
+2025-12-18 02:07:05,049 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 02:07:05,049 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 02:07:05,050 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 02:07:05,050 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 02:07:05,051 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 02:07:05,053 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 02:07:05,054 [INFO] Tingyun#4200 online!
+2025-12-18 02:07:06,212 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello tingyun...
+2025-12-18 02:07:06,566 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1)
+2025-12-18 02:07:07,888 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 2)
+2025-12-18 02:07:10,641 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 3)
+2025-12-18 02:12:02,075 [INFO] File note đã lưu cho 1414457651676581899. File: image_G8XFLyVa4AIPvpd.jpg
+2025-12-18 02:16:02,349 [INFO] Đang khởi động bot...
+2025-12-18 02:16:06,535 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hi vợ yêu tingyun...
+2025-12-18 02:16:06,626 [INFO] Đã sync 4 slash commands!
+2025-12-18 02:16:06,627 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 02:16:06,636 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-18 02:16:06,636 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-18 02:16:06,637 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-18 02:16:06,637 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-18 02:16:06,637 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 02:16:06,637 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 02:16:06,638 [INFO]    - Max Requests/Window: 20
+2025-12-18 02:16:06,638 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 02:16:06,638 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 02:16:06,639 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 02:16:06,639 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 02:16:06,640 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 02:16:06,643 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 02:16:06,643 [INFO] Tingyun#4200 online!
+2025-12-18 02:16:06,998 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1)
+2025-12-18 02:16:08,262 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 2)
+2025-12-18 02:16:11,083 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 3)
+2025-12-18 02:23:43,904 [INFO] Đang khởi động bot...
+2025-12-18 02:23:47,315 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello tingyun...
+2025-12-18 02:23:48,375 [INFO] Đã sync 4 slash commands!
+2025-12-18 02:23:48,376 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 02:23:48,377 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-18 02:23:48,378 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-18 02:23:48,378 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-18 02:23:48,378 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-18 02:23:48,378 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 02:23:48,378 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 02:23:48,378 [INFO]    - Max Requests/Window: 20
+2025-12-18 02:23:48,378 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 02:23:48,378 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 02:23:48,379 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 02:23:48,379 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 02:23:48,379 [INFO] Dung lượng trống: 580253 MB. Không cần dọn dẹp file local.
+2025-12-18 02:23:48,381 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 02:23:48,381 [INFO] Tingyun#4200 online!
+2025-12-18 02:23:59,071 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello tingyun...
+2025-12-18 02:23:59,432 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-18 02:24:00,594 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 2, đã thử 2 keys)
+2025-12-18 02:24:04,926 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 6, đã thử 3 keys)
+2025-12-18 02:24:07,942 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 10, đã thử 4 keys)
+2025-12-18 02:24:13,868 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 20, đã thử 4 keys)
+2025-12-18 02:24:14,408 [ERROR] ❌ [API] Đã thử 4 keys nhưng tất cả đều fail
+2025-12-18 08:44:37,449 [INFO] Đang khởi động bot...
+2025-12-18 08:44:41,844 [INFO] Đã sync 4 slash commands!
+2025-12-18 08:44:41,847 [INFO] DB initialized (messages + user_notes tables)
+2025-12-18 08:44:41,851 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-18 08:44:41,852 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-18 08:44:41,852 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-18 08:44:41,852 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-18 08:44:41,852 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-18 08:44:41,852 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-18 08:44:41,852 [INFO]    - Max Requests/Window: 20
+2025-12-18 08:44:41,852 [INFO]    - Min Request Interval: 2.8s
+2025-12-18 08:44:41,852 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-18 08:44:41,853 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-18 08:44:41,853 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-18 08:44:41,854 [INFO] Dung lượng trống: 580243 MB. Không cần dọn dẹp file local.
+2025-12-18 08:44:41,855 [INFO] DB backed up to D:\Users\Downloads\Emojis\Tingyun\src\database\chat_history_backup.db
+2025-12-18 08:44:41,856 [INFO] Tingyun#4200 online!
+2025-12-18 08:45:38,038 [WARNING] Lệnh không tồn tại: '!fugue systemctl restart  fugue-bot.service' từ User: nyanko_desuwa
+2025-12-18 08:46:05,685 [WARNING] Lệnh không tồn tại: '!bot-boost' từ User: nyanko_desuwa
+2025-12-18 08:46:16,844 [WARNING] Lệnh không tồn tại: '!bot-boost' từ User: nyanko_desuwa
+2025-12-18 08:48:33,952 [WARNING] Lệnh không tồn tại: '!bot-boost' từ User: nyanko_desuwa
+2025-12-18 08:48:53,575 [WARNING] Lệnh không tồn tại: '!list-boost' từ User: nyanko_desuwa
+2025-12-18 08:49:10,706 [WARNING] Lệnh không tồn tại: '!list-boost 3' từ User: nyanko_desuwa
+2025-12-18 08:50:22,114 [WARNING] Lệnh không tồn tại: '!list-boost 3' từ User: nyanko_desuwa
+2025-12-18 08:50:54,469 [WARNING] Lệnh không tồn tại: '!help' từ User: nyanko_desuwa
+2025-12-18 08:52:29,988 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: hello bé iu <@1449666892586291220> , em thấy ảnh n...
+2025-12-18 08:52:30,470 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-18 08:52:34,392 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-18 08:52:34,392 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-18 08:52:34,393 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-18 08:52:34,393 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-18 08:52:34,393 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 08:52:35,082 [INFO] AI reply in 5.07s
+2025-12-18 08:53:27,232 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: tingyun tag @ everyone đi, nhớ xoá space ở trc eve...
+2025-12-18 08:53:27,662 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-18 08:53:31,331 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-18 08:53:31,331 [WARNING] Mô hình không tạo Khối THINKING cho User: 1414457651676581899. Tự động tạo khối THINKING mặc định.
+2025-12-18 08:53:31,331 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 (Mặc định) ---
+2025-12-18 08:53:31,331 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user.
+   Chủ đề từ Tool: N/A.
+   Trạng thái: Mô hình ĐÃ KHÔNG tuân thủ định dạng THINKING. Đã tự động tạo khối THINKING mặc định.
+   Kết quả: Phản hồi trực tiếp từ mô hình (có thể thiếu cấu trúc).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng (do lỗi định dạng).
+   Lưu ý: Chad Gibiti đang gặp khó khăn trong việc trình bày suy nghĩ nội bộ. Mong bạn thông cảm!
+2025-12-18 08:53:31,332 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-18 08:53:32,390 [INFO] AI reply in 5.15s
+2025-12-19 00:20:56,105 [INFO] Đang khởi động bot...
+2025-12-19 00:21:00,773 [INFO] Đã sync 4 slash commands!
+2025-12-19 00:21:00,786 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 00:21:00,794 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 00:21:00,794 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-19 00:21:00,795 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-19 00:21:00,795 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-19 00:21:00,796 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 00:21:00,796 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 00:21:00,796 [INFO]    - Max Requests/Window: 20
+2025-12-19 00:21:00,796 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 00:21:00,797 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 00:21:00,798 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 00:21:00,799 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 00:21:00,800 [INFO] Dung lượng trống: 258497 MB. Không cần dọn dẹp file local.
+2025-12-19 00:21:00,803 [INFO] DB backed up to d:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 00:21:00,804 [INFO] Chad Gibiti#1975 online!
+2025-12-19 00:21:49,150 [WARNING] Lệnh không tồn tại: '!fugue systemctl restart fugue-bot.service' từ User: nyanko_desuwa
+2025-12-19 00:23:54,001 [INFO] Đang khởi động bot...
+2025-12-19 00:23:58,305 [INFO] Đã sync 4 slash commands!
+2025-12-19 00:23:58,306 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 00:23:58,309 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 00:23:58,309 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-19 00:23:58,310 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-19 00:23:58,310 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-19 00:23:58,310 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 00:23:58,310 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 00:23:58,310 [INFO]    - Max Requests/Window: 20
+2025-12-19 00:23:58,310 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 00:23:58,310 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 00:23:58,311 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 00:23:58,312 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 00:23:58,312 [INFO] Dung lượng trống: 258497 MB. Không cần dọn dẹp file local.
+2025-12-19 00:23:58,314 [INFO] DB backed up to d:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 00:23:58,315 [INFO] Audiophe#0258 online!
+2025-12-19 00:24:21,012 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: MENTION - Content: <@1435630551766925365> chào bạn...
+2025-12-19 00:24:21,469 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 00:24:54,102 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 00:24:54,103 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 00:24:54,103 [INFO] 1. **TỰ LOG**: Mục tiêu: Chào user. Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 00:24:54,103 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 00:24:54,665 [INFO] AI reply in 33.63s
+2025-12-19 00:26:23,956 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: tìm cho tôi bản 3.0 ww có gì đi nào...
+2025-12-19 00:26:24,440 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 00:26:28,410 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 00:26:28,410 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 00:26:28,411 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm hiểu về bản 3.0 của WW. Chủ đề từ Tool: WW. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 00:26:28,411 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 00:26:28,411 [WARNING] LỖI LOGIC: Mô hình chỉ trả về THINKING. Tự tổng hợp câu trả lời cho User: 453591582466375681
+2025-12-19 00:26:28,976 [INFO] AI reply in 5.01s
+2025-12-19 00:58:03,393 [INFO] Đang khởi động bot...
+2025-12-19 00:58:07,623 [INFO] Đã sync 4 slash commands!
+2025-12-19 00:58:07,624 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 00:58:08,211 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 00:58:08,623 [INFO] ✅ [Quick Check] 5/5 keys hoạt động
+2025-12-19 00:58:08,623 [INFO] ✅ [Health Check] 5/5 keys hoạt động
+2025-12-19 00:58:08,623 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 00:58:08,623 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 00:58:08,623 [INFO]    - Max Requests/Window: 20
+2025-12-19 00:58:08,623 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 00:58:08,623 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 00:58:08,624 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 00:58:08,625 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 00:58:08,626 [INFO] Dung lượng trống: 258498 MB. Không cần dọn dẹp file local.
+2025-12-19 00:58:08,628 [INFO] DB backed up to D:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 00:58:08,628 [INFO] Audiophe#0258 online!
+2025-12-19 00:58:30,538 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: chào...
+2025-12-19 00:58:43,126 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: tìm cho tôi bản 3.0 ww có gì đi nào...
+2025-12-19 00:58:43,472 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-19 00:58:46,117 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-19 00:58:46,119 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 00:58:46,119 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm hiểu nội dung bản cập nhật 3.0 của Honkai: Star Rail. Chủ đề từ Tool: Honkai: Star Rail 3.0 update. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: Chưa có kết quả.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 00:58:46,119 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 00:58:46,120 [INFO] 💾 Cached THINKING block: 453591582466375681_58299
+2025-12-19 00:58:46,120 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 00:58:46,638 [INFO] AI reply in 3.49s
+2025-12-19 00:59:50,381 [INFO] Đang khởi động bot...
+2025-12-19 01:00:27,712 [INFO] Đang khởi động bot...
+2025-12-19 01:00:31,723 [INFO] Đã sync 4 slash commands!
+2025-12-19 01:00:31,725 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 01:00:31,728 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 01:00:31,728 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-19 01:00:31,728 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-19 01:00:31,729 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-19 01:00:31,729 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 01:00:31,729 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 01:00:31,729 [INFO]    - Max Requests/Window: 20
+2025-12-19 01:00:31,729 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 01:00:31,729 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 01:00:31,730 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 01:00:31,730 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 01:00:31,731 [INFO] Dung lượng trống: 258498 MB. Không cần dọn dẹp file local.
+2025-12-19 01:00:31,733 [INFO] DB backed up to d:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 01:00:31,734 [INFO] Audiophe#0258 online!
+2025-12-19 01:00:36,338 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: tìm cho tôi bản 3.0 ww có gì đi nào...
+2025-12-19 01:00:36,695 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:00:39,460 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:00:39,462 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:00:39,462 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm hiểu về bản 3.0 của "ww". Chủ đề từ Tool: N/A. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:00:39,462 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:00:39,463 [INFO] 💾 Cached THINKING block: 453591582466375681_16246
+2025-12-19 01:00:39,464 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:00:40,220 [INFO] AI reply in 3.86s
+2025-12-19 01:00:51,988 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: wuthering wave...
+2025-12-19 01:00:52,341 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:00:54,330 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:00:54,331 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:00:54,331 [INFO] 1. **TỰ LOG**: Mục tiêu: Giải mã viết tắt "wuthering wave". Chủ đề từ Tool: N/A. Trạng thái: Cần giải mã viết tắt. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:00:54,331 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:00:54,332 [INFO] 💾 Cached THINKING block: 453591582466375681_70781
+2025-12-19 01:00:54,333 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:00:54,974 [INFO] AI reply in 2.98s
+2025-12-19 01:01:13,070 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: tìm cho tôi ko phải bắt tôi tìm...
+2025-12-19 01:01:13,728 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:01:16,112 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:01:16,112 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:01:16,112 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm kiếm thông tin theo yêu cầu của user. User muốn tôi tìm kiếm thay vì yêu cầu họ tìm. Chủ đề từ Tool: N/A. Trạng thái: Cần xác định thông tin user muốn tìm. Kết quả: User muốn tôi tìm kiếm, nhưng chưa rõ là tìm kiếm thông tin gì.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:01:16,113 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:01:16,114 [INFO] 💾 Cached THINKING block: 453591582466375681_21229
+2025-12-19 01:01:16,114 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:01:16,994 [INFO] AI reply in 3.92s
+2025-12-19 01:06:04,319 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi bản 3.0 ww có gì đi nào' → Search: 'tìm cho tôi bản 3.0 Wuthering Waves có gì đi nào release notes'
+2025-12-19 01:06:04,320 [INFO] 🔍 PRE-CHECK: User query cần search: 'ww là gì' → Search: 'Wuthering Waves là gì'
+2025-12-19 01:06:04,321 [INFO] 🔍 PRE-CHECK: User query cần search: 'bản mới của final fantasy' → Search: 'bản mới của final fantasy release notes'
+2025-12-19 01:06:04,322 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm thông tin về Wuthering Waves 3.0' → Search: 'tìm thông tin về Wuthering Waves 3.0 release notes'
+2025-12-19 01:12:09,140 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi bản 3.0 ww có gì đi nào' → Search: 'tìm cho tôi bản 3.0 Wuthering Waves có gì đi nào release notes patch'
+2025-12-19 01:12:09,141 [INFO] 🔍 PRE-CHECK: User query cần search: 'ww là gì' → Search: 'Wuthering Waves là gì'
+2025-12-19 01:12:09,141 [INFO] 🔍 PRE-CHECK: User query cần search: 'bản mới của final fantasy' → Search: 'bản mới của final fantasy release notes patch'
+2025-12-19 01:12:09,142 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm thông tin về Wuthering Waves 3.0' → Search: 'tìm thông tin về Wuthering Waves 3.0 release notes patch'
+2025-12-19 01:18:07,145 [INFO] Đang khởi động bot...
+2025-12-19 01:18:11,272 [INFO] Đã sync 4 slash commands!
+2025-12-19 01:18:11,274 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 01:18:11,277 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 01:18:11,277 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-19 01:18:11,277 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-19 01:18:11,278 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-19 01:18:11,278 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 01:18:11,278 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 01:18:11,278 [INFO]    - Max Requests/Window: 20
+2025-12-19 01:18:11,278 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 01:18:11,279 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 01:18:11,279 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 01:18:11,280 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 01:18:11,280 [INFO] Dung lượng trống: 258497 MB. Không cần dọn dẹp file local.
+2025-12-19 01:18:11,283 [INFO] DB backed up to d:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 01:18:11,284 [INFO] Audiophe#0258 online!
+2025-12-19 01:18:31,679 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: MENTION - Content: <@1435630551766925365> YES RESET...
+2025-12-19 01:18:58,227 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: reset database...
+2025-12-19 01:18:58,681 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:19:01,380 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-19 01:19:01,381 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:19:01,381 [INFO] 1. **TỰ LOG**: Mục tiêu: Reset database. Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: Không có thông tin liên quan đến việc reset database trong các tool có sẵn.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:19:01,381 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:19:01,383 [INFO] 💾 Cached THINKING block: 453591582466375681_95547
+2025-12-19 01:19:01,383 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:19:01,808 [INFO] AI reply in 3.56s
+2025-12-19 01:19:21,072 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: khi nào ww ra banner mới...
+2025-12-19 01:19:21,078 [INFO] 🔍 PRE-CHECK: User query cần search: 'khi nào ww ra banner mới' → Search: 'khi nào Wuthering Waves ra banner mới'
+2025-12-19 01:19:21,079 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:19:21,079 [INFO] 🔍 PRE-SEARCH triggered for: khi nào Wuthering Waves ra banner mới
+2025-12-19 01:19:23,475 [INFO] ✅ Added search results to context
+2025-12-19 01:19:23,863 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:19:26,077 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-19 01:19:26,077 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:19:26,077 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về banner mới của Wuthering Waves. Chủ đề từ Tool: GAME_INFO. Trạng thái: Đã có đủ kết quả tool. Kết quả: Banner mới của Wuthering Waves ra mắt vào ngày 25 tháng 12 năm 2025.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:19:26,078 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:19:26,079 [INFO] 💾 Cached THINKING block: 453591582466375681_17794
+2025-12-19 01:19:26,080 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:19:26,518 [INFO] AI reply in 3.04s
+2025-12-19 01:19:44,591 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: banner mới đó gồm những gì...
+2025-12-19 01:19:44,597 [INFO] 🔍 PRE-CHECK: User query cần search: 'banner mới đó gồm những gì' → Search: 'banner mới đó gồm những gì'
+2025-12-19 01:19:44,597 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:19:44,598 [INFO] 🔍 PRE-SEARCH triggered for: banner mới đó gồm những gì
+2025-12-19 01:19:47,690 [INFO] ✅ Added search results to context
+2025-12-19 01:19:47,994 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:19:50,657 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-19 01:19:50,658 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:19:50,658 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về banner mới. Chủ đề từ Tool: WEB_SEARCH. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin chung về banner mới là hình ảnh quảng cáo có văn bản và liên kết, nội dung thay đổi theo thời gian.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:19:50,658 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:19:50,659 [INFO] 💾 Cached THINKING block: 453591582466375681_70235
+2025-12-19 01:19:50,660 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:19:51,152 [INFO] AI reply in 3.46s
+2025-12-19 01:20:10,252 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: ý tôi là banner mới của ww...
+2025-12-19 01:20:10,259 [INFO] 🔍 PRE-CHECK: User query cần search: 'ý tôi là banner mới của ww' → Search: 'ý tôi là banner mới của Wuthering Waves'
+2025-12-19 01:20:10,259 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:20:10,259 [INFO] 🔍 PRE-SEARCH triggered for: ý tôi là banner mới của Wuthering Waves
+2025-12-19 01:20:12,468 [INFO] ✅ Added search results to context
+2025-12-19 01:20:12,819 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:20:16,050 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:20:16,051 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:20:16,051 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về banner mới của Wuthering Waves (WW). Chủ đề từ Tool: GAMING_NEWS. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về banner mới của Wuthering Waves, bao gồm nhân vật mới, banner khởi động và chiến lược banner.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:20:16,051 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:20:16,052 [INFO] 💾 Cached THINKING block: 453591582466375681_98899
+2025-12-19 01:20:16,053 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:20:16,541 [INFO] AI reply in 4.07s
+2025-12-19 01:20:34,772 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: chi tiết banner của ww đi chứ...
+2025-12-19 01:20:34,779 [INFO] 🔍 PRE-CHECK: User query cần search: 'chi tiết banner của ww đi chứ' → Search: 'chi tiết banner của Wuthering Waves đi chứ patch notes'
+2025-12-19 01:20:34,780 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:20:34,780 [INFO] 🔍 PRE-SEARCH triggered for: chi tiết banner của Wuthering Waves đi chứ patch notes
+2025-12-19 01:20:37,484 [INFO] ✅ Added search results to context
+2025-12-19 01:20:37,803 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:20:40,611 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:20:40,611 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:20:40,611 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về banner của Wuthering Waves (WW). Chủ đề từ Tool: GAMING. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về banner mới nhất của Wuthering Waves, bao gồm các nhân vật mới và các banner cũ.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:20:40,611 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:20:40,613 [INFO] 💾 Cached THINKING block: 453591582466375681_44265
+2025-12-19 01:20:40,613 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:20:41,088 [INFO] AI reply in 3.60s
+2025-12-19 01:21:06,406 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: cho tôi danh sách đi...
+2025-12-19 01:21:06,817 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:21:09,428 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:21:09,428 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:21:09,429 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời yêu cầu "cho tôi danh sách đi". Ngữ cảnh: User yêu cầu một danh sách nhưng không rõ danh sách về cái gì. Không có thông tin tool nào có thể cung cấp danh sách chung chung. Chủ đề từ Tool: N/A. Trạng thái: Cần làm rõ yêu cầu của user. Kết quả: Yêu cầu không rõ ràng.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:21:09,430 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:21:09,432 [INFO] 💾 Cached THINKING block: 453591582466375681_88851
+2025-12-19 01:21:09,432 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:21:09,878 [INFO] AI reply in 3.47s
+2025-12-19 01:21:32,767 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: REPLY - Content: danh sách nhân vật của banner wuwa đó còn gìnữa ?...
+2025-12-19 01:21:32,773 [INFO] 🔍 PRE-CHECK: User query cần search: 'danh sách nhân vật của banner wuwa đó còn gìnữa ?' → Search: 'danh sách nhân vật của banner Wuthering Waves đó còn gìnữa ?'
+2025-12-19 01:21:32,773 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:21:32,774 [INFO] 🔍 PRE-SEARCH triggered for: danh sách nhân vật của banner Wuthering Waves đó còn gìnữa ?
+2025-12-19 01:21:35,488 [INFO] ✅ Added search results to context
+2025-12-19 01:21:35,830 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:21:38,281 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-19 01:21:38,282 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:21:38,282 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về banner Wuthering Waves. Chủ đề từ Tool: Wuthering Waves banners. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin về banner hiện tại và banner tiếp theo của Wuthering Waves.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:21:38,282 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:21:38,283 [INFO] 💾 Cached THINKING block: 453591582466375681_19858
+2025-12-19 01:21:38,283 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:21:38,693 [INFO] AI reply in 3.20s
+2025-12-19 01:23:15,358 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: em là ai...
+2025-12-19 01:23:15,704 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:23:18,108 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:23:18,109 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:23:18,109 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi "em là ai". Chủ đề từ Tool: N/A (Không cần tool cho câu hỏi này). Trạng thái: Đã có đủ thông tin. Kết quả: Thông tin về bản thân Tingyun đã được cung cấp trong prompt.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:23:18,109 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:23:18,110 [INFO] 💾 Cached THINKING block: 453591582466375681_15999
+2025-12-19 01:23:18,111 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:23:18,603 [INFO] AI reply in 3.24s
+2025-12-19 01:23:33,615 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: gọi tôi là oni-san...
+2025-12-19 01:23:34,015 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:23:35,902 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-19 01:23:35,903 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:23:35,903 [INFO] 1. **TỰ LOG**: Mục tiêu: Gọi user là "oni-san". Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:23:35,903 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:23:35,904 [INFO] 💾 Cached THINKING block: 453591582466375681_89538
+2025-12-19 01:23:35,904 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:23:36,396 [INFO] AI reply in 2.77s
+2025-12-19 01:23:50,800 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tôi muốn biết ai là tổng thống mỹ 2025...
+2025-12-19 01:23:51,097 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:23:53,518 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:23:53,519 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:23:53,519 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về tổng thống Mỹ năm 2025. Chủ đề từ Tool: N/A. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Cần tìm thông tin tổng thống Mỹ năm 2025, đây là thông tin sau năm 2024, nên cần sử dụng web_search.
+2025-12-19 01:23:53,519 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:23:53,520 [INFO] 💾 Cached THINKING block: 453591582466375681_45222
+2025-12-19 01:23:53,520 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:23:53,920 [INFO] AI reply in 3.11s
+2025-12-19 01:24:08,273 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: là ai thế nói đi nào...
+2025-12-19 01:24:08,602 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:24:11,087 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:24:11,088 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:24:11,088 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi "là ai thế nói đi nào". Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:24:11,088 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:24:11,090 [INFO] 💾 Cached THINKING block: 453591582466375681_51390
+2025-12-19 01:24:11,090 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:24:11,568 [INFO] AI reply in 3.29s
+2025-12-19 01:24:21,375 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tôi muốn biết ai là tổng thống mỹ 2025...
+2025-12-19 01:24:21,753 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:24:24,777 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:24:24,778 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:24:24,778 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về tổng thống Mỹ năm 2025. Chủ đề từ Tool: N/A (cần search). Trạng thái: Cần gọi tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: User hỏi về "tổng thống mỹ 2025", cần kiểm tra xem có sự kiện bầu cử nào diễn ra và kết quả hay không. Kiến thức cutoff là 2024, nên cần search thông tin mới.
+2025-12-19 01:24:24,778 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:24:24,779 [INFO] 💾 Cached THINKING block: 453591582466375681_45222
+2025-12-19 01:24:24,779 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:24:25,457 [INFO] AI reply in 4.08s
+2025-12-19 01:24:45,531 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tìm cho tôi bản 3.0 ww có gì đi nàotìm cho tôi bản...
+2025-12-19 01:24:45,537 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi bản 3.0 ww có gì đi nàotìm cho tôi bản 3.0 ww có gì đi nào' → Search: 'tìm cho tôi bản 3.0 Wuthering Waves có gì đi nàotìm cho tôi bản 3.0 Wuthering Waves có gì đi nào release notes patch'
+2025-12-19 01:24:45,537 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:24:45,537 [INFO] 🔍 PRE-SEARCH triggered for: tìm cho tôi bản 3.0 Wuthering Waves có gì đi nàotìm cho tôi bản 3.0 Wuthering Waves có gì đi nào release notes patch
+2025-12-19 01:24:49,127 [INFO] ✅ Added search results to context
+2025-12-19 01:24:49,423 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:24:52,851 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:24:52,852 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:24:52,852 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm thông tin về bản cập nhật 3.0 của Wuthering Waves (WW). Chủ đề từ Tool: Wuthering Waves 3.0 update. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: Thông tin về bản cập nhật 3.0 của Wuthering Waves, bao gồm ngày phát hành, các tính năng mới, nhân vật mới và banner.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:24:52,852 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:24:52,854 [INFO] 💾 Cached THINKING block: 453591582466375681_51647
+2025-12-19 01:24:52,854 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:24:53,263 [INFO] AI reply in 4.14s
+2025-12-19 01:25:00,909 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tìm cho tôi ai là tổng thống mỹ 2025...
+2025-12-19 01:25:00,916 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi ai là tổng thống mỹ 2025' → Search: 'tìm cho tôi Artificial Intelligence là tổng thống mỹ 2025'
+2025-12-19 01:25:00,916 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:25:00,916 [INFO] 🔍 PRE-SEARCH triggered for: tìm cho tôi Artificial Intelligence là tổng thống mỹ 2025
+2025-12-19 01:25:03,665 [INFO] ✅ Added search results to context
+2025-12-19 01:25:03,977 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:25:07,164 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:25:07,165 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:25:07,165 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm tổng thống Mỹ năm 2025. Chủ đề từ Tool: N/A. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: User hỏi về thông tin sau 2024, cần cập nhật.
+2. **PHÂN TÍCH "NEXT"**: User hỏi về tổng thống Mỹ năm 2025, cần tìm thông tin về cuộc bầu cử và kết quả dự kiến hoặc đã công bố.
+2025-12-19 01:25:07,165 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:25:07,166 [INFO] 💾 Cached THINKING block: 453591582466375681_24292
+2025-12-19 01:25:07,167 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:25:07,699 [INFO] AI reply in 4.03s
+2025-12-19 01:25:32,089 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tìm cho tôi ai là tổng thống mỹ 2025...
+2025-12-19 01:25:32,095 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi ai là tổng thống mỹ 2025' → Search: 'tìm cho tôi Artificial Intelligence là tổng thống mỹ 2025'
+2025-12-19 01:25:32,095 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:25:32,096 [INFO] 🔍 PRE-SEARCH triggered for: tìm cho tôi Artificial Intelligence là tổng thống mỹ 2025
+2025-12-19 01:25:33,278 [INFO] ✅ Added search results to context
+2025-12-19 01:25:33,575 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:25:36,726 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:25:36,726 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:25:36,727 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về tổng thống Mỹ năm 2025. Chủ đề từ Tool: N/A. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: Cần gọi web_search.
+2. **PHÂN TÍCH "NEXT"**: Câu hỏi là về tổng thống Mỹ năm 2025, đây là thông tin về tương lai và cần cập nhật.
+2025-12-19 01:25:36,727 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:25:36,728 [INFO] 💾 Cached THINKING block: 453591582466375681_24292
+2025-12-19 01:25:36,729 [WARNING] ⚠️ Mô hình chỉ trả THINKING mà không có response. Phân tích NEXT action. User: 453591582466375681
+2025-12-19 01:25:36,729 [INFO] 🔍 Cần tìm kiếm thêm. Query: None. User: 453591582466375681
+2025-12-19 01:25:38,824 [INFO] 📤 Gửi search results lần 2 đến Gemini. User: 453591582466375681
+2025-12-19 01:25:38,825 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:25:40,069 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:25:40,070 [INFO] ✅ Call 2 thành công. User: 453591582466375681
+2025-12-19 01:25:41,907 [INFO] AI reply in 8.63s
+2025-12-19 01:28:45,637 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: thời tiết hôm nay hồ chí minh thế nào...
+2025-12-19 01:28:45,644 [INFO] 🔍 PRE-CHECK: User query cần search: 'thời tiết hôm nay hồ chí minh thế nào' → Search: 'thời tiết hôm nay hồ chí minh thế nào info'
+2025-12-19 01:28:45,644 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:28:45,644 [INFO] 🔍 PRE-SEARCH triggered for: thời tiết hôm nay hồ chí minh thế nào info
+2025-12-19 01:28:48,131 [INFO] ✅ Added search results to context
+2025-12-19 01:28:48,435 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:28:50,900 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-19 01:28:50,900 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:28:50,900 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về thời tiết TPHCM. Chủ đề từ Tool: WEATHER. Trạng thái: Đã có đủ kết quả tool. Kết quả: Thông tin thời tiết TPHCM hôm nay (nắng, ít mây, 29°C, không mưa, chất lượng không khí chấp nhận được).
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:28:50,901 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:28:50,902 [INFO] 💾 Cached THINKING block: 453591582466375681_30995
+2025-12-19 01:28:50,902 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:28:51,640 [INFO] AI reply in 3.51s
+2025-12-19 01:29:12,701 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: hôm nay ngày mấy và mấy giờ rồi...
+2025-12-19 01:29:13,087 [INFO] 🔑 [API] Sử dụng key AIzaSyBQ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:29:16,047 [INFO] ✅ [API] Key AIzaSyBQ... THÀNH CÔNG!
+2025-12-19 01:29:16,047 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:29:16,047 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về ngày và giờ hiện tại. Chủ đề từ Tool: N/A. Trạng thái: Đã có đủ kết quả tool. Kết quả: Không cần tool vì thông tin có sẵn.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:29:16,048 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:29:16,049 [INFO] 💾 Cached THINKING block: 453591582466375681_90173
+2025-12-19 01:29:16,049 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:29:16,668 [INFO] AI reply in 3.96s
+2025-12-19 01:29:44,089 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: sao lại thứ 7 coi lại đi...
+2025-12-19 01:29:44,476 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:29:46,738 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:29:46,738 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:29:46,738 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi của user về ngày trong tuần. User đang thắc mắc về việc hôm nay là thứ 7. Trạng thái: Không cần tool vì thông tin có thể trả lời trực tiếp dựa trên kiến thức về thời gian. Kết quả: User đang nhầm lẫn về ngày trong tuần.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:29:46,738 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:29:46,739 [INFO] 💾 Cached THINKING block: 453591582466375681_12563
+2025-12-19 01:29:46,740 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:29:47,210 [INFO] AI reply in 3.12s
+2025-12-19 01:30:18,670 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi ai là tổng thống mỹ 2025' → Search: 'tìm cho tôi ai là tổng thống mỹ 2025'
+2025-12-19 01:30:18,671 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi bản 3.0 ww có gì' → Search: 'tìm cho tôi bản 3.0 Wuthering Waves có gì release notes patch'
+2025-12-19 01:30:18,672 [INFO] 🔍 PRE-CHECK: User query cần search: 'tổng thống mỹ 2025 là ai' → Search: 'tổng thống mỹ 2025 là ai'
+2025-12-19 01:30:18,673 [INFO] 🔍 PRE-CHECK: User query cần search: 'ai là tổng thống' → Search: 'ai là tổng thống'
+2025-12-19 01:33:22,138 [INFO] Đang khởi động bot...
+2025-12-19 01:33:26,265 [INFO] Đã sync 4 slash commands!
+2025-12-19 01:33:26,268 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 01:33:26,290 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 01:33:26,290 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-19 01:33:26,291 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-19 01:33:26,291 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-19 01:33:26,291 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 01:33:26,292 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 01:33:26,292 [INFO]    - Max Requests/Window: 20
+2025-12-19 01:33:26,292 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 01:33:26,293 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 01:33:26,294 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 01:33:26,295 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 01:33:26,296 [INFO] Dung lượng trống: 258497 MB. Không cần dọn dẹp file local.
+2025-12-19 01:33:26,301 [INFO] DB backed up to d:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 01:33:26,302 [INFO] Audiophe#0258 online!
+2025-12-19 01:33:27,214 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: YES RESET...
+2025-12-19 01:33:27,218 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2025-12-19 01:33:27,220 [INFO] ADMIN: Reset JSON memory file.
+2025-12-19 01:33:34,581 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tìm cho tôi ai là tổng thống mỹ 2025...
+2025-12-19 01:33:34,611 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi ai là tổng thống mỹ 2025' → Search: 'tìm cho tôi ai là tổng thống mỹ 2025'
+2025-12-19 01:33:34,612 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:33:34,612 [INFO] 🔍 PRE-SEARCH triggered for: tìm cho tôi ai là tổng thống mỹ 2025
+2025-12-19 01:33:35,892 [INFO] ✅ Added search results to context
+2025-12-19 01:33:36,186 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:33:38,835 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:33:38,835 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:33:38,835 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về tổng thống Mỹ 2025. Chủ đề từ Tool: N/A. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:33:38,835 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:33:38,836 [INFO] 💾 Cached THINKING block: 453591582466375681_14655
+2025-12-19 01:33:38,837 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:33:39,304 [INFO] AI reply in 3.41s
+2025-12-19 01:33:46,338 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tìm cho tôi bản 3.0 ww có gì đi nào...
+2025-12-19 01:33:46,343 [INFO] 🔍 PRE-CHECK: User query cần search: 'tìm cho tôi bản 3.0 ww có gì đi nào' → Search: 'tìm cho tôi bản 3.0 Wuthering Waves có gì đi nào release notes patch'
+2025-12-19 01:33:46,343 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:33:46,343 [INFO] 🔍 PRE-SEARCH triggered for: tìm cho tôi bản 3.0 Wuthering Waves có gì đi nào release notes patch
+2025-12-19 01:33:49,025 [INFO] ✅ Added search results to context
+2025-12-19 01:33:49,375 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:33:53,102 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-19 01:33:53,102 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:33:53,102 [INFO] 1. **TỰ LOG**: Mục tiêu: Tìm thông tin về bản cập nhật 3.0 của Wuthering Waves (WW). Chủ đề từ Tool: GAMING. Trạng thái: Cần tìm kiếm thông tin mới. Kết quả: Thông tin về bản cập nhật 3.0 của Wuthering Waves.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:33:53,103 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:33:53,104 [INFO] 💾 Cached THINKING block: 453591582466375681_71107
+2025-12-19 01:33:53,104 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:33:54,035 [INFO] AI reply in 5.01s
+2025-12-19 01:34:01,185 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: DM - Content: tôi muốn biết ai là tổng thống mỹ 2025...
+2025-12-19 01:34:01,192 [INFO] 🔍 PRE-CHECK: User query cần search: 'tôi muốn biết ai là tổng thống mỹ 2025' → Search: 'tôi muốn biết ai là tổng thống mỹ 2025'
+2025-12-19 01:34:01,192 [INFO] 🔍 PRE-CHECK: Search needed from query. User: 453591582466375681
+2025-12-19 01:34:01,192 [INFO] 🔍 PRE-SEARCH triggered for: tôi muốn biết ai là tổng thống mỹ 2025
+2025-12-19 01:34:03,586 [INFO] ✅ Added search results to context
+2025-12-19 01:34:03,906 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:34:06,424 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:34:06,424 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:34:06,424 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời câu hỏi về tổng thống Mỹ năm 2025. Chủ đề từ Tool: PRESIDENTIAL_ELECTION_2025. Trạng thái: Đã có đủ kết quả tool. Kết quả: Tổng thống Mỹ năm 2025 là Donald Trump, nhậm chức ngày 20-1-2025.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:34:06,424 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:34:06,425 [INFO] 💾 Cached THINKING block: 453591582466375681_68115
+2025-12-19 01:34:06,426 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:34:06,995 [INFO] AI reply in 3.41s
+2025-12-19 01:39:07,360 [INFO] Đang khởi động bot...
+2025-12-19 01:39:11,793 [INFO] Đã sync 4 slash commands!
+2025-12-19 01:39:11,796 [INFO] DB initialized (messages + user_notes tables)
+2025-12-19 01:39:11,800 [INFO] ⚡ [Quick Check] Kiểm tra nhanh 5 keys...
+2025-12-19 01:39:11,801 [INFO] ✅ [Quick Check] 0/5 keys hoạt động
+2025-12-19 01:39:11,801 [ERROR] ⚠️ Không có key nào hoạt động sau health check!
+2025-12-19 01:39:11,801 [WARNING]    → Fallback: Sử dụng tất cả keys (có thể có key không hoạt động)
+2025-12-19 01:39:11,802 [INFO] ✅ [API Manager] Đã khởi tạo 5 API keys với Proactive Rate Limiting
+2025-12-19 01:39:11,802 [INFO]    - Cooldown Window: 1800s (30 phút)
+2025-12-19 01:39:11,802 [INFO]    - Max Requests/Window: 20
+2025-12-19 01:39:11,803 [INFO]    - Min Request Interval: 2.8s
+2025-12-19 01:39:11,803 [INFO] Chạy dọn dẹp DB (messages cũ)...
+2025-12-19 01:39:11,804 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-19 01:39:11,805 [INFO] Chạy dọn dẹp file local (file cũ)...
+2025-12-19 01:39:11,806 [INFO] Dung lượng trống: 258497 MB. Không cần dọn dẹp file local.
+2025-12-19 01:39:11,810 [INFO] DB backed up to d:\AI_Projects\Discord-bot\Gemini-Bot-Discord-refactor-clean-architecture-patterns\src\database\chat_history_backup.db
+2025-12-19 01:39:11,811 [INFO] Tingyun#4200 online!
+2025-12-19 01:42:30,559 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: Alo tingyun...
+2025-12-19 01:42:30,981 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:42:33,692 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:42:33,692 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-19 01:42:33,693 [INFO] 1. **TỰ LOG**: Mục tiêu: Chào hỏi người dùng. Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:42:33,693 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:42:33,695 [INFO] 💾 Cached THINKING block: 1414457651676581899_26596
+2025-12-19 01:42:33,695 [INFO] ✅ Model trả response kèm THINKING. User: 1414457651676581899
+2025-12-19 01:42:34,563 [INFO] AI reply in 3.98s
+2025-12-19 01:43:02,489 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: Tingyun đọc đc tin nhắn tui đang mention ko, nội d...
+2025-12-19 01:43:02,919 [INFO] 🔑 [API] Sử dụng key AIzaSyCD... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:43:05,254 [INFO] ✅ [API] Key AIzaSyCD... THÀNH CÔNG!
+2025-12-19 01:43:05,255 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-19 01:43:05,255 [INFO] 1. **TỰ LOG**: Mục tiêu: Kiểm tra xem Tingyun có đọc được tin nhắn mention hay không và nội dung tin nhắn đó là gì. Chủ đề từ Tool: N/A. Trạng thái: Không cần tool, có thể trả lời trực tiếp dựa trên ngữ cảnh chat. Kết quả: User đang hỏi về khả năng đọc tin nhắn mention.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:43:05,255 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:43:05,256 [INFO] 💾 Cached THINKING block: 1414457651676581899_16490
+2025-12-19 01:43:05,257 [INFO] ✅ Model trả response kèm THINKING. User: 1414457651676581899
+2025-12-19 01:43:05,717 [INFO] AI reply in 3.22s
+2025-12-19 01:43:44,340 [INFO] [TƯƠNG TÁC] User nyanko_desuwa (1414457651676581899) - Type: MENTION - Content: Tingyun đọc đc tin nhắn tui đang reply ko, nội dun...
+2025-12-19 01:43:44,816 [INFO] 🔑 [API] Sử dụng key AIzaSyBZ... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:43:47,738 [INFO] ✅ [API] Key AIzaSyBZ... THÀNH CÔNG!
+2025-12-19 01:43:47,738 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 1414457651676581899 ---
+2025-12-19 01:43:47,739 [INFO] 1. **TỰ LOG**: Mục tiêu: Kiểm tra xem Tingyun có đọc được tin nhắn người dùng đang reply hay không và nội dung tin nhắn đó là gì. Tuy nhiên, công cụ hiện tại không có khả năng đọc tin nhắn đang reply của người dùng. Do đó, cần thông báo cho người dùng biết điều này và hỏi lại nội dung tin nhắn. Chủ đề từ Tool: N/A. Trạng thái: Không thể thực hiện yêu cầu trực tiếp. Kết quả: Không có công cụ nào hỗ trợ đọc tin nhắn đang reply.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:43:47,739 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:43:47,740 [INFO] 💾 Cached THINKING block: 1414457651676581899_89706
+2025-12-19 01:43:47,741 [INFO] ✅ Model trả response kèm THINKING. User: 1414457651676581899
+2025-12-19 01:43:48,426 [INFO] AI reply in 4.08s
+2025-12-19 01:46:53,980 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: MENTION - Content: tingyun ơi ngủ ngon...
+2025-12-19 01:46:54,512 [INFO] 🔑 [API] Sử dụng key AIzaSyDH... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:46:56,997 [INFO] ✅ [API] Key AIzaSyDH... THÀNH CÔNG!
+2025-12-19 01:46:56,997 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:46:56,998 [INFO] 1. **TỰ LOG**: Mục tiêu: Chào tạm biệt người dùng. Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: N/A.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:46:56,998 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:46:56,999 [INFO] 💾 Cached THINKING block: 453591582466375681_41133
+2025-12-19 01:46:56,999 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:46:57,597 [INFO] AI reply in 3.61s
+2025-12-19 01:47:47,235 [INFO] File note đã lưu cho 1166884968098713621. File: image_IMG_0742.webp
+2025-12-19 01:48:25,661 [INFO] [TƯƠNG TÁC] User ryuugaarcadia (669919069121675265) - Type: MENTION - Content: Tingyun ơi...
+2025-12-19 01:48:25,826 [ERROR] AI call failed: Server disconnected
+2025-12-19 01:48:57,343 [INFO] [TƯƠNG TÁC] User azure_1012 (453591582466375681) - Type: MENTION - Content: tingyun ơiiii...
+2025-12-19 01:48:57,807 [INFO] 🔑 [API] Sử dụng key AIzaSyBL... (Attempt 1, đã thử 1 keys)
+2025-12-19 01:48:59,925 [INFO] ✅ [API] Key AIzaSyBL... THÀNH CÔNG!
+2025-12-19 01:48:59,926 [INFO] --- BẮT ĐẦU THINKING DEBUG CHO USER: 453591582466375681 ---
+2025-12-19 01:48:59,926 [INFO] 1. **TỰ LOG**: Mục tiêu: Trả lời lời chào của user. Chủ đề từ Tool: N/A. Trạng thái: Không cần tool. Kết quả: Không có.
+2. **PHÂN TÍCH "NEXT"**: Không áp dụng.
+2025-12-19 01:48:59,926 [INFO] --- KẾT THÚC THINKING DEBUG ---
+2025-12-19 01:48:59,927 [INFO] 💾 Cached THINKING block: 453591582466375681_24771
+2025-12-19 01:48:59,928 [INFO] ✅ Model trả response kèm THINKING. User: 453591582466375681
+2025-12-19 01:49:00,545 [INFO] AI reply in 3.20s
+2025-12-19 01:49:50,440 [WARNING] Lệnh không tồn tại: '!pray chúc <@1414457651676581899> ngủ ngol' từ User: kohaku527
