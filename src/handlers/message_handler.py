@@ -121,35 +121,43 @@ class MessageHandler:
                 self.logger.error(f"Lỗi khi gửi chunk {i}: {e}")
 
     async def handle_message(self, message: discord.Message, bot: commands.Bot):
-        """Main message handler."""
+        """Main message handler - FIXED FOR INFINITE LOOP"""
         try:
-            # Skip bot messages
-            if message.author == bot.user or message.author.bot:
+            # ✅ CHỐT CHẶN 1: Bỏ qua tất cả tin nhắn từ BOT (Bao gồm cả chính nó)
+            if message.author.bot:
                 return
             
             user_id = str(message.author.id)
             is_admin = user_id in self.config.ADMIN_USER_IDS
+            is_premium = self.premium_mgr.is_premium_user(user_id)
             
-            # ✅ Check rate limiting (BYPASS for ADMIN & PREMIUM)
-            is_premium = self.premium_mgr.is_premium_user(user_id) # Check xem có VIP không
+            # ✅ CHỐT CHẶN 2: Chỉ xử lý nếu được TAG hoặc nhắn tin riêng (DM)
+            is_dm = isinstance(message.channel, discord.DMChannel)
+            is_mentioned = bot.user in message.mentions
             
-            # Chỉ chặn nếu KHÔNG PHẢI Admin VÀ KHÔNG PHẢI Premium
+            if not is_dm and not is_mentioned:
+                return # Người khác chat với nhau, bot không hóng hớt
+
+            # ✅ Check rate limiting (Per User)
             if not is_admin and not is_premium:
                 now = datetime.now()
                 self.user_queue[user_id].append(now)
                 
-                # Remove old timestamps outside window
+                # Cleanup window
                 while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
                     self.user_queue[user_id].popleft()
                 
-                # Rate Limit Logic
                 if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
                     username = message.author.name
-                    # Log nhẹ thôi, debug cho đỡ rác
                     self.logger.warning(f"User {user_id} ({username}) rate limited ({len(self.user_queue[user_id])}/{self.RATE_LIMIT_THRESHOLD})")
-                    # Tùy chọn: Gửi icon để user biết mình nói nhanh quá
                     await message.add_reaction("⏳") 
                     return
+            
+            # Tiếp tục xử lý logic
+            if is_dm:
+                await self._handle_dm(message)
+            else:
+                await self._handle_mention(message)
                 
                 # Remove old timestamps outside window
                 while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
