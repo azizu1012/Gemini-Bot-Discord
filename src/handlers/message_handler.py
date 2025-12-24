@@ -388,145 +388,205 @@ class MessageHandler:
                     )
 
     async def _call_gemini_api(self, messages: List[Dict[str, Any]], user_id: str) -> str:
-        """Call Gemini API with Auto-Retry and Failover."""
-        MAX_RETRIES = 5  # Try up to 5 keys
+        """Two-Tier Model Strategy: Flash-Lite (reasoning) → Flash (final output)."""
+        
+        # TIER 1: Use Flash-Lite for reasoning loops + tool calls
+        reasoning_result = await self._call_gemini_reasoning_loop(messages, user_id)
+        
+        # TIER 2: Use Flash for final output (with reasoning context, no thinking needed)
+        final_output = await self._call_gemini_final(messages, reasoning_result, user_id)
+        
+        return final_output
+    
+    async def _call_gemini_reasoning_loop(self, messages: List[Dict[str, Any]], user_id: str) -> str:
+        """TIER 1: Flash-Lite model for reasoning loops and tool calls."""
+        MAX_RETRIES = 5
         
         for attempt in range(MAX_RETRIES):
-            # 1. Get Best Key
             api_key = self._get_best_api_key()
             if not api_key:
-                return "Hệ thống đang quá tải (Hết API Key), vui lòng chờ 1 phút."
+                return "API quota exceeded"
             
             try:
-                # 2. Configure GenAI
                 genai.configure(api_key=api_key)
                 
-                # --- CẬP NHẬT THỜI GIAN THỰC TẾ TỪ OS ---
-                # Lấy giờ hiện tại format rõ ràng (Ví dụ: "Friday, 24/12/2025 14:30")
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
-                
-                # Chèn dòng này lên đầu Prompt để "tẩy não" bot về thời gian
                 time_context = (
                     f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n"
-                    f"You MUST use this date to determine what is 'latest', 'current', 'newest'.\n"
-                    f"Example: If today is 2025, TGA 2024 is PAST, TGA 2025 is CURRENT/FUTURE.\n\n"
+                    f"You MUST use this date to determine what is 'latest', 'current', 'newest'.\n\n"
                 )
                 
-                # Ghép với prompt gốc
                 system_instruction = time_context + AZURIS_SYSTEM_PROMPT
                 tools = self.tools_mgr.get_all_tools()
                 
+                # TIER 1: Flash-Lite (cheaper, reasoning only)
                 generation_config = {
                     "temperature": 1.0,
                     "top_p": 0.95,
                     "top_k": 40,
-                    "max_output_tokens": 8000,
+                    "max_output_tokens": 4000,  # Limit for efficiency
                 }
                 
                 model = genai.GenerativeModel(
-                    model_name=self.config.MODEL_NAME,
+                    model_name="gemini-2.5-flash-lite",  # Lite model for reasoning
                     system_instruction=system_instruction,
                     tools=tools,
                     safety_settings=self.config.SAFETY_SETTINGS,
                     generation_config=generation_config
                 )
                 
-                # 3. Throttle (Wait if needed)
                 await self._throttle_api_request(api_key)
                 
-                # 4. Generate with Tool Loop
+                # Reasoning loop (up to 5 iterations)
                 iteration = 0
+                reasoning_messages = [msg.copy() for msg in messages]  # Copy for tier 1
+                
                 while iteration < 5:
                     iteration += 1
-                    self.logger.info(f"Gemini iteration {iteration} for user {user_id} (Key: ...{api_key[-4:]})")
+                    self.logger.info(f"Reasoning loop {iteration} for user {user_id} (Lite model)")
                     
                     response = await asyncio.to_thread(
                         model.generate_content, 
-                        messages, 
-                        stream=False,
-                        thinking={
-                            "type": "enabled",
-                            "budget_tokens": 5000
-                        }
+                        reasoning_messages, 
+                        stream=False
                     )
                     
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
-                        return "No response from model"
-
-                    # Log thinking content if available
-                    if hasattr(candidate, 'thinking') and candidate.thinking:
-                        self.logger.debug(f"Extended thinking content: {candidate.thinking[:200]}...")
+                        break
                     
                     part = candidate.content.parts[0]
                     
-                    # Tool Call
+                    # Handle tool calls during reasoning
                     if part.function_call and part.function_call.name:
                         fc = part.function_call
                         args = dict(fc.args) if fc.args else {}
-                        self.logger.info(f"Tool call: {fc.name} args={args}")
+                        self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
                         
                         tool_res = await self.tools_mgr.call_tool(fc, user_id)
                         
-                        messages.append({"role": "model", "parts": [part]})
-                        messages.append({
+                        reasoning_messages.append({"role": "model", "parts": [part]})
+                        reasoning_messages.append({
                             "role": "function", 
                             "parts": [{"function_response": {"name": fc.name, "response": {"content": str(tool_res)}}}]
                         })
                         continue
                     
-                    # Text Response
+                    # Text response = reasoning complete
                     elif part.text:
                         text = part.text.strip()
-                        if text:
-                            # ✅ FIX 1: Xóa THINKING block (internal thoughts)
-                            # Remove <THINKING>...</THINKING> blocks completely
-                            text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
-                            # ALSO catch plain text "THINKING\n...\n" format (no angle brackets)
-                            text = re.sub(r'^THINKING\s*\n(.*?)(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL).strip()
-                            
-                            # ✅ FIX 2: Xóa LOG và ANALYSIS prefix nếu bị lộ ra
-                            # Pattern: "LOG: Goal:...", "ANALYSIS:..."
-                            text = re.sub(r'^LOG:\s*Goal:.*?(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.DOTALL).strip()
-                            text = re.sub(r'^ANALYSIS:.*?(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.DOTALL).strip()
-                            
-                            # ✅ FIX 3: Regex mạnh hơn để bắt các lỗi gõ nhầm thẻ đóng (THINK, THKING, THINKKING, v.v.)
-                            # Xóa từ bất kỳ thẻ mở nào có chữ TH... cho đến thẻ đóng có chữ TH...
-                            text = re.sub(r'<TH[A-Z]*>.*?</TH[A-Z]*>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
-                            # Backup thêm một lần nữa nếu bot quên gõ thẻ đóng mà chỉ có thẻ mở ở đầu
-                            if text.startswith('<TH'):
-                                text = text.split('>', 1)[-1] if '>' in text else text
-                            text = text.strip()
-                            
-                            # ✅ FIX 5: ONLY return fallback if absolutely no text content remains
-                            # Avoid spam of fallback messages
-                            if text and len(text) > 5:  # Must have actual content (>5 chars)
-                                return text
-                            elif text:  # Has some content but very short
-                                return text
-                            else:  # Completely empty - only then use fallback
-                                # Continue to next iteration instead of returning
-                                continue
-                        
-                        # No text in this part, continue to next iteration
-                        continue
+                        if text and len(text) > 3:
+                            return text
+                        break
+                    
+                    break
                 
-                return "Max iterations reached."
-
+                return "Reasoning completed"
+                
             except Exception as e:
                 error_str = str(e)
-                # 5. Handle 429 Errors (Quota Exceeded)
-                if "429" in error_str or "quota" in error_str.lower() or "resource exhausted" in error_str.lower():
-                    self.logger.warning(f"⚠️ Key ...{api_key[-4:]} failed (429). Retrying ({attempt+1}/{MAX_RETRIES})...")
-                    self._mark_key_as_failed(api_key)  # Freeze this key
-                    continue  # Retry loop will pick a NEW key
+                if "429" in error_str or "quota" in error_str.lower():
+                    self.logger.warning(f"⚠️ Lite Key ...{api_key[-4:]} rate limited. Retrying...")
+                    self._mark_key_as_failed(api_key)
+                    continue
                 
-                # Other errors
-                self.logger.error(f"Gemini API Error (Non-429): {e}")
-                if attempt < 1: continue  # Retry once for network blips
-                return "Xin lỗi, hệ thống gặp lỗi kỹ thuật."
-
-        return "Hiện tại tất cả các cổng kết nối đều đang bận. Vui lòng thử lại sau."
+                self.logger.error(f"Lite model error: {e}")
+                continue
+        
+        return "Reasoning loop failed"
+    
+    async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, user_id: str) -> str:
+        """TIER 2: Flash model for final output (uses reasoning from tier 1)."""
+        MAX_RETRIES = 5
+        
+        for attempt in range(MAX_RETRIES):
+            api_key = self._get_best_api_key()
+            if not api_key:
+                return "API quota exceeded"
+            
+            try:
+                genai.configure(api_key=api_key)
+                
+                current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+                time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
+                
+                # Modify prompt: skip thinking from tier 1, just focus on final output
+                system_with_context = (
+                    time_context + AZURIS_SYSTEM_PROMPT +
+                    "\n\n*** FINAL OUTPUT MODE ***\n"
+                    "You received reasoning results from preliminary analysis. "
+                    "Ignore any <THINKING> blocks or reasoning artifacts - just provide the clean, final answer with your personality."
+                )
+                
+                generation_config = {
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 2000,
+                }
+                
+                model = genai.GenerativeModel(
+                    model_name=self.config.MODEL_NAME,  # Flash (better quality)
+                    system_instruction=system_with_context,
+                    safety_settings=self.config.SAFETY_SETTINGS,
+                    generation_config=generation_config
+                )
+                
+                await self._throttle_api_request(api_key)
+                
+                # Create final messages: original + reasoning context
+                final_messages = [msg.copy() for msg in original_messages]
+                
+                # Add reasoning as context in a user message
+                if final_messages:
+                    # Append to last user message or create new one
+                    if final_messages[-1].get("role") == "user":
+                        final_messages[-1]["parts"][-1] += f"\n\n[REASONING CONTEXT:\n{reasoning_result}\n]"
+                    else:
+                        final_messages.append({
+                            "role": "user",
+                            "parts": [f"[REASONING CONTEXT:\n{reasoning_result}\n]"]
+                        })
+                
+                self.logger.info(f"Final output for user {user_id} (Flash model)")
+                
+                response = await asyncio.to_thread(
+                    model.generate_content, 
+                    final_messages, 
+                    stream=False
+                )
+                
+                candidate = response.candidates[0] if response.candidates else None
+                if not (candidate and candidate.content and candidate.content.parts):
+                    return "No final response"
+                
+                part = candidate.content.parts[0]
+                
+                # Extract final text (no tools called at tier 2)
+                if part.text:
+                    text = part.text.strip()
+                    
+                    # Clean any leftover thinking/reasoning artifacts
+                    text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    text = re.sub(r'^THINKING\s*\n(.*?)(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL).strip()
+                    text = re.sub(r'^\[REASONING CONTEXT:.*?\]', '', text, flags=re.MULTILINE | re.DOTALL).strip()
+                    
+                    if text and len(text) > 5:
+                        return text
+                
+                return "Empty final response"
+                
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "quota" in error_str.lower():
+                    self.logger.warning(f"⚠️ Flash Key ...{api_key[-4:]} rate limited. Retrying...")
+                    self._mark_key_as_failed(api_key)
+                    continue
+                
+                self.logger.error(f"Final model error: {e}")
+                continue
+        
+        return "Final output failed"
     
     async def _clear_user_history(self, message: discord.Message, user_id: str):
         """Clear user chat history."""
