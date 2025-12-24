@@ -475,6 +475,52 @@ class MessageHandler:
                     # Text response = reasoning complete
                     elif part.text:
                         text = part.text.strip()
+                        
+                        # Parse text for tool calls in multiple formats:
+                        # 1. Direct: calculate(equation='...')
+                        # 2. In <tool_code>: <tool_code>print(calculate(...))</tool_code>
+                        # 3. In markdown: ```calculate(...) ```
+                        
+                        # First check for <tool_code> blocks
+                        tool_code_match = re.search(r'<tool_code>(.*?)</tool_code>', text, re.IGNORECASE | re.DOTALL)
+                        if tool_code_match:
+                            tool_code_content = tool_code_match.group(1)
+                            # Extract tool calls from code
+                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes)\s*\(\s*([^)]+)\)', tool_code_content, re.IGNORECASE)
+                        else:
+                            # Fall back to direct pattern matching
+                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes)\s*\(\s*([^)]+)\)', text, re.IGNORECASE)
+                        
+                        if tool_matches:
+                            # Found tool mentions in text - extract and call them
+                            for tool_name, args_str in tool_matches:
+                                self.logger.debug(f"Detected tool in text: {tool_name}({args_str})")
+                                # Parse arguments (simple key="value" extraction)
+                                args_dict = {}
+                                for arg_match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']+)["\']', args_str):
+                                    key, value = arg_match.groups()
+                                    args_dict[key] = value
+                                
+                                if args_dict:
+                                    # Create fake function_call object
+                                    class FakeFunctionCall:
+                                        def __init__(self, name, args):
+                                            self.name = name
+                                            self.args = args
+                                    
+                                    fc = FakeFunctionCall(tool_name.lower(), args_dict)
+                                    tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                                    
+                                    # Add to message history
+                                    reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
+                                    reasoning_messages.append({
+                                        "role": "function",
+                                        "parts": [{"function_response": {"name": tool_name.lower(), "response": {"content": str(tool_res)}}}]
+                                    })
+                                    break  # Continue loop for next tool
+                            continue
+                        
+                        # No tools found - reasoning complete
                         if text and len(text) > 3:
                             return text
                         break
@@ -539,13 +585,13 @@ class MessageHandler:
                 
                 # Add reasoning as context in a user message
                 if final_messages:
-                    # Append to last user message or create new one
+                    # Append reasoning context as new part (not concatenate string)
                     if final_messages[-1].get("role") == "user":
-                        final_messages[-1]["parts"][-1] += f"\n\n[REASONING CONTEXT:\n{reasoning_result}\n]"
+                        final_messages[-1]["parts"].append({"text": f"\n\n[REASONING CONTEXT:\n{reasoning_result}\n]"})
                     else:
                         final_messages.append({
                             "role": "user",
-                            "parts": [f"[REASONING CONTEXT:\n{reasoning_result}\n]"]
+                            "parts": [{"text": f"[REASONING CONTEXT:\n{reasoning_result}\n]"}]
                         })
                 
                 self.logger.info(f"Final output for user {user_id} (Flash model)")
@@ -566,10 +612,14 @@ class MessageHandler:
                 if part.text:
                     text = part.text.strip()
                     
-                    # Clean any leftover thinking/reasoning artifacts
+                    # Clean any leftover thinking/reasoning artifacts and tool blocks
                     text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
                     text = re.sub(r'^THINKING\s*\n(.*?)(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL).strip()
                     text = re.sub(r'^\[REASONING CONTEXT:.*?\]', '', text, flags=re.MULTILINE | re.DOTALL).strip()
+                    # Remove <tool_code> blocks - should never show to user
+                    text = re.sub(r'<tool_code>.*?</tool_code>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    # Also remove markdown code blocks with tool calls
+                    text = re.sub(r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes).*?```', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
                     
                     if text and len(text) > 5:
                         return text
