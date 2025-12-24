@@ -460,14 +460,23 @@ class MessageHandler:
                     elif part.text:
                         text = part.text
                         if text:
-                            # ✅ FIX 1: Regex mạnh hơn để bắt các lỗi gõ nhầm thẻ đóng (THINK, THKING, THINKKING, v.v.)
+                            # ✅ FIX 1: Xóa THINKING block (internal thoughts)
+                            # Remove <THINKING>...</THINKING> blocks completely
+                            text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                            
+                            # ✅ FIX 2: Xóa LOG và ANALYSIS prefix nếu bị lộ ra
+                            # Pattern: "LOG: Goal:...", "ANALYSIS:..."
+                            text = re.sub(r'^LOG:\s*Goal:.*?(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.DOTALL).strip()
+                            text = re.sub(r'^ANALYSIS:.*?(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.DOTALL).strip()
+                            
+                            # ✅ FIX 3: Regex mạnh hơn để bắt các lỗi gõ nhầm thẻ đóng (THINK, THKING, THINKKING, v.v.)
                             # Xóa từ bất kỳ thẻ mở nào có chữ TH... cho đến thẻ đóng có chữ TH...
                             text = re.sub(r'<TH[A-Z]*>.*?</TH[A-Z]*>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
                             # Backup thêm một lần nữa nếu bot quên gõ thẻ đóng mà chỉ có thẻ mở ở đầu
                             if text.startswith('<TH'):
                                 text = text.split('>', 1)[-1] if '>' in text else text
                             
-                            # ✅ FIX 2: Xử lý trường hợp Bot chỉ gõ mỗi cái thẻ mà không có nội dung text nào khác
+                            # ✅ FIX 4: Xử lý trường hợp Bot chỉ gõ mỗi cái thẻ mà không có nội dung text nào khác
                             if not text:
                                 return "Có vẻ tôi đang suy nghĩ hơi quá đà, bro hỏi lại câu khác ngắn gọn hơn xem sao! 😅"
                             

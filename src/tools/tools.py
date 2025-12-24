@@ -708,14 +708,32 @@ class ToolsManager:
                 
                 self.logger.info(f"Classified: {selected_topic.upper()}. Searching for: '{q_sub}'")
                 
+                # ✅ DYNAMIC QUERY GENERATION (Intelligent Suffix Selection)
                 suffixes = self.SEARCH_TOPICS[selected_topic]["suffixes"]
                 random.shuffle(suffixes)
                 
+                # Base query - the main search
                 q1 = q_sub.strip()
-                q2 = f"{q1} {suffixes[0]} OR {suffixes[1]}" if len(suffixes) > 1 else q1
-                q3 = f"{q1} {suffixes[2]} OR {suffixes[3]}" if len(suffixes) > 3 else q1
                 
-                fallback_q = f"{q_sub.strip()} {self.SEARCH_TOPICS['general']['suffixes'][0]} OR {self.SEARCH_TOPICS['general']['suffixes'][1]}"
+                # Enhanced queries with dynamic suffixes
+                # Q2: Add context suffixes for better search
+                if len(suffixes) > 1:
+                    q2 = f"{q1} {suffixes[0]} OR {suffixes[1]}"
+                else:
+                    q2 = q1
+                
+                # Q3: Add variation for different angles
+                if len(suffixes) > 3:
+                    q3 = f"{q1} {suffixes[2]} OR {suffixes[3]}"
+                elif len(suffixes) > 2:
+                    q3 = f"{q1} {suffixes[2]}"
+                else:
+                    q3 = q1
+                
+                # Fallback query: Auto-add "latest" or "new" if not present
+                fallback_q = q_sub.strip()
+                if not any(word in fallback_q.lower() for word in ["latest", "new", "current", "mới", "hiện tại"]):
+                    fallback_q = f"{fallback_q} latest OR newest OR current"
                 
                 self.logger.info(f"Queries: Q1='{q1}', Q2='{q2}', Q3='{q3}'")
                 
