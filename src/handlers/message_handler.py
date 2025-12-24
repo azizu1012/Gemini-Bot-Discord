@@ -13,6 +13,7 @@ import random
 
 from src.core.config import logger, Config
 from src.core.system_prompt import AZURIS_SYSTEM_PROMPT
+from src.core.lite_sys_prompt import LITE_SYSTEM_PROMPT
 from src.database.repository import DatabaseRepository
 from src.services.memory_service import MemoryService
 from src.services.file_parser import FileParserService
@@ -411,20 +412,18 @@ class MessageHandler:
                 genai.configure(api_key=api_key)
                 
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
-                time_context = (
-                    f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n"
-                    f"You MUST use this date to determine what is 'latest', 'current', 'newest'.\n\n"
-                )
+                time_context = f"Current time: {current_time_str}\n"
                 
-                system_instruction = time_context + AZURIS_SYSTEM_PROMPT
+                # Use LITE prompt (simple reasoning, not optimized output)
+                system_instruction = time_context + LITE_SYSTEM_PROMPT
                 tools = self.tools_mgr.get_all_tools()
                 
                 # TIER 1: Flash-Lite (cheaper, reasoning only)
                 generation_config = {
-                    "temperature": 1.0,
-                    "top_p": 0.95,
+                    "temperature": 0.7,  # Lower temp for focused reasoning
+                    "top_p": 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 4000,  # Limit for efficiency
+                    "max_output_tokens": 2000,  # Lite model shorter output
                 }
                 
                 model = genai.GenerativeModel(
@@ -583,6 +582,11 @@ class MessageHandler:
                 # Create final messages: original + reasoning context
                 final_messages = [msg.copy() for msg in original_messages]
                 
+                # Extract user input (BLOCK 1)
+                user_input = ""
+                if original_messages and original_messages[-1].get("role") == "user":
+                    user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")[:200]  # First 200 chars
+                
                 # Add reasoning as context in a user message
                 if final_messages:
                     # Append reasoning context as new part (not concatenate string)
@@ -618,6 +622,8 @@ class MessageHandler:
                     text = re.sub(r'^\[REASONING CONTEXT:.*?\]', '', text, flags=re.MULTILINE | re.DOTALL).strip()
                     # Remove <tool_code> blocks - should never show to user
                     text = re.sub(r'<tool_code>.*?</tool_code>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    # Remove <tool_result> blocks - internal tool results should not be shown
+                    text = re.sub(r'<tool_result>.*?</tool_result>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
                     # Also remove markdown code blocks with tool calls
                     text = re.sub(r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes).*?```', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
                     
