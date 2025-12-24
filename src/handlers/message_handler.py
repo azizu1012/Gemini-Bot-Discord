@@ -12,7 +12,7 @@ import re
 import random
 
 from src.core.config import logger, Config
-from src.core.system_prompt import AZURIS_SYSTEM_PROMPT
+from src.core.system_prompt import FUGUE_SYSTEM_PROMPT
 from src.database.repository import DatabaseRepository
 from src.services.memory_service import MemoryService
 from src.services.file_parser import FileParserService
