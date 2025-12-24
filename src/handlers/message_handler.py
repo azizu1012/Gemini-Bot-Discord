@@ -50,8 +50,8 @@ class MessageHandler:
         
         # Rate limiting (per user)
         self.user_queue: Dict[str, deque] = defaultdict(deque)
-        self.RATE_LIMIT_THRESHOLD = 3  # Max 3 messages
-        self.RATE_LIMIT_WINDOW = 120  # Per 2 minutes
+        self.RATE_LIMIT_THRESHOLD = 6  # Max messages
+        self.RATE_LIMIT_WINDOW = 90  # Per x seconds
         
         # --- API KEY MANAGEMENT ---
         # 1. Track usage stats (Load Balancing + 429 Failover)
@@ -62,6 +62,64 @@ class MessageHandler:
         self.api_key_request_history: Dict[str, List[float]] = {}
         self.api_key_history_lock = threading.Lock()
     
+    # --- HÀM MỚI: CẮT TEXT THÔNG MINH & TỰ REPLY (CHAINING) ---
+    async def send_smart_reply(self, message: discord.Message, text: str):
+        """
+        Gửi tin nhắn dài với 2 tính năng:
+        1. Cắt thông minh (Smart Split): Ưu tiên ngắt dòng (\n), rồi đến khoảng trắng.
+        2. Tự Reply (Chain Reply): Tin sau reply tin trước của bot để tạo mạch.
+        """
+        limit = 1900 # Giới hạn an toàn của Discord (max 2000)
+        chunks = []
+        current_text = text.strip()
+
+        # LOGIC CẮT TEXT
+        while len(current_text) > limit:
+            # Tìm dấu xuống dòng gần nhất trong giới hạn
+            split_idx = current_text.rfind('\n', 0, limit)
+            
+            # Nếu không có xuống dòng, tìm dấu cách gần nhất
+            if split_idx == -1:
+                split_idx = current_text.rfind(' ', 0, limit)
+            
+            # Nếu chuỗi quá dài không có dấu cách (URL dài...), cắt cứng
+            if split_idx == -1:
+                split_idx = limit
+            
+            # Cắt đoạn
+            chunk = current_text[:split_idx].strip()
+            if chunk:
+                chunks.append(chunk)
+            
+            # Cập nhật phần còn lại
+            current_text = current_text[split_idx:].strip()
+        
+        if current_text:
+            chunks.append(current_text)
+
+        # LOGIC GỬI TIN (CHAIN REPLY)
+        last_bot_message = None
+        
+        for i, chunk in enumerate(chunks):
+            try:
+                if i == 0:
+                    # Tin đầu tiên: Reply vào câu hỏi của User
+                    last_bot_message = await message.reply(chunk, mention_author=False)
+                else:
+                    # Tin tiếp theo: Reply vào tin trước đó của BOT
+                    if last_bot_message:
+                        last_bot_message = await last_bot_message.reply(chunk, mention_author=False)
+                    else:
+                        # Fallback nếu mất dấu tin trước
+                        last_bot_message = await message.channel.send(chunk)
+                
+                # Delay nhẹ để Discord load kịp, tránh loạn thứ tự
+                if i < len(chunks) - 1:
+                    await asyncio.sleep(1.0)
+                    
+            except Exception as e:
+                self.logger.error(f"Lỗi khi gửi chunk {i}: {e}")
+
     async def handle_message(self, message: discord.Message, bot: commands.Bot):
         """Main message handler."""
         try:
@@ -83,7 +141,9 @@ class MessageHandler:
                 
                 # If user has more than threshold -> rate limit
                 if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
-                    self.logger.warning(f"User {user_id} rate limited (spam: {len(self.user_queue[user_id])}/{self.RATE_LIMIT_THRESHOLD} in window)")
+                # --- SỬA DÒNG LOG NÀY ---
+                    username = message.author.name  # Lấy tên user
+                    self.logger.warning(f"User {user_id} ({username}) rate limited (spam: {len(self.user_queue[user_id])}/{self.RATE_LIMIT_THRESHOLD} in window)")
                     return
             
             # Check for DM
@@ -234,13 +294,8 @@ class MessageHandler:
             await self.db_repo.log_message_db(user_id, "user", user_message)
             await self.db_repo.log_message_db(user_id, "assistant", response_text)
             
-            # 8. Send Response (Chunking)
-            if len(response_text) > 2000:
-                for i in range(0, len(response_text), 1900):
-                    chunk = response_text[i:i+1900]
-                    await message.reply(chunk, mention_author=False)
-            else:
-                await message.reply(response_text, mention_author=False)
+            # 8. Send Response (Smart Chunking & Chain Reply)
+            await self.send_smart_reply(message, response_text)
         
         except Exception as e:
             self.logger.error(f"Error processing message: {e}")
