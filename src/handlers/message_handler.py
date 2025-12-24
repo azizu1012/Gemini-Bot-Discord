@@ -38,6 +38,7 @@ class MessageHandler:
         self.bot_core = bot_core
         self.config = config
         self.logger = logger
+        self.bot = None  # Will be set via handle_message()
         self.db_repo = DatabaseRepository()
         self.memory_service = MemoryService()
         self.cache_mgr = CacheManager()
@@ -123,6 +124,9 @@ class MessageHandler:
     async def handle_message(self, message: discord.Message, bot: commands.Bot):
             """Main message handler - FIXED FOR DUPLICATE & LOOP"""
             try:
+                # Store bot instance for use in other methods
+                self.bot = bot
+                
                 # ✅ 1. CHỐT CHẶN: Bỏ qua tin nhắn từ BOT (Bao gồm chính nó)
                 if message.author.bot:
                     return
@@ -133,7 +137,7 @@ class MessageHandler:
                 
                 # ✅ 2. XÁC ĐỊNH NGỮ CẢNH: Chỉ xử lý nếu được TAG hoặc DM
                 is_dm = isinstance(message.channel, discord.DMChannel)
-                is_mentioned = bot.user in message.mentions
+                is_mentioned = self.bot.user in message.mentions
                 
                 if not is_dm and not is_mentioned:
                     return 
@@ -193,11 +197,20 @@ class MessageHandler:
         user_id = str(message.author.id)
         
         try:
-            # 1. Clean content
+            # 1. Clean content (CHỈ XÓA TAG CỦA BOT, GIỮ TAG NGƯỜI KHÁC)
             content = message.content
+            # Thay vì xóa mọi mention, ta chỉ xóa tag của con bot hiện tại
+            bot_mention = f"<@{self.bot.user.id}>"
+            bot_mention_mobile = f"<@!{self.bot.user.id}>"
+            content = content.replace(bot_mention, "").replace(bot_mention_mobile, "")
+            
+            # Với các mention khác (như @toma), ta chuyển nó về dạng tên đọc được để AI hiểu
             if message.mentions:
                 for mention in message.mentions:
-                    content = content.replace(f"<@{mention.id}>", "").replace(f"<@!{mention.id}>", "")
+                    if mention.id != self.bot.user.id:
+                        # Thay <@123...> thành "@Tên_User"
+                        content = content.replace(f"<@{mention.id}>", f"@{mention.display_name}")
+                        content = content.replace(f"<@!{mention.id}>", f"@{mention.display_name}")
             content = content.strip()
             
             # 2. Handle Reply Context (Smart Reply)
@@ -446,12 +459,18 @@ class MessageHandler:
                     # Text Response
                     elif part.text:
                         text = part.text
-                        # ✅ Clean THINKING tags
                         if text:
-                            text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.DOTALL).strip()
-                        
-                        if not text:
-                            return "..."  # Fallback
+                            # ✅ FIX 1: Regex mạnh hơn để bắt các lỗi gõ nhầm thẻ đóng (THINK, THKING, THINKKING, v.v.)
+                            # Xóa từ bất kỳ thẻ mở nào có chữ TH... cho đến thẻ đóng có chữ TH...
+                            text = re.sub(r'<TH[A-Z]*>.*?</TH[A-Z]*>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                            # Backup thêm một lần nữa nếu bot quên gõ thẻ đóng mà chỉ có thẻ mở ở đầu
+                            if text.startswith('<TH'):
+                                text = text.split('>', 1)[-1] if '>' in text else text
+                            
+                            # ✅ FIX 2: Xử lý trường hợp Bot chỉ gõ mỗi cái thẻ mà không có nội dung text nào khác
+                            if not text:
+                                return "Có vẻ tôi đang suy nghĩ hơi quá đà, bro hỏi lại câu khác ngắn gọn hơn xem sao! 😅"
+                            
                         return text
                 
                 return "Max iterations reached."
