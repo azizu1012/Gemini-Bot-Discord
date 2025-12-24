@@ -440,12 +440,24 @@ class MessageHandler:
                     iteration += 1
                     self.logger.info(f"Gemini iteration {iteration} for user {user_id} (Key: ...{api_key[-4:]})")
                     
-                    response = await asyncio.to_thread(model.generate_content, messages, stream=False)
+                    response = await asyncio.to_thread(
+                        model.generate_content, 
+                        messages, 
+                        stream=False,
+                        thinking={
+                            "type": "enabled",
+                            "budget_tokens": 5000
+                        }
+                    )
                     
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
                         return "No response from model"
 
+                    # Log thinking content if available
+                    if hasattr(candidate, 'thinking') and candidate.thinking:
+                        self.logger.debug(f"Extended thinking content: {candidate.thinking[:200]}...")
+                    
                     part = candidate.content.parts[0]
                     
                     # Tool Call
@@ -470,6 +482,8 @@ class MessageHandler:
                             # ✅ FIX 1: Xóa THINKING block (internal thoughts)
                             # Remove <THINKING>...</THINKING> blocks completely
                             text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                            # ALSO catch plain text "THINKING\n...\n" format (no angle brackets)
+                            text = re.sub(r'^THINKING\s*\n(.*?)(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL).strip()
                             
                             # ✅ FIX 2: Xóa LOG và ANALYSIS prefix nếu bị lộ ra
                             # Pattern: "LOG: Goal:...", "ANALYSIS:..."
