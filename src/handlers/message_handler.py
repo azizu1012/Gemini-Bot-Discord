@@ -197,20 +197,27 @@ class MessageHandler:
         user_id = str(message.author.id)
         
         try:
-            # 1. Clean content (CHỈ XÓA TAG CỦA BOT, GIỮ TAG NGƯỜI KHÁC)
-            content = message.content
-            # Thay vì xóa mọi mention, ta chỉ xóa tag của con bot hiện tại
+            # 1. Clean content (CHỈ XÓA TAG CỦA BOT, CLEAN MENTION)
+            content = message.content.strip()
+            
+            # Step 1a: Xóa bot mention trước (cả format <@ID> và <@!ID>)
             bot_mention = f"<@{self.bot.user.id}>"
             bot_mention_mobile = f"<@!{self.bot.user.id}>"
             content = content.replace(bot_mention, "").replace(bot_mention_mobile, "")
             
-            # Với các mention khác (như @toma), ta chuyển nó về dạng tên đọc được để AI hiểu
+            # Step 1b: Xóa ký tự @ (bot tự hiểu tên)
+            # Remove @ symbol but keep the names - bot understands naturally
+            content = content.replace('@', '')  # Remove @ symbol
+            content = re.sub(r'\s+', ' ', content).strip()  # Normalize spaces
+            
+            # Step 1c: Convert remaining user mentions to readable format (for AI)
             if message.mentions:
                 for mention in message.mentions:
-                    if mention.id != self.bot.user.id:
-                        # Thay <@123...> thành "@Tên_User"
+                    if mention.id != self.bot.user.id:  # Skip bot itself
+                        # Replace mention IDs with user display name (for context)
                         content = content.replace(f"<@{mention.id}>", f"@{mention.display_name}")
                         content = content.replace(f"<@!{mention.id}>", f"@{mention.display_name}")
+            
             content = content.strip()
             
             # 2. Handle Reply Context (Smart Reply)
@@ -458,7 +465,7 @@ class MessageHandler:
                     
                     # Text Response
                     elif part.text:
-                        text = part.text
+                        text = part.text.strip()
                         if text:
                             # ✅ FIX 1: Xóa THINKING block (internal thoughts)
                             # Remove <THINKING>...</THINKING> blocks completely
@@ -475,12 +482,20 @@ class MessageHandler:
                             # Backup thêm một lần nữa nếu bot quên gõ thẻ đóng mà chỉ có thẻ mở ở đầu
                             if text.startswith('<TH'):
                                 text = text.split('>', 1)[-1] if '>' in text else text
+                            text = text.strip()
                             
-                            # ✅ FIX 4: Xử lý trường hợp Bot chỉ gõ mỗi cái thẻ mà không có nội dung text nào khác
-                            if not text:
-                                return "Có vẻ tôi đang suy nghĩ hơi quá đà, bro hỏi lại câu khác ngắn gọn hơn xem sao! 😅"
-                            
-                        return text
+                            # ✅ FIX 5: ONLY return fallback if absolutely no text content remains
+                            # Avoid spam of fallback messages
+                            if text and len(text) > 5:  # Must have actual content (>5 chars)
+                                return text
+                            elif text:  # Has some content but very short
+                                return text
+                            else:  # Completely empty - only then use fallback
+                                # Continue to next iteration instead of returning
+                                continue
+                        
+                        # No text in this part, continue to next iteration
+                        continue
                 
                 return "Max iterations reached."
 
