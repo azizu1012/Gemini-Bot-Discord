@@ -12,7 +12,7 @@ import re
 import random
 
 from src.core.config import logger, Config
-from src.core.system_prompt import AZURIS_SYSTEM_PROMPT
+from src.core.system_prompt import FUGUE_SYSTEM_PROMPT
 from src.database.repository import DatabaseRepository
 from src.services.memory_service import MemoryService
 from src.services.file_parser import FileParserService
@@ -121,79 +121,56 @@ class MessageHandler:
                 self.logger.error(f"Lỗi khi gửi chunk {i}: {e}")
 
     async def handle_message(self, message: discord.Message, bot: commands.Bot):
-        """Main message handler - FIXED FOR INFINITE LOOP"""
-        try:
-            # ✅ CHỐT CHẶN 1: Bỏ qua tất cả tin nhắn từ BOT (Bao gồm cả chính nó)
-            if message.author.bot:
-                return
-            
-            user_id = str(message.author.id)
-            is_admin = user_id in self.config.ADMIN_USER_IDS
-            is_premium = self.premium_mgr.is_premium_user(user_id)
-            
-            # ✅ CHỐT CHẶN 2: Chỉ xử lý nếu được TAG hoặc nhắn tin riêng (DM)
-            is_dm = isinstance(message.channel, discord.DMChannel)
-            is_mentioned = bot.user in message.mentions
-            
-            if not is_dm and not is_mentioned:
-                return # Người khác chat với nhau, bot không hóng hớt
+            """Main message handler - FIXED FOR DUPLICATE & LOOP"""
+            try:
+                # ✅ 1. CHỐT CHẶN: Bỏ qua tin nhắn từ BOT (Bao gồm chính nó)
+                if message.author.bot:
+                    return
+                
+                user_id = str(message.author.id)
+                is_admin = user_id in self.config.ADMIN_USER_IDS
+                is_premium = self.premium_mgr.is_premium_user(user_id)
+                
+                # ✅ 2. XÁC ĐỊNH NGỮ CẢNH: Chỉ xử lý nếu được TAG hoặc DM
+                is_dm = isinstance(message.channel, discord.DMChannel)
+                is_mentioned = bot.user in message.mentions
+                
+                if not is_dm and not is_mentioned:
+                    return 
 
-            # ✅ Check rate limiting (Per User)
-            if not is_admin and not is_premium:
-                now = datetime.now()
-                self.user_queue[user_id].append(now)
-                
-                # Cleanup window
-                while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
-                    self.user_queue[user_id].popleft()
-                
-                if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
-                    username = message.author.name
-                    self.logger.warning(f"User {user_id} ({username}) rate limited ({len(self.user_queue[user_id])}/{self.RATE_LIMIT_THRESHOLD})")
-                    await message.add_reaction("⏳") 
+                # ✅ 3. CHECK RATE LIMIT (Per User)
+                if not is_admin and not is_premium:
+                    now = datetime.now()
+                    self.user_queue[user_id].append(now)
+                    while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
+                        self.user_queue[user_id].popleft()
+                    
+                    if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
+                        await message.add_reaction("⏳") 
+                        return
+
+                # ✅ 4. LOGIC RESET DATA (Xử lý xác nhận Reset)
+                if user_id in self.bot_core.confirmation_pending and self.bot_core.confirmation_pending[user_id]['awaiting']:
+                    if message.content.lower() in ['yes', 'y']:
+                        await self._clear_user_history(message, user_id)
+                    self.bot_core.confirmation_pending[user_id]['awaiting'] = False
                     return
-            
-            # Tiếp tục xử lý logic
-            if is_dm:
-                await self._handle_dm(message)
-            else:
-                await self._handle_mention(message)
                 
-                # Remove old timestamps outside window
-                while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
-                    self.user_queue[user_id].popleft()
-                
-                # If user has more than threshold -> rate limit
-                if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
-                # --- SỬA DÒNG LOG NÀY ---
-                    username = message.author.name  # Lấy tên user
-                    self.logger.warning(f"User {user_id} ({username}) rate limited (spam: {len(self.user_queue[user_id])}/{self.RATE_LIMIT_THRESHOLD} in window)")
+                if user_id in self.bot_core.admin_confirmation_pending and self.bot_core.admin_confirmation_pending[user_id]['awaiting']:
+                    if message.content.upper() == 'YES RESET':
+                        await self._clear_all_data(message, user_id)
+                    self.bot_core.admin_confirmation_pending[user_id]['awaiting'] = False
                     return
-            
-            # Check for DM
-            if isinstance(message.channel, discord.DMChannel):
-                await self._handle_dm(message)
-            else:
-                # Check for mention
-                if bot.user in message.mentions:
+
+                # ✅ 5. PHÂN LUỒNG XỬ LÝ (CHỈ CHẠY 1 TRONG 2)
+                # Không được để lặp lại check is_dm/is_mentioned ở dưới nữa
+                if is_dm:
+                    await self._handle_dm(message)
+                else:
                     await self._handle_mention(message)
             
-            # Check for confirmation pending (Reset Chat)
-            if user_id in self.bot_core.confirmation_pending and self.bot_core.confirmation_pending[user_id]['awaiting']:
-                if message.content.lower() in ['yes', 'y']:
-                    await self._clear_user_history(message, user_id)
-                self.bot_core.confirmation_pending[user_id]['awaiting'] = False
-                return
-            
-            # Check for admin confirmation (Reset All)
-            if user_id in self.bot_core.admin_confirmation_pending and self.bot_core.admin_confirmation_pending[user_id]['awaiting']:
-                if message.content.upper() == 'YES RESET':
-                    await self._clear_all_data(message, user_id)
-                self.bot_core.admin_confirmation_pending[user_id]['awaiting'] = False
-                return
-        
-        except Exception as e:
-            self.logger.error(f"Error in handle_message: {e}")
+            except Exception as e:
+                self.logger.error(f"Error in handle_message: {e}")
     
     async def _handle_dm(self, message: discord.Message):
         """Handle direct messages."""
@@ -416,7 +393,7 @@ class MessageHandler:
                 )
                 
                 # Ghép với prompt gốc
-                system_instruction = time_context + AZURIS_SYSTEM_PROMPT
+                system_instruction = time_context + FUGUE_SYSTEM_PROMPT
                 tools = self.tools_mgr.get_all_tools()
                 
                 generation_config = {
