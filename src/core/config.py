@@ -1,40 +1,22 @@
-"""
-Configuration Manager - Singleton Pattern
-Quản lý tất cả cấu hình của bot một cách tập trung
-"""
 import os
-import configparser
 from dotenv import load_dotenv
-from typing import List, Dict, Optional
+import logging
 from google.generativeai.types import HarmCategory, HarmBlockThreshold
-
-# Load environment variables
-load_dotenv()
 
 
 class Config:
-    """
-    Singleton Pattern cho Configuration
-    Đảm bảo chỉ có một instance duy nhất của config trong toàn bộ ứng dụng
-    """
-    _instance = None
-    _initialized = False
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(Config, cls).__new__(cls)
-        return cls._instance
-
+    """Singleton configuration manager for the bot."""
+    
     def __init__(self):
-        if Config._initialized:
-            return
+        load_dotenv()
         
-        # Discord & Bot Configuration
-        self.DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-        self.MODEL_NAME = os.getenv('MODEL_NAME', 'gemini-pro')
+        # --- LOGGING SETUP ---
+        self.logger = self._setup_logger()
+        
+        # --- DISCORD & BOT ---
+        self.TOKEN = os.getenv('DISCORD_TOKEN')
+        self.MODEL_NAME = os.getenv('MODEL_NAME')
         self.ADMIN_ID = os.getenv('ADMIN_ID', '')
-        
-        # Special User IDs
         self.HABE_USER_ID = os.getenv('HABE_USER_ID', '')
         self.MIRA_USER_ID = os.getenv('MIRA_USER_ID', '')
         self.ADO_FAT_USER_ID = os.getenv('ADO_FAT_USER_ID', '')
@@ -42,10 +24,20 @@ class Config:
         self.SUC_VIEN_USER_ID = os.getenv('SUC_VIEN_USER_ID', '')
         self.CHUI_USER_ID = os.getenv('CHUI_USER_ID', '')
         
-        # Gemini API Keys
-        self._load_gemini_api_keys()
+        # --- GEMINI API KEYS (DYNAMIC LOAD 1-15+) ---
+        self.GEMINI_API_KEYS = []
+        # Tự động load từ GEMINI_API_KEY_1 đến GEMINI_API_KEY_20
+        for i in range(1, 21): 
+            key = os.getenv(f'GEMINI_API_KEY_{i}')
+            if key:
+                self.GEMINI_API_KEYS.append(key)
         
-        # Search API Keys
+        if not self.GEMINI_API_KEYS:
+            self.logger.error("Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.")
+        else:
+            self.logger.info(f"✅ Đã thiết lập {len(self.GEMINI_API_KEYS)} Gemini API keys cho Smart Rotation.")
+        
+        # --- SEARCH API KEYS ---
         self.SERPAPI_API_KEY = os.getenv('SERPAPI_API_KEY')
         self.TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
         self.EXA_API_KEY = os.getenv('EXA_API_KEY')
@@ -56,29 +48,33 @@ class Config:
         self.GOOGLE_CSE_ID_2 = os.getenv("GOOGLE_CSE_ID_2")
         self.GOOGLE_CSE_API_KEY_2 = os.getenv("GOOGLE_CSE_API_KEY_2")
         
-        # Hugging Face API Key
+        # --- HUGGING FACE API KEY ---
         self.HF_TOKEN = os.getenv('HF_TOKEN')
         
-        # Weather API
+        # --- WEATHER API ---
         self.WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
         self.CITY = os.getenv('CITY')
         
-        # Proxy Configuration
-        self._load_proxy_config()
+        # --- FILE PATHS ---
+        self.DB_PATH = os.path.join(os.path.dirname(__file__), '../../data/chat_history.db')
+        self.DB_BACKUP_PATH = os.path.join(os.path.dirname(__file__), '../../data/chat_history_backup.db')
+        self.NOTE_PATH = os.path.join(os.path.dirname(__file__), '../../data/notes.txt')
+        self.MEMORY_PATH = os.path.join(os.path.dirname(__file__), '../../data/short_term_memory.json')
+        self.WEATHER_CACHE_PATH = os.path.join(os.path.dirname(__file__), '../../data/weather_cache.json')
+        self.FILE_STORAGE_PATH = os.path.join(os.path.dirname(__file__), '../../uploaded_files')
         
-        # File Paths
-        self._setup_paths()
-        
-        # Rate Limiting & Anti-Spam
+        # --- ANTI-SPAM ---
         self.SPAM_THRESHOLD = 3
         self.SPAM_WINDOW = 30
-        self.DEFAULT_RATE_LIMIT = "10/60"  # 10 requests per 60 seconds
-        self.PREMIUM_RATE_LIMIT = "20/60"  # 20 requests per 60 seconds
-        self.DEFAULT_DM_LIMIT = 5  # 5 DMs per day
-        self.PREMIUM_DM_LIMIT = 15  # 15 DMs per day
+        
+        # --- RATE & DM LIMITS ---
+        self.DEFAULT_RATE_LIMIT = "10/60"
+        self.PREMIUM_RATE_LIMIT = "20/60"
+        self.DEFAULT_DM_LIMIT = 5
+        self.PREMIUM_DM_LIMIT = 15
         self.ADMIN_USER_IDS = [self.ADMIN_ID] if self.ADMIN_ID else []
         
-        # Gemini Safety Settings
+        # --- GEMINI SAFETY SETTINGS ---
         self.SAFETY_SETTINGS = [
             {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
             {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
@@ -86,195 +82,79 @@ class Config:
             {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
         ]
         
-        Config._initialized = True
-
-    def _load_gemini_api_keys(self) -> None:
-        """Load và validate Gemini API keys - Từ cả bot và file dịch truyện"""
-        # Keys từ bot cũ
-        bot_keys = [
-            os.getenv('GEMINI_API_KEY_PROD'),
-            os.getenv('GEMINI_API_KEY_TEST'),
-            os.getenv('GEMINI_API_KEY_BACKUP'),
-            os.getenv('GEMINI_API_KEY_EXTRA1'),
-            os.getenv('GEMINI_API_KEY_EXTRA2'),
-            os.getenv('GEMINI_API_KEY_EXTRA3'),
-            os.getenv('GEMINI_API_KEY_EXTRA4'),
-            os.getenv('GEMINI_API_KEY_EXTRA5'),
-            os.getenv('GEMINI_API_KEY_EXTRA6'),
-            os.getenv('GEMINI_API_KEY_EXTRA7'),
-            os.getenv('GEMINI_API_KEY_EXTRA8'),
-            os.getenv('GEMINI_API_KEY_EXTRA9'),
-            os.getenv('GEMINI_API_KEY_EXTRA10'),
-        ]
-        
-        # Keys từ file dịch truyện (main pool)
-        translator_main_keys = [
-            os.getenv('GEMINI_API_KEY_1'),
-            os.getenv('GEMINI_API_KEY_2'),
-            os.getenv('GEMINI_API_KEY_3'),
-            os.getenv('GEMINI_API_KEY_4'),
-            os.getenv('GEMINI_API_KEY_5'),
-            os.getenv('GEMINI_API_KEY_6'),
-            os.getenv('GEMINI_API_KEY_7'),
-            os.getenv('GEMINI_API_KEY_8'),
-            os.getenv('GEMINI_API_KEY_9'),
-        ]
-        
-        # Keys từ file dịch truyện (summary pool - dùng chung)
-        translator_summary_keys = [
-            os.getenv('GEMINI_API_KEY_Tomtat'),
-            os.getenv('GEMINI_API_KEY_Tomtat_2'),
-            os.getenv('GEMINI_API_KEY_Tomtat_3'),
-            os.getenv('GEMINI_API_KEY_Tomtat_4'),
-            os.getenv('GEMINI_API_KEY_Tomtat_5'),
-        ]
-        
-        # Gộp tất cả keys lại (loại bỏ None và trùng lặp)
-        all_keys = bot_keys + translator_main_keys + translator_summary_keys
-        unique_keys = []
-        seen = set()
-        for key in all_keys:
-            if key and key.strip() and key not in seen:
-                unique_keys.append(key)
-                seen.add(key)
-        
-        self.GEMINI_API_KEYS = unique_keys
-        
-        if not self.GEMINI_API_KEYS:
-            print("WARNING: Khong tim thay Gemini API keys! Bot se khong the hoat dong.")
-        else:
-            print(f"INFO: Da thiet lap {len(self.GEMINI_API_KEYS)} Gemini API keys.")
-            print(f"     - Bot keys: {len([k for k in bot_keys if k])}")
-            print(f"     - Translator main: {len([k for k in translator_main_keys if k])}")
-            print(f"     - Translator summary: {len([k for k in translator_summary_keys if k])}")
-
-    def _load_proxy_config(self) -> None:
-        """Load proxy configuration từ config.ini hoặc .env"""
-        # base_dir là root của project (2 levels up từ src/core/config.py)
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        config_ini_path = os.path.join(base_dir, 'config.ini')
-        
-        # Đọc từ config.ini nếu có
-        if os.path.exists(config_ini_path):
-            try:
-                config_parser = configparser.ConfigParser()
-                config_parser.read(config_ini_path, encoding='utf-8')
-                
-                if config_parser.has_section('PROXY'):
-                    self.PROXY_ENABLED = config_parser.getboolean('PROXY', 'enabled', fallback=False)
-                    if self.PROXY_ENABLED:
-                        self.PROXY_HOST = config_parser.get('PROXY', 'host', fallback='')
-                        self.PROXY_PORT = config_parser.getint('PROXY', 'port', fallback=0)
-                        self.PROXY_USERNAME = config_parser.get('PROXY', 'username', fallback='')
-                        self.PROXY_PASSWORD = config_parser.get('PROXY', 'password', fallback='')
-                        
-                        if self.PROXY_HOST and self.PROXY_PORT and self.PROXY_USERNAME and self.PROXY_PASSWORD:
-                            self.PROXY_URL = f"http://{self.PROXY_USERNAME}:{self.PROXY_PASSWORD}@{self.PROXY_HOST}:{self.PROXY_PORT}"
-                        else:
-                            self.PROXY_ENABLED = False
-                            self.PROXY_URL = None
-                    else:
-                        self.PROXY_URL = None
-                else:
-                    self.PROXY_ENABLED = False
-                    self.PROXY_URL = None
-            except Exception as e:
-                print(f"WARNING: Loi doc config.ini: {e}. Su dung .env hoac default.")
-                self._load_proxy_from_env()
-        else:
-            # Fallback về .env hoặc default
-            self._load_proxy_from_env()
-    
-    def _load_proxy_from_env(self) -> None:
-        """Load proxy từ environment variable hoặc default"""
-        proxy_str = os.getenv('PROXY', 'proxy05062.nproxy.online:41605:sophia598:odawntgzmdyxmw==')
-        
-        if proxy_str:
-            parts = proxy_str.split(':')
-            if len(parts) == 4:
-                self.PROXY_HOST = parts[0]
-                self.PROXY_PORT = int(parts[1])
-                self.PROXY_USERNAME = parts[2]
-                self.PROXY_PASSWORD = parts[3]
-                self.PROXY_ENABLED = True
-                self.PROXY_URL = f"http://{self.PROXY_USERNAME}:{self.PROXY_PASSWORD}@{self.PROXY_HOST}:{self.PROXY_PORT}"
-            else:
-                self.PROXY_ENABLED = False
-                self.PROXY_URL = None
-        else:
-            self.PROXY_ENABLED = False
-            self.PROXY_URL = None
-    
-    def toggle_proxy(self, enabled: bool) -> bool:
-        """Bật/tắt proxy và lưu vào config.ini"""
-        # base_dir là root của project (2 levels up từ src/core/config.py)
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        config_ini_path = os.path.join(base_dir, 'config.ini')
-        
-        try:
-            config_parser = configparser.ConfigParser()
-            if os.path.exists(config_ini_path):
-                config_parser.read(config_ini_path, encoding='utf-8')
-            else:
-                config_parser.add_section('PROXY')
-            
-            if not config_parser.has_section('PROXY'):
-                config_parser.add_section('PROXY')
-            
-            config_parser.set('PROXY', 'enabled', str(enabled).lower())
-            
-            # Giữ nguyên các giá trị khác nếu đã có
-            if not config_parser.has_option('PROXY', 'host'):
-                config_parser.set('PROXY', 'host', getattr(self, 'PROXY_HOST', 'proxy05062.nproxy.online'))
-            if not config_parser.has_option('PROXY', 'port'):
-                config_parser.set('PROXY', 'port', str(getattr(self, 'PROXY_PORT', 41605)))
-            if not config_parser.has_option('PROXY', 'username'):
-                config_parser.set('PROXY', 'username', getattr(self, 'PROXY_USERNAME', 'sophia598'))
-            if not config_parser.has_option('PROXY', 'password'):
-                config_parser.set('PROXY', 'password', getattr(self, 'PROXY_PASSWORD', 'odawntgzmdyxmw=='))
-            
-            with open(config_ini_path, 'w', encoding='utf-8') as f:
-                config_parser.write(f)
-            
-            # Cập nhật runtime config
-            self.PROXY_ENABLED = enabled
-            if enabled and hasattr(self, 'PROXY_HOST'):
-                self.PROXY_URL = f"http://{self.PROXY_USERNAME}:{self.PROXY_PASSWORD}@{self.PROXY_HOST}:{self.PROXY_PORT}"
-            else:
-                self.PROXY_URL = None
-            
-            return True
-        except Exception as e:
-            print(f"ERROR: Khong the cap nhat proxy config: {e}")
-            return False
-
-    def _setup_paths(self) -> None:
-        """Setup file paths"""
-        # base_dir là root của project (2 levels up từ src/core/config.py)
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-        
-        # Database paths
-        self.DB_DIR = os.path.join(base_dir, 'src', 'database')
-        os.makedirs(self.DB_DIR, exist_ok=True)
-        self.DB_PATH = os.path.join(self.DB_DIR, 'chat_history.db')
-        self.DB_BACKUP_PATH = os.path.join(self.DB_DIR, 'chat_history_backup.db')
-        
-        # Data directory for JSON files
-        self.DATA_DIR = os.path.join(base_dir, 'data')
-        os.makedirs(self.DATA_DIR, exist_ok=True)
-        
-        # Other paths
-        self.NOTE_PATH = os.path.join(base_dir, 'notes.txt')
-        self.MEMORY_PATH = os.path.join(self.DATA_DIR, 'short_term_memory.json')
-        self.WEATHER_CACHE_PATH = os.path.join(self.DATA_DIR, 'weather_cache.json')
-        self.FILE_STORAGE_PATH = os.path.join(base_dir, 'uploaded_files')
+        # --- MIN FREE SPACE ---
         self.MIN_FREE_SPACE_MB = 100
+    
+    def _setup_logger(self):
+        """Setup logging system."""
+        logger = logging.getLogger('bot_gemini')
+        logger.setLevel(logging.INFO)
         
-        # Instructions path
-        self.INSTRUCTIONS_DIR = os.path.join(base_dir, 'src', 'instructions')
-        self.PROMPT_PATH = os.path.join(self.INSTRUCTIONS_DIR, 'prompt.txt')
+        if logger.handlers:
+            return logger
+        
+        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+        
+        file_handler = logging.FileHandler('bot.log', encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        
+        logger.handlers = [file_handler, stream_handler]
+        logger.propagate = False
+        
+        return logger
 
 
 # Global instance
-config = Config()
+_config = None
 
+def get_config() -> Config:
+    """Get or create the global config instance."""
+    global _config
+    if _config is None:
+        _config = Config()
+    return _config
+
+
+# Backward compatibility: expose as module-level attributes
+config = get_config()
+logger = config.logger
+TOKEN = config.TOKEN
+MODEL_NAME = config.MODEL_NAME
+ADMIN_ID = config.ADMIN_ID
+HABE_USER_ID = config.HABE_USER_ID
+MIRA_USER_ID = config.MIRA_USER_ID
+ADO_FAT_USER_ID = config.ADO_FAT_USER_ID
+MUC_RIM_USER_ID = config.MUC_RIM_USER_ID
+SUC_VIEN_USER_ID = config.SUC_VIEN_USER_ID
+CHUI_USER_ID = config.CHUI_USER_ID
+GEMINI_API_KEYS = config.GEMINI_API_KEYS
+SAFETY_SETTINGS = config.SAFETY_SETTINGS
+SPAM_THRESHOLD = config.SPAM_THRESHOLD
+SPAM_WINDOW = config.SPAM_WINDOW
+SERPAPI_API_KEY = config.SERPAPI_API_KEY
+TAVILY_API_KEY = config.TAVILY_API_KEY
+EXA_API_KEY = config.EXA_API_KEY
+GOOGLE_CSE_ID = config.GOOGLE_CSE_ID
+GOOGLE_CSE_API_KEY = config.GOOGLE_CSE_API_KEY
+GOOGLE_CSE_ID_1 = config.GOOGLE_CSE_ID_1
+GOOGLE_CSE_API_KEY_1 = config.GOOGLE_CSE_API_KEY_1
+GOOGLE_CSE_ID_2 = config.GOOGLE_CSE_ID_2
+GOOGLE_CSE_API_KEY_2 = config.GOOGLE_CSE_API_KEY_2
+HF_TOKEN = config.HF_TOKEN
+WEATHER_API_KEY = config.WEATHER_API_KEY
+CITY = config.CITY
+DB_PATH = config.DB_PATH
+DB_BACKUP_PATH = config.DB_BACKUP_PATH
+NOTE_PATH = config.NOTE_PATH
+MEMORY_PATH = config.MEMORY_PATH
+WEATHER_CACHE_PATH = config.WEATHER_CACHE_PATH
+FILE_STORAGE_PATH = config.FILE_STORAGE_PATH
+MIN_FREE_SPACE_MB = config.MIN_FREE_SPACE_MB
+DEFAULT_RATE_LIMIT = config.DEFAULT_RATE_LIMIT
+PREMIUM_RATE_LIMIT = config.PREMIUM_RATE_LIMIT
+DEFAULT_DM_LIMIT = config.DEFAULT_DM_LIMIT
+PREMIUM_DM_LIMIT = config.PREMIUM_DM_LIMIT
+ADMIN_USER_IDS = config.ADMIN_USER_IDS

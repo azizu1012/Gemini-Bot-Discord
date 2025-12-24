@@ -1,72 +1,73 @@
 import os
 import asyncio
-from datetime import datetime
 import shutil
-from core.config import config
-from core.logger import logger
+from src.core.config import logger, FILE_STORAGE_PATH, MIN_FREE_SPACE_MB
 
-def get_disk_free_space_mb(path: str) -> int:
-    """Kiểm tra dung lượng trống của ổ đĩa (MB)."""
-    try:
-        # Đảm bảo đường dẫn tồn tại để kiểm tra
-        os.makedirs(path, exist_ok=True)
-        total, used, free = shutil.disk_usage(path)
-        return free // (1024 * 1024)
-    except Exception as e:
-        logger.error(f"Lỗi kiểm tra dung lượng ổ đĩa tại {path}: {e}")
-        return 0
 
-async def cleanup_local_files():
-    """
-    Dọn dẹp file trong thư mục config.FILE_STORAGE_PATH nếu dung lượng trống dưới ngưỡng.
-    Ưu tiên xóa các file cũ nhất (dựa trên thời gian truy cập cuối).
-    """
-    try:
-        current_free_space = get_disk_free_space_mb(config.FILE_STORAGE_PATH)
-        
-        if current_free_space > config.MIN_FREE_SPACE_MB:
-            logger.info(f"Dung lượng trống: {current_free_space} MB. Không cần dọn dẹp file local.")
-            return
-
-        logger.warning(f"Dung lượng trống còn {current_free_space} MB (dưới ngưỡng {config.MIN_FREE_SPACE_MB} MB). Bắt đầu dọn dẹp file local...")
-        
-        files_to_delete = []
-        
-        # Lấy danh sách file và thời gian truy cập gần nhất (access time)
-        for root, _, files in os.walk(config.FILE_STORAGE_PATH):
-            for name in files:
-                path = os.path.join(root, name)
+class CleanupManager:
+    """Manager for cleaning up old files and managing disk space."""
+    
+    def __init__(self, storage_path: str = FILE_STORAGE_PATH, min_free_mb: int = MIN_FREE_SPACE_MB):
+        self.storage_path = storage_path
+        self.min_free_mb = min_free_mb
+        self.logger = logger
+    
+    def get_disk_free_space_mb(self) -> int:
+        """Get free disk space in MB."""
+        try:
+            os.makedirs(self.storage_path, exist_ok=True)
+            total, used, free = shutil.disk_usage(self.storage_path)
+            return free // (1024 * 1024)
+        except Exception as e:
+            self.logger.error(f"Error checking disk free space at {self.storage_path}: {e}")
+            return 0
+    
+    async def cleanup_local_files(self) -> None:
+        """Clean up old local files if disk space is below threshold."""
+        try:
+            current_free_space = self.get_disk_free_space_mb()
+            
+            if current_free_space > self.min_free_mb:
+                self.logger.info(f"Free space: {current_free_space} MB. No cleanup needed.")
+                return
+            
+            self.logger.warning(f"Free space: {current_free_space} MB (below {self.min_free_mb} MB). Starting file cleanup...")
+            
+            files_to_delete = []
+            
+            # Collect all files with their access times
+            for root, _, files in os.walk(self.storage_path):
+                for name in files:
+                    path = os.path.join(root, name)
+                    try:
+                        last_access_time = os.path.getatime(path)
+                        files_to_delete.append((path, last_access_time))
+                    except OSError:
+                        continue
+            
+            # Sort by access time (oldest first)
+            files_to_delete.sort(key=lambda x: x[1])
+            
+            total_deleted_size = 0
+            deleted_count = 0
+            
+            # Delete files until we reach threshold
+            for path, _ in files_to_delete:
                 try:
-                    # Lấy thời gian truy cập lần cuối (cũ nhất sẽ bị xóa trước)
-                    last_access_time = os.path.getatime(path) 
-                    files_to_delete.append((path, last_access_time))
-                except OSError:
-                    continue
-
-        # Sắp xếp theo thời gian truy cập (cũ nhất lên trước)
-        files_to_delete.sort(key=lambda x: x[1])
-
-        total_deleted_size = 0
-        deleted_count = 0
+                    size_mb = os.path.getsize(path) / (1024 * 1024)
+                    os.remove(path)
+                    total_deleted_size += size_mb
+                    deleted_count += 1
+                    self.logger.info(f"Deleted old local file: {path} ({size_mb:.2f} MB)")
+                    
+                    current_free_space = self.get_disk_free_space_mb()
+                    if current_free_space > self.min_free_mb + 50:
+                        self.logger.info(f"Cleanup complete. Free space: {current_free_space} MB")
+                        break
+                except Exception as e:
+                    self.logger.error(f"Error deleting file {path}: {e}")
+            
+            self.logger.info(f"File cleanup completed. Deleted {deleted_count} files. Total size: {total_deleted_size:.2f} MB.")
         
-        # Xóa file cho đến khi đạt ngưỡng hoặc hết file
-        for path, _ in files_to_delete:
-            try:
-                size_mb = os.path.getsize(path) / (1024 * 1024)
-                os.remove(path)
-                total_deleted_size += size_mb
-                deleted_count += 1
-                logger.info(f"Đã xóa file local cũ: {path} ({size_mb:.2f} MB)")
-                
-                # Kiểm tra lại dung lượng trống sau mỗi lần xóa để tránh làm quá nhiều
-                current_free_space = get_disk_free_space_mb(config.FILE_STORAGE_PATH)
-                if current_free_space > config.MIN_FREE_SPACE_MB + 50: # Thêm buffer 50MB
-                    logger.info(f"Đã dọn dẹp đủ dung lượng.")
-                    break
-            except Exception as e:
-                logger.error(f"Lỗi khi xóa file local: {path}: {e}")
-                
-        logger.info(f"Hoàn tất dọn dẹp file local. Đã xóa {deleted_count} file. Tổng dung lượng: {total_deleted_size:.2f} MB.")
-        
-    except Exception as e:
-        logger.error(f"Lỗi nghiêm trọng trong quá trình dọn dẹp file local: {e}")
+        except Exception as e:
+            self.logger.error(f"Critical error during file cleanup: {e}")

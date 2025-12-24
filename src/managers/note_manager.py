@@ -1,113 +1,105 @@
-# note_manager.py
-from database.repository import db_repository as db
 import uuid
 import json
 from datetime import datetime
-from core.config import config
-from core.logger import logger
 from typing import List, Dict, Any
+from src.core.config import logger
+from src.database.repository import DatabaseRepository
 
-async def save_note_to_db(user_id: str, content: str, source: str) -> str:
-    """
-    Lưu một note (thường là do AI tự nhận diện) vào DB.
-    """
-    try:
-        note_id = str(uuid.uuid4())
-        metadata = {
-            "type": "auto_note" if source == "chat_inference" else "manual",
-            "source": source, # "chat_inference", "tool_call", v.v.
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        success = await db.add_note(user_id, note_id, content, metadata)
-        
-        if success:
-            logger.info(f"Auto-note đã lưu cho {user_id}. Source: {source}")
-            return f"Đã ghi nhớ thông tin: '{content[:50]}...'"
-        else:
-            logger.error(f"Lỗi khi lưu auto-note cho {user_id}")
-            return "Lỗi khi cố gắng lưu note."
-            
-    except Exception as e:
-        logger.error(f"Exception trong save_note_to_db: {e}")
-        return f"Exception khi lưu note: {e}"
 
-async def save_file_note_to_db(user_id: str, content: str, filename: str, source: str = "file_upload") -> bool:
-    """
-    Lưu nội dung file đã parse vào DB.
-    Nếu file đã tồn tại, sẽ cập nhật nội dung.
-    """
-    try:
-        # Kiểm tra xem đã có note cho file này chưa
-        existing_note = await db.get_note_by_filename(user_id, filename)
-
-        metadata = {
-            "type": "file",
-            "source": source,
-            "filename": filename, # Lưu filename vào metadata
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        if existing_note:
-            # Cập nhật note hiện có
-            success = await db.update_note(existing_note['note_id'], content, metadata)
-            if success:
-                logger.info(f"File note đã cập nhật cho {user_id}. File: {filename}")
-            else:
-                logger.error(f"Lỗi khi cập nhật file note cho {user_id}")
-            return success
-        else:
-            # Tạo note mới
+class NoteManager:
+    """Manager for user notes and memory management."""
+    
+    def __init__(self, db_repo: DatabaseRepository):
+        self.db_repo = db_repo
+        self.logger = logger
+    
+    async def save_note_to_db(self, user_id: str, content: str, source: str) -> str:
+        """Save an auto-note to database."""
+        try:
             note_id = str(uuid.uuid4())
-            success = await db.add_note(user_id, note_id, content, metadata)
+            metadata = {
+                "type": "auto_note" if source == "chat_inference" else "manual",
+                "source": source,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            success = await self.db_repo.add_user_note_db(user_id, note_id, content, metadata)
             
             if success:
-                logger.info(f"File note đã lưu cho {user_id}. File: {filename}")
+                self.logger.info(f"Auto-note saved for {user_id}. Source: {source}")
+                return f"Đã ghi nhớ thông tin: '{content[:50]}...'"
             else:
-                logger.error(f"Lỗi khi lưu file note cho {user_id}")
-            return success
-            
-    except Exception as e:
-        logger.error(f"Exception trong save_file_note_to_db: {e}")
-        return False
-
-async def retrieve_notes_from_db(user_id: str, query: str) -> str:
-    """
-    Truy xuất các note liên quan từ DB.
-    'query' được dùng để lọc (simple LIKE search).
-    """
-    try:
-        # get_user_notes_db sẽ thực hiện tìm kiếm LIKE nếu query có
-        notes: List[Dict[str, Any]] = await db.get_user_notes(user_id, search_query=query)
+                self.logger.error(f"Error saving auto-note for {user_id}")
+                return "Lỗi khi cố gắng lưu note."
         
-        if not notes:
-            return "Không tìm thấy note nào khớp với nội dung."
-
-        # Định dạng kết quả trả về cho Gemini
-        formatted_notes = []
-        for note in notes:
-            try:
-                metadata = json.loads(note['metadata'])
-                meta_str = f"Loại: {metadata.get('type', 'N/A')}, Nguồn: {metadata.get('source', 'N/A')}"
-            except Exception:
-                meta_str = "Metadata lỗi"
+        except Exception as e:
+            self.logger.error(f"Exception in save_note_to_db: {e}")
+            return f"Exception when saving note: {e}"
+    
+    async def save_file_note_to_db(self, user_id: str, content: str, filename: str, source: str = "file_upload") -> bool:
+        """Save parsed file content to database. Updates if file already exists."""
+        try:
+            existing_note = await self.db_repo.get_file_note_by_filename_db(user_id, filename)
+            
+            metadata = {
+                "type": "file",
+                "source": source,
+                "filename": filename,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            if existing_note:
+                success = await self.db_repo.update_user_note_db(existing_note['note_id'], content, metadata)
+                if success:
+                    self.logger.info(f"File note updated for {user_id}. File: {filename}")
+                else:
+                    self.logger.error(f"Error updating file note for {user_id}")
+                return success
+            else:
+                note_id = str(uuid.uuid4())
+                success = await self.db_repo.add_user_note_db(user_id, note_id, content, metadata)
                 
-            formatted_notes.append(
-                f"--- [Note (ID: {note['note_id']}) ---\n"
-                f"[Thông tin: {meta_str}, Ngày lưu: {note['created_at']}]\n"
-                f"[Nội dung]:\n{note['content']}\n"
-                f"---"
-            )
+                if success:
+                    self.logger.info(f"File note saved for {user_id}. File: {filename}")
+                else:
+                    self.logger.error(f"Error saving file note for {user_id}")
+                return success
         
-        logger.info(f"Truy xuất {len(notes)} note cho {user_id} với query: {query}")
-        
-        # Giới hạn tổng độ dài trả về
-        result_str = "\n\n".join(formatted_notes)
-        if len(result_str) > 4000:
-            result_str = result_str[:4000] + "\n... (Kết quả quá dài, đã cắt bớt)"
+        except Exception as e:
+            self.logger.error(f"Exception in save_file_note_to_db: {e}")
+            return False
+    
+    async def retrieve_notes_from_db(self, user_id: str, query: str) -> str:
+        """Retrieve notes from database with optional search."""
+        try:
+            notes: List[Dict[str, Any]] = await self.db_repo.get_user_notes_db(user_id, search_query=query)
             
-        return result_str
+            if not notes:
+                return "Không tìm thấy note nào khớp với nội dung."
+            
+            formatted_notes = []
+            for note in notes:
+                try:
+                    metadata = json.loads(note['metadata'])
+                    meta_str = f"Loại: {metadata.get('type', 'N/A')}, Nguồn: {metadata.get('source', 'N/A')}"
+                except Exception:
+                    meta_str = "Metadata lỗi"
+                
+                formatted_notes.append(
+                    f"--- [Note (ID: {note['note_id']}) ---\n"
+                    f"[Thông tin: {meta_str}, Ngày lưu: {note['created_at']}]\n"
+                    f"[Nội dung]:\n{note['content']}\n"
+                    f"---"
+                )
+            
+            self.logger.info(f"Retrieved {len(notes)} notes for {user_id} with query: {query}")
+            
+            result_str = "\n\n".join(formatted_notes)
+            if len(result_str) > 4000:
+                result_str = result_str[:4000] + "\n... (Result too long, truncated)"
+            
+            return result_str
         
-    except Exception as e:
-        logger.error(f"Exception trong retrieve_notes_from_db: {e}")
-        return f"Exception khi truy xuất note: {e}"
+        except Exception as e:
+            self.logger.error(f"Exception in retrieve_notes_from_db: {e}")
+            return f"Exception when retrieving notes: {e}"
