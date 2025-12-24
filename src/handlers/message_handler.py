@@ -205,18 +205,18 @@ class MessageHandler:
             bot_mention_mobile = f"<@!{self.bot.user.id}>"
             content = content.replace(bot_mention, "").replace(bot_mention_mobile, "")
             
-            # Step 1b: Xóa ký tự @ (bot tự hiểu tên)
-            # Remove @ symbol but keep the names - bot understands naturally
-            content = content.replace('@', '')  # Remove @ symbol
-            content = re.sub(r'\s+', ' ', content).strip()  # Normalize spaces
-            
-            # Step 1c: Convert remaining user mentions to readable format (for AI)
+            # Step 1b: Convert user mentions to readable format FIRST (before removing @)
             if message.mentions:
                 for mention in message.mentions:
                     if mention.id != self.bot.user.id:  # Skip bot itself
                         # Replace mention IDs with user display name (for context)
-                        content = content.replace(f"<@{mention.id}>", f"@{mention.display_name}")
-                        content = content.replace(f"<@!{mention.id}>", f"@{mention.display_name}")
+                        content = content.replace(f"<@{mention.id}>", mention.display_name)
+                        content = content.replace(f"<@!{mention.id}>", mention.display_name)
+            
+            # Step 1c: Xóa ký tự @ từ text bình thường (bot tự hiểu tên)
+            # Remove @ symbol but keep the names - bot understands naturally
+            content = content.replace('@', '')  # Remove @ symbol
+            content = re.sub(r'\s+', ' ', content).strip()  # Normalize spaces
             
             content = content.strip()
             
