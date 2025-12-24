@@ -408,7 +408,7 @@ class MessageHandler:
                 )
                 
                 # Ghép với prompt gốc
-                system_instruction = time_context + AZURIS_SYSTEM_PROMPT
+                system_instruction = time_context + FUGUE_SYSTEM_PROMPT
                 tools = self.tools_mgr.get_all_tools()
                 
                 generation_config = {
