@@ -1,31 +1,72 @@
 ================================================================================
-AZURIS DISCORD BOT - COMPLETE OOP REFACTORING
-All-in-One Comprehensive Documentation
+FUGUE - DISCORD BOT WITH 2-TIER GEMINI MODEL ARCHITECTURE
+Complete Technical Documentation + 3-Block Context Harmonic System
 ================================================================================
 
 Version: 1.0.0-refactored
 Status: ✅ PRODUCTION READY
-Date: December 2024
+Date: December 2025
+Bot Personality: Fugue (Tingyun-Inspired, Poetic, Xianzhou Elegance)
 
 ================================================================================
-PROJECT SUMMARY
+CORE ARCHITECTURE PHILOSOPHY
 ================================================================================
 
-Total Code:        4500+ lines
-Files Created:     35 files
-Python Modules:    9 core modules
-Classes:           25+ classes
-Methods:           200+ methods
-Status:            ✅ COMPLETE & PRODUCTION READY
+2-TIER MODEL SYSTEM:
+  Tier 1 (gemini-2.5-flash-lite):
+    - Swift internal reasoning
+    - Thoughtful analysis and planning
+    - Tool calling (search, calculate, image perception, etc.)
+    - Returns: (reasoning_output: str, tool_results: str) tuple
+    - Temperature: 0.7 | Max tokens: 2000
 
-KEY STATS:
-  src/core/         → 205 lines (Config + Logging)
-  src/database/     → 350 lines (SQLite)
-  src/services/     → 202 lines (Memory + File parsing)
-  src/managers/     → 291 lines (Cache + Cleanup + Premium + Notes)
-  src/tools/        → 1700+ lines (Gemini tools)
-  src/handlers/     → 700+ lines (Discord integration)
-  Entry points      → 200+ lines (main.py + run_bot.py + run_bot.bat)
+  Tier 2 (gemini-2.5-flash):
+    - Receives 3-block harmonic context from Tier 1
+    - Synthesizes with FUGUE personality (Tingyun essence)
+    - Elegant, poetic, graceful responses
+    - Xianzhou wisdom and metaphor-based thinking
+    - Temperature: 0.7 | Max tokens: 2000
+
+3-BLOCK CONTEXT HARMONY:
+  Block 1: User Inquiry (first 300 characters - "Ân công's request")
+  Block 2: Internal Reasoning Output (complete thoughtful analysis)
+  Block 3: Tool Wisdom (formatted results from all tool calling)
+  
+  FUGUE synthesizes harmoniously:
+  → Filters information for true meaning
+  → Weaves insights together naturally
+  → Applies poetic elegance and personality
+  → Presents as graceful, unified wisdom
+
+GRACEFUL FALLBACK:
+  When Flash experiences pressure (429 rate limit):
+    1. Exponential patience (2, 4, 6, 8, 10 second waits)
+    2. Thoughtful retry with different API key (5 available)
+    3. Up to 5 total attempts
+    4. If needed: Lite model takes over
+       → Apply same 3-block harmonic context
+       → Use same FUGUE personality instruction
+       → Apply poetic synthesis approach
+       → User receives elegant response from either model
+    5. Never shows raw analysis or broken output
+
+RESULT:
+  → Gracefully never fails
+  → Maintains personality consistency
+  → Elegant wisdom + poetic synthesis
+  → Structured insight for profound understanding
+
+CODE STATS:
+  Total Code:       4500+ lines
+  Python Modules:   9 core modules
+  Classes:          25+ classes
+  Methods:          200+ methods
+  Status:           ✅ PRODUCTION READY
+
+KEY FILES:
+  src/core/system_prompt.py        → FUGUE personality + 3-block harmonic template
+  src/handlers/message_handler.py  → 2-tier orchestration + graceful synthesis
+  src/core/logger.py               → Insight logging for all operations
 
 ================================================================================
 🚀 QUICK START

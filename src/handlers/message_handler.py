@@ -389,24 +389,31 @@ class MessageHandler:
                     )
 
     async def _call_gemini_api(self, messages: List[Dict[str, Any]], user_id: str) -> str:
-        """Two-Tier Model Strategy: Flash-Lite (reasoning) → Flash (final output)."""
+        """Two-Tier Model Strategy: Flash-Lite (reasoning) → Flash (final output).
+        
+        If Flash fails (429), fallback to Lite model with 3-block context + fallback prompt.
+        """
         
         # TIER 1: Use Flash-Lite for reasoning loops + tool calls
-        reasoning_result = await self._call_gemini_reasoning_loop(messages, user_id)
+        reasoning_result, tool_results = await self._call_gemini_reasoning_loop(messages, user_id)
         
         # TIER 2: Use Flash for final output (with reasoning context, no thinking needed)
-        final_output = await self._call_gemini_final(messages, reasoning_result, user_id)
+        final_output = await self._call_gemini_final(messages, reasoning_result, tool_results, user_id)
         
         return final_output
     
-    async def _call_gemini_reasoning_loop(self, messages: List[Dict[str, Any]], user_id: str) -> str:
-        """TIER 1: Flash-Lite model for reasoning loops and tool calls."""
+    async def _call_gemini_reasoning_loop(self, messages: List[Dict[str, Any]], user_id: str) -> tuple:
+        """TIER 1: Flash-Lite model for reasoning loops and tool calls.
+        
+        Returns:
+            tuple: (reasoning_output: str, tool_results: str)
+        """
         MAX_RETRIES = 5
         
         for attempt in range(MAX_RETRIES):
             api_key = self._get_best_api_key()
             if not api_key:
-                return "API quota exceeded"
+                return ("API quota exceeded", "")
             
             try:
                 genai.configure(api_key=api_key)
@@ -439,6 +446,7 @@ class MessageHandler:
                 # Reasoning loop (up to 5 iterations)
                 iteration = 0
                 reasoning_messages = [msg.copy() for msg in messages]  # Copy for tier 1
+                tool_results_list = []  # Track all tool results
                 
                 while iteration < 5:
                     iteration += 1
@@ -463,6 +471,7 @@ class MessageHandler:
                         self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
                         
                         tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                        tool_results_list.append(f"[{fc.name}] {tool_res}")
                         
                         reasoning_messages.append({"role": "model", "parts": [part]})
                         reasoning_messages.append({
@@ -509,6 +518,7 @@ class MessageHandler:
                                     
                                     fc = FakeFunctionCall(tool_name.lower(), args_dict)
                                     tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                                    tool_results_list.append(f"[{tool_name}] {tool_res}")
                                     
                                     # Add to message history
                                     reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
@@ -521,12 +531,14 @@ class MessageHandler:
                         
                         # No tools found - reasoning complete
                         if text and len(text) > 3:
-                            return text
+                            tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
+                            return (text, tool_results_str)
                         break
                     
                     break
                 
-                return "Reasoning completed"
+                tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
+                return ("Reasoning completed", tool_results_str)
                 
             except Exception as e:
                 error_str = str(e)
@@ -540,14 +552,27 @@ class MessageHandler:
         
         return "Reasoning loop failed"
     
-    async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, user_id: str) -> str:
-        """TIER 2: Flash model for final output (uses reasoning from tier 1)."""
+    async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str) -> str:
+        """TIER 2: Flash model for final output (uses reasoning from tier 1).
+        
+        Handles 429 with:
+        1. Wait + Retry (up to 5 times)
+        2. Fallback: Use Lite model with 3-block context + fallback prompt
+        
+        Args:
+            original_messages: Original user messages
+            reasoning_result: Output from tier 1 reasoning
+            tool_results: Formatted results from tools called in tier 1
+            user_id: User ID for logging
+        """
         MAX_RETRIES = 5
         
         for attempt in range(MAX_RETRIES):
             api_key = self._get_best_api_key()
             if not api_key:
-                return "API quota exceeded"
+                # All keys frozen - fallback to Lite with 3-block context
+                self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
+                return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
             
             try:
                 genai.configure(api_key=api_key)
@@ -555,12 +580,31 @@ class MessageHandler:
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
                 
-                # Modify prompt: skip thinking from tier 1, just focus on final output
+                # Extract raw user input for 3-block template
+                user_input = ""
+                if original_messages and original_messages[-1].get("role") == "user":
+                    user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")
+                
+                # Format 3-block context for injection
+                three_block_context = f"""
+=== CONTEXT FROM PRELIMINARY ANALYSIS ===
+[BLOCK 1 - USER REQUEST]
+{user_input[:300]}
+
+[BLOCK 2 - REASONING OUTPUT]
+{reasoning_result}
+
+[BLOCK 3 - TOOL RESULTS]
+{tool_results if tool_results else "(No tools were called)"}
+
+=== YOUR TASK ===
+Synthesize the above 3 blocks into a final response. Integrate naturally without saying "Based on tool results..." or mentioning technical details. Use your personality.
+"""
+                
+                # Inject 3-block into system prompt
                 system_with_context = (
                     time_context + FUGUE_SYSTEM_PROMPT +
-                    "\n\n*** FINAL OUTPUT MODE ***\n"
-                    "You received reasoning results from preliminary analysis. "
-                    "Ignore any <THINKING> blocks or reasoning artifacts - just provide the clean, final answer with your personality."
+                    three_block_context
                 )
                 
                 generation_config = {
@@ -579,26 +623,13 @@ class MessageHandler:
                 
                 await self._throttle_api_request(api_key)
                 
-                # Create final messages: original + reasoning context
-                final_messages = [msg.copy() for msg in original_messages]
+                # Create final messages: user asks model to synthesize
+                final_messages = [{
+                    "role": "user",
+                    "parts": [{"text": "Dựa vào 3 block context ở trên, hãy đưa ra câu trả lời hoàn chỉnh cho yêu cầu của ân công."}]
+                }]
                 
-                # Extract user input (BLOCK 1)
-                user_input = ""
-                if original_messages and original_messages[-1].get("role") == "user":
-                    user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")[:200]  # First 200 chars
-                
-                # Add reasoning as context in a user message
-                if final_messages:
-                    # Append reasoning context as new part (not concatenate string)
-                    if final_messages[-1].get("role") == "user":
-                        final_messages[-1]["parts"].append({"text": f"\n\n[REASONING CONTEXT:\n{reasoning_result}\n]"})
-                    else:
-                        final_messages.append({
-                            "role": "user",
-                            "parts": [{"text": f"[REASONING CONTEXT:\n{reasoning_result}\n]"}]
-                        })
-                
-                self.logger.info(f"Final output for user {user_id} (Flash model)")
+                self.logger.info(f"Final output for user {user_id} (Flash model, attempt {attempt + 1}/{MAX_RETRIES})")
                 
                 response = await asyncio.to_thread(
                     model.generate_content, 
@@ -635,14 +666,130 @@ class MessageHandler:
             except Exception as e:
                 error_str = str(e)
                 if "429" in error_str or "quota" in error_str.lower():
-                    self.logger.warning(f"⚠️ Flash Key ...{api_key[-4:]} rate limited. Retrying...")
-                    self._mark_key_as_failed(api_key)
+                    self.logger.warning(f"⚠️ Flash Key ...{api_key[-4:]} rate limited (429). Attempt {attempt + 1}/{MAX_RETRIES}")
+                    self._mark_key_as_failed(api_key, duration=60)
+                    
+                    # Wait before retry (exponential backoff: 2s, 4s, 6s, 8s, 10s)
+                    wait_time = 2 + (attempt * 2)
+                    self.logger.info(f"⏱️ Waiting {wait_time}s before retry...")
+                    await asyncio.sleep(wait_time)
+                    
+                    # Last attempt - use fallback
+                    if attempt == MAX_RETRIES - 1:
+                        self.logger.warning(f"❌ Flash model exhausted (5 retries). Fallback to lite model for {user_id}")
+                        return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
+                    
                     continue
                 
                 self.logger.error(f"Final model error: {e}")
                 continue
         
-        return "Final output failed"
+        # Fallback if all retries exhausted
+        self.logger.warning(f"❌ Final output completely failed. Using fallback lite model for {user_id}")
+        return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
+    
+    async def _fallback_lite_as_flash(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str) -> str:
+        """Fallback: Use Lite model as Flash when Flash fails (429).
+        
+        Lite receives 3-block context + fallback prompt to produce final output.
+        This ensures users always get a response, even under heavy API load.
+        """
+        MAX_RETRIES = 3
+        
+        for attempt in range(MAX_RETRIES):
+            api_key = self._get_best_api_key()
+            if not api_key:
+                return "[System] API overloaded, please try again later."
+            
+            try:
+                genai.configure(api_key=api_key)
+                
+                # Extract raw user input for context
+                user_input = ""
+                if original_messages and original_messages[-1].get("role") == "user":
+                    user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")
+                
+                # Format 3-block context (same as Flash tier 2)
+                three_block_context = f"""
+=== CONTEXT FROM PRELIMINARY ANALYSIS ===
+[BLOCK 1 - USER REQUEST]
+{user_input[:300]}
+
+[BLOCK 2 - REASONING OUTPUT]
+{reasoning_result}
+
+[BLOCK 3 - TOOL RESULTS]
+{tool_results if tool_results else "(No tools were called)"}
+
+=== YOUR TASK ===
+Synthesize the above 3 blocks into a final response. Integrate naturally without saying "Based on tool results..." or mentioning technical details. Use your personality.
+"""
+                
+                # Use FUGUE personality + 3-block context for fallback
+                current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+                system_with_context = (
+                    f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n" + 
+                    FUGUE_SYSTEM_PROMPT +
+                    three_block_context
+                )
+                
+                generation_config = {
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": 2000,
+                }
+                
+                # Use Lite model with personality as fallback Flash
+                model = genai.GenerativeModel(
+                    model_name="gemini-2.5-flash-lite",
+                    system_instruction=system_with_context,
+                    safety_settings=self.config.SAFETY_SETTINGS,
+                    generation_config=generation_config
+                )
+                
+                await self._throttle_api_request(api_key)
+                
+                self.logger.info(f"Fallback: Using Lite model as Flash for {user_id} (attempt {attempt + 1}/3)")
+                
+                response = await asyncio.to_thread(
+                    model.generate_content,
+                    [{"role": "user", "parts": [{"text": "Dựa vào 3 block context ở trên, hãy đưa ra câu trả lời hoàn chỉnh cho yêu cầu của ân công."}]}],
+                    stream=False
+                )
+                
+                candidate = response.candidates[0] if response.candidates else None
+                if not (candidate and candidate.content and candidate.content.parts):
+                    continue
+                
+                part = candidate.content.parts[0]
+                if part.text:
+                    text = part.text.strip()
+                    
+                    # Clean any artifacts (same as tier 2)
+                    text = re.sub(r'<THINKING>.*?</THINKING>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    text = re.sub(r'^THINKING\s*\n(.*?)(?=\n[A-Z]|\n\n|$)', '', text, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL).strip()
+                    text = re.sub(r'^\[REASONING CONTEXT:.*?\]', '', text, flags=re.MULTILINE | re.DOTALL).strip()
+                    text = re.sub(r'<tool_code>.*?</tool_code>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    text = re.sub(r'<tool_result>.*?</tool_result>', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    text = re.sub(r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes).*?```', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+                    
+                    if text and len(text) > 5:
+                        self.logger.info(f"✅ Fallback success for {user_id}")
+                        return text
+                
+            except Exception as e:
+                error_str = str(e)
+                if "429" in error_str or "quota" in error_str.lower():
+                    self.logger.warning(f"⚠️ Lite fallback also rate limited. Attempt {attempt + 1}/3")
+                    self._mark_key_as_failed(api_key, duration=60)
+                    await asyncio.sleep(2 + attempt * 2)
+                    continue
+                
+                self.logger.error(f"Fallback lite error: {e}")
+                continue
+        
+        return "[System] Model unavailable, please try again later."
     
     async def _clear_user_history(self, message: discord.Message, user_id: str):
         """Clear user chat history."""
