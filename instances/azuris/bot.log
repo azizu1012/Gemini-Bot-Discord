@@ -1,0 +1,80 @@
+2025-12-25 13:16:43,357 [ERROR] Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.
+2025-12-25 13:19:04,171 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:19:19,160 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:19:52,721 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:21:20,136 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:21:31,778 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:21:33,768 [INFO] 📋 Azuris Configuration Loaded
+2025-12-25 13:21:33,768 [INFO]    Token: MTQzNTYzMDU1MTc2Njky...
+2025-12-25 13:21:33,769 [INFO]    API Keys: 15
+2025-12-25 13:21:33,769 [INFO]    Model: gemini-2.5-flash
+2025-12-25 13:21:33,772 [INFO] ✅ BotCore initialized
+2025-12-25 13:21:33,772 [INFO] ✅ MessageHandler initialized
+2025-12-25 13:21:33,772 [INFO] 🚀 Starting Azuris Bot...
+2025-12-25 13:21:33,772 [INFO] 💡 Manage with PM2: pm2 start run.py --name azuris
+2025-12-25 13:21:38,214 [INFO] Synced 4 slash commands!
+2025-12-25 13:21:38,214 [ERROR] Cannot initialize DB: unable to open database file. Attempting to re-create DB.
+2025-12-25 13:23:35,727 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:23:37,683 [INFO] 📋 Azuris Configuration Loaded
+2025-12-25 13:23:37,683 [INFO]    Token: MTQzNTYzMDU1MTc2Njky...
+2025-12-25 13:23:37,683 [INFO]    API Keys: 15
+2025-12-25 13:23:37,683 [INFO]    Model: gemini-2.5-flash
+2025-12-25 13:23:37,685 [INFO] ✅ BotCore initialized
+2025-12-25 13:23:37,686 [INFO] ✅ MessageHandler initialized
+2025-12-25 13:23:37,686 [INFO] 🚀 Starting Azuris Bot...
+2025-12-25 13:23:37,686 [INFO] 💡 Manage with PM2: pm2 start run.py --name azuris
+2025-12-25 13:23:41,871 [INFO] Synced 4 slash commands!
+2025-12-25 13:23:41,883 [INFO] DB initialized (messages + user_notes tables)
+2025-12-25 13:23:41,884 [INFO] Created new short term memory file: D:\AI_Projects\Discord-bot\Muti-bot-syns\instances\azuris\data\short_term_memory.json
+2025-12-25 13:23:41,884 [INFO] Running DB cleanup...
+2025-12-25 13:23:41,887 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-25 13:23:41,887 [INFO] Running local file cleanup...
+2025-12-25 13:23:41,888 [INFO] Free space: 255372 MB. No cleanup needed.
+2025-12-25 13:23:41,890 [INFO] DB backed up to D:\AI_Projects\Discord-bot\Muti-bot-syns\instances\azuris\data\chat_history_backup.db
+2025-12-25 13:23:41,890 [INFO] Audiophe#0258 is online!
+2025-12-25 13:24:43,179 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:24:44,692 [INFO] TOOL CALLED: web_search | Args: {'query': 'chào hỏi'} | User: 453591582466375681
+2025-12-25 13:24:44,692 [INFO] CALLING 3x CSE SMART SEARCH for 'chào hỏi' (mode: general)
+2025-12-25 13:24:44,692 [INFO] Classified: GENERAL. Searching for: 'chào hỏi'
+2025-12-25 13:24:44,692 [INFO] Queries: Q1='chào hỏi', Q2='chào hỏi latest OR information', Q3='chào hỏi thông tin OR mới nhất'
+2025-12-25 13:24:45,693 [INFO] CSE1 returned 3 valid results.
+2025-12-25 13:24:45,950 [INFO] CSE0 returned 3 valid results.
+2025-12-25 13:24:46,000 [INFO] CSE2 returned 3 valid results.
+2025-12-25 13:24:46,002 [INFO] Completed search for 1 subqueries and cached.
+2025-12-25 13:24:46,002 [INFO] Reasoning loop 2 for user 453591582466375681 (Lite model)
+2025-12-25 13:24:47,133 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:25:12,391 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:25:14,774 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:25:58,301 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:26:00,598 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:29:37,906 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2025-12-25 13:29:40,258 [INFO] 📋 Azuris Configuration Loaded
+2025-12-25 13:29:40,258 [INFO]    Token: MTQzNTYzMDU1MTc2Njky...
+2025-12-25 13:29:40,258 [INFO]    API Keys: 15
+2025-12-25 13:29:40,258 [INFO]    Model: gemini-2.5-flash
+2025-12-25 13:29:40,261 [INFO] ✅ BotCore initialized
+2025-12-25 13:29:40,262 [INFO] ✅ MessageHandler initialized
+2025-12-25 13:29:40,262 [INFO] 🚀 Starting Azuris Bot...
+2025-12-25 13:29:40,262 [INFO] 💡 Manage with PM2: pm2 start run.py --name azuris
+2025-12-25 13:29:44,888 [INFO] Synced 4 slash commands!
+2025-12-25 13:29:44,890 [INFO] DB initialized (messages + user_notes tables)
+2025-12-25 13:29:44,891 [INFO] Running DB cleanup...
+2025-12-25 13:29:44,892 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2025-12-25 13:29:44,892 [INFO] Running local file cleanup...
+2025-12-25 13:29:44,893 [INFO] Free space: 255372 MB. No cleanup needed.
+2025-12-25 13:29:44,895 [INFO] DB backed up to D:\AI_Projects\Discord-bot\Muti-bot-syns\instances\azuris\data\chat_history_backup.db
+2025-12-25 13:29:44,895 [INFO] Audiophe#0258 is online!
+2025-12-25 13:30:09,613 [INFO] User 453591582466375681 history cleared from JSON memory
+2025-12-25 13:30:09,616 [INFO] User 453591582466375681 history cleared from DB (messages + notes)
+2025-12-25 13:30:11,712 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:30:13,713 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:30:24,605 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:30:26,610 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:31:13,340 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:31:15,355 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:32:00,300 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:32:17,515 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:33:01,811 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:33:03,820 [INFO] Final output for user 453591582466375681 (Flash model)
+2025-12-25 13:33:40,261 [INFO] Reasoning loop 1 for user 453591582466375681 (Lite model)
+2025-12-25 13:33:42,274 [INFO] Final output for user 453591582466375681 (Flash model)
