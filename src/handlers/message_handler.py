@@ -64,13 +64,24 @@ class MessageHandler:
         self.api_key_request_history: Dict[str, List[float]] = {}
         self.api_key_history_lock = threading.Lock()
     
+    def _sanitize_mentions(self, text: str) -> str:
+        """Disable @mention by replacing @ with escaped \\@ to prevent pings.
+        Handles: @everyone, @here, @username, <@ID>, <@&roleID>
+        """
+        # Replace @ with escaped @ to break mention parsing
+        text = text.replace('@', '\\@')
+        return text
+    
     # --- HÀM MỚI: CẮT TEXT THÔNG MINH & TỰ REPLY (CHAINING) ---
     async def send_smart_reply(self, message: discord.Message, text: str):
         """
-        Gửi tin nhắn dài với 2 tính năng:
+        Gửi tin nhắn dài với 3 tính năng:
         1. Cắt thông minh (Smart Split): Ưu tiên ngắt dòng (\n), rồi đến khoảng trắng.
         2. Tự Reply (Chain Reply): Tin sau reply tin trước của bot để tạo mạch.
+        3. Sanitize @mention: Thêm zero-width joiner sau @ để tránh ping.
         """
+        # Sanitize mentions
+        text = self._sanitize_mentions(text)
         limit = 1900 # Giới hạn an toàn của Discord (max 2000)
         chunks = []
         current_text = text.strip()
