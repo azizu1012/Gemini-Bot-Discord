@@ -4,9 +4,10 @@ import re
 import os
 import mimetypes
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Set
 import aiofiles
 import requests
 import sympy as sp
@@ -192,7 +193,35 @@ class ToolsManager:
         "đà nẵng": ("Da Nang", "Đà Nẵng"),
         "da nang": ("Da Nang", "Đà Nẵng"),
     }
-    
+
+    SEARCH_CACHE_STOPWORDS = {
+        "the", "a", "an", "of", "for", "to", "and", "or", "in", "on", "at", "is", "are", "be",
+        "toi", "la", "va", "cua", "cho", "ve", "trong", "tai", "duoc", "khong", "nao", "gi", "bao", "khi",
+        "news", "information", "thong", "tin", "xem", "hoi", "giup",
+    }
+
+    SEARCH_CACHE_PHRASE_ALIASES = [
+        ("moi nhat", "latest"),
+        ("hien tai", "current"),
+        ("cap nhat", "update"),
+        ("khi nao", "when"),
+        ("bao gio", "when"),
+        ("ket thuc", "end"),
+        ("thoi gian", "schedule"),
+        ("lich", "schedule"),
+    ]
+
+    SEARCH_CACHE_TOKEN_ALIASES = {
+        "hsr": "honkai_star_rail",
+        "starrail": "honkai_star_rail",
+        "banner": "banner",
+        "latest": "latest",
+        "current": "current",
+        "update": "update",
+        "patch": "patch",
+        "schedule": "schedule",
+    }
+
     def __init__(self, note_mgr=None):
         self.logger = logger
         self.note_mgr = note_mgr
@@ -216,6 +245,13 @@ class ToolsManager:
         self.exa_use_autoprompt = self._load_exa_autoprompt()
         self.trusted_profiles = self._load_trusted_profiles()
         self.deep_read_cache = {}
+        self.inflight_search_tasks: Dict[str, asyncio.Task] = {}
+        self.failed_search_cooldowns: Dict[str, float] = {}
+        self.search_semantic_cache_enabled = self._load_search_semantic_cache_enabled()
+        self.search_general_cache_ttl_seconds = self._load_search_general_cache_ttl_seconds()
+        self.search_time_sensitive_cache_ttl_seconds = self._load_search_time_sensitive_cache_ttl_seconds()
+        self.search_failed_query_cooldown_seconds = self._load_search_failed_query_cooldown_seconds()
+        self.search_empty_evidence_cache_ttl_seconds = self._load_search_empty_evidence_cache_ttl_seconds()
         self.gemini_vision_model = os.getenv("GEMINI_VISION_MODEL", MODEL_NAME or "gemini-3-flash-preview")
 
         if GEMINI_API_KEYS:
@@ -223,6 +259,8 @@ class ToolsManager:
                 f"Search/image tools ready: provider=duckduckgo streams={self.google_search_streams} "
                 f"fallback_limit={self.fallback_provider_limit} batch={self.intent_batch_size} "
                 f"trusted_mode={self.trusted_mode} deep_read_top_links={self.deep_read_top_links} "
+                f"semantic_cache={self.search_semantic_cache_enabled} general_ttl={self.search_general_cache_ttl_seconds}s "
+                f"time_ttl={self.search_time_sensitive_cache_ttl_seconds}s cooldown={self.search_failed_query_cooldown_seconds}s "
                 f"vision_model={self.gemini_vision_model}"
             )
         else:
@@ -328,22 +366,90 @@ class ToolsManager:
             ]),
         ]
     
+    def _remove_diacritics(self, text: str) -> str:
+        normalized = unicodedata.normalize("NFKD", text or "")
+        return "".join(ch for ch in normalized if not unicodedata.combining(ch))
+
+    def _canonicalize_search_query(self, query: str) -> str:
+        lowered = (query or "").strip().lower()
+        lowered = lowered.replace("[force fallback]", " ")
+        lowered = self._remove_diacritics(lowered)
+
+        for src, dst in self.SEARCH_CACHE_PHRASE_ALIASES:
+            lowered = re.sub(rf"\b{re.escape(src)}\b", dst, lowered)
+
+        lowered = re.sub(r"[^a-z0-9_\s]", " ", lowered)
+        lowered = re.sub(r"\s+", " ", lowered).strip()
+        if not lowered:
+            return ""
+
+        tokens = []
+        for token in lowered.split(" "):
+            normalized_token = self.SEARCH_CACHE_TOKEN_ALIASES.get(token, token)
+            if not normalized_token or normalized_token in self.SEARCH_CACHE_STOPWORDS:
+                continue
+            if len(normalized_token) <= 1:
+                continue
+            tokens.append(normalized_token)
+
+        if not tokens:
+            return lowered
+
+        canonical_tokens = sorted(set(tokens))
+        return " ".join(canonical_tokens[:32])
+
+    def _normalize_search_cache_key(self, query: str) -> str:
+        normalized = (query or "").strip().lower()
+        normalized = re.sub(r"\s+", " ", normalized)
+        normalized = re.sub(r"\s*\|\s*", "|", normalized)
+
+        mode = "general"
+        payload = normalized
+        if "|" in normalized:
+            maybe_mode, maybe_payload = normalized.split("|", 1)
+            mode = maybe_mode or "general"
+            payload = maybe_payload or ""
+
+        if self.search_semantic_cache_enabled:
+            canonical_payload = self._canonicalize_search_query(payload)
+            if canonical_payload:
+                payload = canonical_payload
+
+        return f"{mode}|{payload}"
+
     def get_web_search_cache(self, query: str):
         """Get cached web search result."""
-        if query in self.web_search_cache:
-            cached_item = self.web_search_cache[query]
+        key = self._normalize_search_cache_key(query)
+        if key in self.web_search_cache:
+            cached_item = self.web_search_cache[key]
+            expires_at = cached_item.get("expires_at")
+            if isinstance(expires_at, datetime):
+                if datetime.now() <= expires_at:
+                    return cached_item.get("data")
+                del self.web_search_cache[key]
+                return None
+
             if datetime.now() - cached_item['timestamp'] < timedelta(hours=6):
                 return cached_item['data']
-            else:
-                del self.web_search_cache[query]
+            del self.web_search_cache[key]
         return None
-    
-    def set_web_search_cache(self, query: str, data: str):
+
+    def set_web_search_cache(self, query: str, data: str, time_sensitive: bool = False):
         """Set web search cache."""
+        key = self._normalize_search_cache_key(query)
         if len(self.web_search_cache) >= self.MAX_CACHE_SIZE:
             oldest_key = min(self.web_search_cache, key=lambda k: self.web_search_cache[k]['timestamp'])
             del self.web_search_cache[oldest_key]
-        self.web_search_cache[query] = {'data': data, 'timestamp': datetime.now()}
+
+        now = datetime.now()
+        ttl_seconds = self.search_time_sensitive_cache_ttl_seconds if time_sensitive else self.search_general_cache_ttl_seconds
+        self.web_search_cache[key] = {
+            'data': data,
+            'timestamp': now,
+            'expires_at': now + timedelta(seconds=ttl_seconds),
+            'ttl_seconds': ttl_seconds,
+            'time_sensitive': time_sensitive,
+        }
     
     def get_image_recognition_cache(self, image_url: str, question: str):
         """Get cached image recognition result."""
@@ -365,19 +471,19 @@ class ToolsManager:
         self.image_recognition_cache[key] = {'data': data, 'timestamp': datetime.now()}
     
     def _load_google_search_streams(self) -> int:
-        raw = os.getenv("GOOGLE_SEARCH_STREAMS", "2").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 2
-        return max(1, min(2, value))
-
-    def _load_fallback_provider_limit(self) -> int:
-        raw = os.getenv("SEARCH_FALLBACK_PROVIDER_LIMIT", "1").strip()
+        raw = os.getenv("GOOGLE_SEARCH_STREAMS", "1").strip()
         try:
             value = int(raw)
         except ValueError:
             value = 1
+        return max(1, min(2, value))
+
+    def _load_fallback_provider_limit(self) -> int:
+        raw = os.getenv("SEARCH_FALLBACK_PROVIDER_LIMIT", "2").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 2
         return max(1, min(3, value))
 
     def _load_intent_batch_size(self) -> int:
@@ -395,27 +501,27 @@ class ToolsManager:
         return mode
 
     def _load_min_reputable_sources(self) -> int:
-        raw = os.getenv("SEARCH_MIN_REPUTABLE_SOURCES", "2").strip()
+        raw = os.getenv("SEARCH_MIN_REPUTABLE_SOURCES", "1").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 1
+        return max(1, min(5, value))
+
+    def _load_time_sensitive_min_reputable_sources(self) -> int:
+        raw = os.getenv("SEARCH_TIME_SENSITIVE_MIN_REPUTABLE_SOURCES", "2").strip()
         try:
             value = int(raw)
         except ValueError:
             value = 2
-        return max(1, min(5, value))
-
-    def _load_time_sensitive_min_reputable_sources(self) -> int:
-        raw = os.getenv("SEARCH_TIME_SENSITIVE_MIN_REPUTABLE_SOURCES", "3").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 3
         return max(self.min_reputable_sources, min(6, value))
 
     def _load_deep_read_top_links(self) -> int:
-        raw = os.getenv("SEARCH_DEEP_READ_TOP_LINKS", "3").strip()
+        raw = os.getenv("SEARCH_DEEP_READ_TOP_LINKS", "2").strip()
         try:
             value = int(raw)
         except ValueError:
-            value = 3
+            value = 2
         return max(1, min(5, value))
 
     def _load_deep_read_max_chars(self) -> int:
@@ -428,6 +534,41 @@ class ToolsManager:
 
     def _load_exa_autoprompt(self) -> bool:
         return (os.getenv("SEARCH_EXA_AUTOPROMPT", "false") or "false").strip().lower() == "true"
+
+    def _load_search_semantic_cache_enabled(self) -> bool:
+        return (os.getenv("SEARCH_SEMANTIC_CACHE_ENABLED", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+
+    def _load_search_general_cache_ttl_seconds(self) -> int:
+        raw = os.getenv("SEARCH_GENERAL_CACHE_TTL_SEC", "21600").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 21600
+        return max(300, min(43200, value))
+
+    def _load_search_time_sensitive_cache_ttl_seconds(self) -> int:
+        raw = os.getenv("SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC", "1800").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 1800
+        return max(120, min(self.search_general_cache_ttl_seconds, value))
+
+    def _load_search_failed_query_cooldown_seconds(self) -> int:
+        raw = os.getenv("SEARCH_FAILED_QUERY_COOLDOWN_SEC", "15").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 15
+        return max(0, min(120, value))
+
+    def _load_search_empty_evidence_cache_ttl_seconds(self) -> int:
+        raw = os.getenv("SEARCH_EMPTY_EVIDENCE_CACHE_TTL_SEC", "600").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 600
+        return max(60, min(7200, value))
 
     def _split_csv_domains(self, raw: str) -> List[str]:
         parts = [p.strip().lower() for p in (raw or "").split(",")]
@@ -866,44 +1007,78 @@ class ToolsManager:
         return trusted_count >= required_sources and total_chars >= min_chars
 
     def _extract_main_text(self, html_text: str) -> str:
-        text = re.sub(r"<script[\s\S]*?</script>", " ", html_text, flags=re.IGNORECASE)
+        text = html_text or ""
+        text = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.IGNORECASE)
         text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"<noscript[\s\S]*?</noscript>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"<(svg|form|button)[\s\S]*?</\1>", " ", text, flags=re.IGNORECASE)
+
+        article_match = re.search(r"<(article|main)[^>]*>([\s\S]*?)</\1>", text, flags=re.IGNORECASE)
+        if article_match:
+            text = article_match.group(2)
+
+        for block_tag in ("header", "footer", "nav", "aside"):
+            text = re.sub(rf"<{block_tag}[^>]*>[\s\S]*?</{block_tag}>", " ", text, flags=re.IGNORECASE)
+
         text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\b(cookie policy|accept cookies|subscribe|advertisement|all rights reserved)\b", " ", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text).strip()
         return text
 
-    def _get_deep_read_cache(self, url: str) -> str:
+    def _get_deep_read_cache(self, url: str) -> Optional[str]:
         item = self.deep_read_cache.get(url)
         if not item:
-            return ""
-        if datetime.now() - item["timestamp"] > timedelta(hours=2):
-            del self.deep_read_cache[url]
-            return ""
-        return item["text"]
+            return None
 
-    def _set_deep_read_cache(self, url: str, text: str):
-        self.deep_read_cache[url] = {"text": text, "timestamp": datetime.now()}
+        ttl_seconds = int(item.get("ttl_seconds", 7200))
+        if datetime.now() - item["timestamp"] > timedelta(seconds=ttl_seconds):
+            del self.deep_read_cache[url]
+            return None
+
+        return item.get("text", "")
+
+    def _set_deep_read_cache(self, url: str, text: str, ttl_seconds: int = 7200):
+        self.deep_read_cache[url] = {
+            "text": text,
+            "timestamp": datetime.now(),
+            "ttl_seconds": max(60, ttl_seconds),
+        }
 
     async def _fetch_page_evidence(self, url: str) -> str:
         cached = self._get_deep_read_cache(url)
-        if cached:
+        if cached is not None:
             return cached
 
-        def _fetch() -> str:
-            headers = {"User-Agent": "Mozilla/5.0 (AzurisBot/1.0)"}
-            response = requests.get(url, headers=headers, timeout=8)
+        def _fetch_once(timeout_sec: int) -> str:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (AzurisBot/1.0)",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.8,vi;q=0.7",
+            }
+            response = requests.get(url, headers=headers, timeout=timeout_sec)
             if response.status_code != 200 or not response.text:
                 return ""
+
+            if not response.encoding:
+                response.encoding = response.apparent_encoding or "utf-8"
+
             parsed = self._extract_main_text(response.text)
+            if len(parsed) < 120:
+                return ""
             return parsed[:self.deep_read_max_chars].strip()
 
-        try:
-            text = await asyncio.to_thread(_fetch)
-            if text:
-                self._set_deep_read_cache(url, text)
-            return text
-        except Exception:
-            return ""
+        for attempt in range(2):
+            timeout_sec = 6 + (attempt * 2)
+            try:
+                text = await asyncio.to_thread(_fetch_once, timeout_sec)
+                if text:
+                    self._set_deep_read_cache(url, text, ttl_seconds=7200)
+                    return text
+            except Exception:
+                continue
+
+        self._set_deep_read_cache(url, "", ttl_seconds=self.search_empty_evidence_cache_ttl_seconds)
+        return ""
 
     async def _search_duckduckgo_records(self, query: str, index: int = 0) -> List[Dict[str, str]]:
         start_ts = datetime.now().timestamp()
@@ -1201,8 +1376,14 @@ class ToolsManager:
 
         ranked = sorted(scored, key=lambda x: float(x.get("score", "0")), reverse=True)
 
-        for rec in ranked[:self.deep_read_top_links]:
-            rec["evidence"] = await self._fetch_page_evidence(rec.get("url", ""))
+        top_records = ranked[:self.deep_read_top_links]
+        if top_records:
+            evidence_results = await asyncio.gather(
+                *(self._fetch_page_evidence(rec.get("url", "")) for rec in top_records),
+                return_exceptions=True,
+            )
+            for rec, evidence in zip(top_records, evidence_results):
+                rec["evidence"] = evidence if isinstance(evidence, str) else ""
 
         self.logger.info(
             f"AB_METRIC search_query topic={selected_topic} primary_success={1 if records else 0} "
@@ -1214,15 +1395,7 @@ class ToolsManager:
             final += "\n\n⚠️ Chưa đủ nguồn uy tín theo ngưỡng strict. Cần thêm vòng truy xuất hoặc người dùng cung cấp link chính xác."
         return final
 
-    async def run_search_apis(self, query: str, mode: str = "general"):
-        async with self.cache_lock:
-            cached_result = self.get_web_search_cache(query)
-        if cached_result:
-            self.logger.info(f"Web search result from cache for query: {query[:50]}...")
-            return cached_result
-
-        force_fallback = "[FORCE FALLBACK]" in query.upper()
-        clean_query = query.replace("[FORCE FALLBACK]", "").strip()
+    async def _execute_search_pipeline(self, clean_query: str, force_fallback: bool) -> str:
         intents = self._split_multi_intents(clean_query)
         if not intents:
             return ""
@@ -1244,15 +1417,69 @@ class ToolsManager:
                 elif res:
                     final_sections.append(res)
 
-        if final_sections:
-            output = "\n\n".join(final_sections)
-            async with self.cache_lock:
-                self.set_web_search_cache(query, output)
-            self.logger.info(f"Completed search for intents={len(intents)} and cached.")
-            return output
+        return "\n\n".join(final_sections).strip() if final_sections else ""
 
-        self.logger.error("All search providers failed for all intents.")
-        return ""
+    async def run_search_apis(self, query: str, mode: str = "general"):
+        raw_query = query or ""
+        force_fallback = "[FORCE FALLBACK]" in raw_query.upper()
+        clean_query = raw_query.replace("[FORCE FALLBACK]", "").strip()
+        if not clean_query:
+            return ""
+
+        cache_key = f"{mode}|{clean_query}"
+        normalized_key = self._normalize_search_cache_key(cache_key)
+        time_sensitive = self._is_time_sensitive_query(clean_query)
+
+        inflight_task: Optional[asyncio.Task] = None
+        async with self.cache_lock:
+            cached_result = None if force_fallback else self.get_web_search_cache(cache_key)
+            if not cached_result:
+                inflight_task = self.inflight_search_tasks.get(normalized_key)
+
+        if cached_result:
+            self.logger.info(f"Web search result from cache for query: {clean_query[:50]}...")
+            return cached_result
+
+        if inflight_task:
+            self.logger.info(f"Web search joined inflight task for key={normalized_key[:80]}")
+            return await inflight_task
+
+        if not force_fallback and self.search_failed_query_cooldown_seconds > 0:
+            async with self.cache_lock:
+                cooldown_until = self.failed_search_cooldowns.get(normalized_key, 0)
+            if cooldown_until > time.time():
+                self.logger.info(f"Search cooldown active for key={normalized_key[:80]}")
+                return "⚠️ Nguồn tìm kiếm đang tạm quá tải, vui lòng thử lại sau ít giây."
+
+        task = asyncio.create_task(self._execute_search_pipeline(clean_query, force_fallback))
+        async with self.cache_lock:
+            self.inflight_search_tasks[normalized_key] = task
+
+        try:
+            output = await task
+            if output:
+                async with self.cache_lock:
+                    self.set_web_search_cache(cache_key, output, time_sensitive=time_sensitive)
+                    self.failed_search_cooldowns.pop(normalized_key, None)
+                self.logger.info(f"Completed search for query='{clean_query[:60]}' and cached.")
+                return output
+
+            if self.search_failed_query_cooldown_seconds > 0:
+                async with self.cache_lock:
+                    self.failed_search_cooldowns[normalized_key] = time.time() + self.search_failed_query_cooldown_seconds
+            self.logger.error("All search providers failed for all intents.")
+            return ""
+        except Exception as e:
+            if self.search_failed_query_cooldown_seconds > 0:
+                async with self.cache_lock:
+                    self.failed_search_cooldowns[normalized_key] = time.time() + self.search_failed_query_cooldown_seconds
+            self.logger.error(f"Search pipeline exception: {e}")
+            return ""
+        finally:
+            async with self.cache_lock:
+                current = self.inflight_search_tasks.get(normalized_key)
+                if current is task:
+                    del self.inflight_search_tasks[normalized_key]
     
     async def call_tool(self, function_call, user_id: str):
         """Dispatch tool calls to appropriate handlers."""

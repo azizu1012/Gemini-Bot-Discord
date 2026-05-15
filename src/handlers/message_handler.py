@@ -552,6 +552,20 @@ class MessageHandler:
         found = found_matches[-1]
         return found >= required and "chưa đủ nguồn uy tín" not in lower
 
+    def _has_minimum_search_evidence(self, tool_results: str) -> bool:
+        if not tool_results:
+            return False
+
+        lower = tool_results.lower()
+        found_matches = [int(v) for v in re.findall(r"reputable sources found:\s*(\d+)", lower)]
+        if found_matches and found_matches[-1] >= 1:
+            return True
+
+        if "additional corroborating sources:" in lower and "(không có nguồn bổ sung)" not in lower:
+            return True
+
+        return False
+
     def _build_fallback_system_prompt(self, user_input: str, reasoning_result: str, tool_results: str) -> str:
         prompt_template = get_fallback_system_prompt()
         prompt_text = prompt_template.replace("[USER_INPUT_HERE]", user_input.strip())
@@ -607,20 +621,26 @@ class MessageHandler:
         # TIER 1: Use Flash-Lite for reasoning loops + tool calls
         reasoning_result, tool_results = await self._call_gemini_reasoning_loop(messages, user_id)
 
-        # Wait-until-sufficient: one additional retrieval pass if evidence is still weak
+        # Optional extra retrieval pass when evidence is weak
         if tool_results and not self._is_tool_result_sufficient(tool_results):
-            self.logger.info(f"Evidence insufficient for {user_id}. Running one additional retrieval pass.")
-            followup_messages = [msg.copy() for msg in messages]
-            followup_messages.append({
-                "role": "user",
-                "parts": [{"text": "Continue current request. Retrieve missing evidence with one focused web_search. Use [FORCE FALLBACK] only if needed."}],
-            })
+            partial_ok = self.config.SEARCH_ALLOW_PARTIAL_ANSWER and self._has_minimum_search_evidence(tool_results)
+            if self.config.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS and not partial_ok:
+                self.logger.info(f"Evidence insufficient for {user_id}. Running one additional retrieval pass.")
+                followup_messages = [msg.copy() for msg in messages]
+                followup_messages.append({
+                    "role": "user",
+                    "parts": [{"text": "Continue current request. Retrieve missing evidence with one focused web_search. Use [FORCE FALLBACK] only if needed."}],
+                })
 
-            retry_reasoning, retry_tool_results = await self._call_gemini_reasoning_loop(followup_messages, user_id)
-            if retry_reasoning and retry_reasoning not in {"Reasoning completed", "Reasoning loop failed"}:
-                reasoning_result = retry_reasoning
-            if retry_tool_results:
-                tool_results = f"{tool_results}\n\n[RETRY PASS]\n{retry_tool_results}" if tool_results else retry_tool_results
+                retry_reasoning, retry_tool_results = await self._call_gemini_reasoning_loop(followup_messages, user_id)
+                if retry_reasoning and retry_reasoning not in {"Reasoning completed", "Reasoning loop failed"}:
+                    reasoning_result = retry_reasoning
+                if retry_tool_results:
+                    tool_results = f"{tool_results}\n\n[RETRY PASS]\n{retry_tool_results}" if tool_results else retry_tool_results
+            else:
+                self.logger.info(
+                    f"Evidence below strict threshold for {user_id}, continuing with partial evidence mode={self.config.SEARCH_ALLOW_PARTIAL_ANSWER}."
+                )
 
         # TIER 2: Use Flash for final output (with reasoning context, no thinking needed)
         final_output = await self._call_gemini_final(messages, reasoning_result, tool_results, user_id)
@@ -633,7 +653,7 @@ class MessageHandler:
         Returns:
             tuple: (reasoning_output: str, tool_results: str)
         """
-        MAX_RETRIES = 5
+        MAX_RETRIES = self.config.REASONING_MAX_API_RETRIES
         reasoning_model_alias = REASONING_MODEL_ALIAS
 
         tools = self.tools_mgr.get_all_tools()
@@ -659,7 +679,7 @@ class MessageHandler:
                 time_context = f"Current time: {current_time_str}\n"
                 system_instruction = time_context + get_lite_reasoning_prompt()
 
-                while iteration < 5:
+                while iteration < self.config.REASONING_MAX_LOOPS:
                     iteration += 1
                     quota_ok = await self._acquire_gemini_quota(
                         reasoning_messages,
@@ -866,14 +886,23 @@ class MessageHandler:
             tool_results: Formatted results from tools called in tier 1
             user_id: User ID for logging
         """
-        MAX_RETRIES = 5
+        MAX_RETRIES = self.config.FINAL_MAX_API_RETRIES
         final_model_alias = FINAL_MODEL_ALIAS
 
         if tool_results and not self._is_tool_result_sufficient(tool_results):
-            return (
-                "Mình cần thêm một chút thời gian để xác minh đủ nguồn uy tín trước khi kết luận. "
-                "Nếu bạn có link chính thức/trusted thì gửi thêm để mình khóa kết quả chính xác hơn."
-            )
+            if self.config.SEARCH_ALLOW_PARTIAL_ANSWER and self._has_minimum_search_evidence(tool_results):
+                self.logger.info(f"Using partial evidence response mode for user {user_id}.")
+                reasoning_result = (
+                    (reasoning_result or "")
+                    + "\n\n[PARTIAL_EVIDENCE_MODE]\n"
+                    "Evidence is below strict trust threshold, but enough signals exist to provide a cautious answer. "
+                    "Respond with uncertainty markers and suggest official verification link for final confirmation."
+                ).strip()
+            else:
+                return (
+                    "Mình cần thêm một chút thời gian để xác minh đủ nguồn uy tín trước khi kết luận. "
+                    "Nếu bạn có link chính thức/trusted thì gửi thêm để mình khóa kết quả chính xác hơn."
+                )
 
         for attempt in range(MAX_RETRIES):
             api_key: Optional[str] = None
@@ -1011,7 +1040,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     await asyncio.sleep(wait_time)
 
                     if attempt == MAX_RETRIES - 1:
-                        self.logger.warning(f"❌ Flash model exhausted (5 retries). Fallback to lite model for {user_id}")
+                        self.logger.warning(f"❌ Flash model exhausted ({MAX_RETRIES} retries). Fallback to lite model for {user_id}")
                         return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
 
                     continue
@@ -1029,7 +1058,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
         Lite receives 3-block context + fallback prompt to produce final output.
         This ensures users always get a response, even under heavy API load.
         """
-        MAX_RETRIES = 3
+        MAX_RETRIES = self.config.FALLBACK_MAX_API_RETRIES
         fallback_model_alias = FALLBACK_MODEL_ALIAS
 
         for attempt in range(MAX_RETRIES):

@@ -24,7 +24,8 @@ Azuris được thiết kế để:
 
 Entry points:
 - main.py (thin entrypoint)
-- run_bot.py (launcher chính)
+- run_bot.py (launcher chính, bot-only hoặc bot + server)
+- run_bot.sh (launcher Linux/Ubuntu + PM2 modes: --pm2, --pm2-fresh)
 
 Luồng xử lý chính nằm ở:
 - src/handlers/message_handler.py
@@ -36,6 +37,9 @@ Flow tóm tắt:
 4. Chạy final synthesis.
 5. Ghi lịch sử user/assistant vào DB.
 
+Runtime notes:
+- Startup log hiển thị token preview (masked), model, số lượng Gemini keys, DB path.
+- Shutdown bởi process-manager restart được log rõ qua KeyboardInterrupt message.
 
 ================================================================================
 3) MEMORY ARCHITECTURE (DB-FIRST, HYBRID SCOPE)
@@ -71,7 +75,9 @@ Bảng chính:
              updated_at, is_active, note_type, fact_hash)
 
 Điểm kỹ thuật:
-- Có migration idempotent để thêm cột/index an toàn.
+- DB mới được bootstrap theo fresh schema đích ngay khi khởi tạo.
+- Schema cũ/không tương thích được detect và auto-rebuild để tránh lỗi runtime kéo dài.
+- Có ensure path cho cột/index cần thiết khi startup.
 - Có index phục vụ history retrieval và scoped note retrieval.
 - Có API cho list/demote global notes.
 
@@ -91,6 +97,21 @@ Tools hiện có:
 Search strategy:
 - Primary: DuckDuckGo streams.
 - Fallback providers (khi có key và cần): SerpAPI, Tavily, Exa.
+
+Production stability layers (web_search):
+- Canonical cache key cho query tương đương nghĩa.
+- TTL tách riêng cho query thường và query nhạy thời gian.
+- Inflight dedup để request trùng key join cùng task.
+- Failed-query cooldown để tránh spam provider khi nguồn ngoài lỗi.
+- Deep-read retry ngắn + boilerplate filtering + empty-evidence cache.
+
+Runtime knobs liên quan stability:
+- REASONING_MAX_API_RETRIES
+- REASONING_MAX_LOOPS
+- FINAL_MAX_API_RETRIES
+- FALLBACK_MAX_API_RETRIES
+- SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS
+- SEARCH_ALLOW_PARTIAL_ANSWER
 
 
 ================================================================================
@@ -154,7 +175,7 @@ Khuyến nghị migration:
 ================================================================================
 
 1. Tăng test coverage cho memory policy (scope, promote/demote, blocked cases).
-2. Thêm metrics theo stage (reasoning/tool/final/db latency).
+2. Thêm metrics theo stage (reasoning/tool/final/db latency) + cache-hit/fallback-call cho web_search.
 3. Thêm audit trail cho admin actions trên global memory.
 4. Tinh chỉnh ranking retrieval (importance + recency + relevance).
 

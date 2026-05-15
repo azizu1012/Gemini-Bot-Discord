@@ -9,11 +9,13 @@ Azuris_refactor_code_base/
 ├── run_bot.py
 ├── run_bot.sh
 ├── data/
-│   ├── chat_history.db
-│   ├── chat_history_backup.db
+│   ├── bot_database.db (hoặc file DB theo DB_PATH)
+│   ├── bot_database.db.backup (theo DB_BACKUP_PATH)
 │   ├── short_term_memory.json
+│   ├── weather_cache.json
 │   ├── quota_state.json
 │   └── voice_lock/
+├── uploaded_files/
 └── src/
     ├── core/
     │   ├── api_config.py
@@ -56,7 +58,10 @@ Root files:
   Thin entrypoint gọi launcher chính.
 
 - run_bot.py:
-  Runtime launcher chính (bot-only hoặc bot + Flask server).
+  Runtime launcher chính (bot-only hoặc bot + Flask server), log thông tin startup quan trọng.
+
+- run_bot.sh:
+  Launcher Linux/Ubuntu, hỗ trợ PM2 mode (`--pm2`) và PM2 fresh reinstall (`--pm2-fresh`).
 
 - README.md:
   Quick start + kiến trúc ngắn gọn + command/tool overview.
@@ -76,7 +81,7 @@ Core runtime modules:
 
 Memory and persistence:
 - src/database/repository.py:
-  SQLite schema + queries + global note moderation operations.
+  SQLite schema bootstrap/rebuild compatibility path + queries + global note moderation operations.
 
 - src/managers/note_manager.py:
   Classification policy cho notes, retrieval scope logic, promote candidate->global.
@@ -86,7 +91,7 @@ Memory and persistence:
 
 Tool layer:
 - src/tools/tools.py:
-  Khai báo tools và dispatch khi model yêu cầu gọi tool.
+  Khai báo tools, dispatch tool-calls, và lớp ổn định web_search (cache/dedup/cooldown/deep-read).
 
 Prompt and config:
 - src/core/system_prompt.py:

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+from typing import Optional
 
 
 def _load_runtime_env() -> None:
@@ -19,7 +20,27 @@ def _load_runtime_env() -> None:
 
 class Config:
     """Singleton configuration manager for the bot."""
-    
+
+    @staticmethod
+    def _get_bool(name: str, default: bool) -> bool:
+        raw = (os.getenv(name) or "").strip().lower()
+        if not raw:
+            return default
+        return raw in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _get_int(name: str, default: int, min_value: Optional[int] = None, max_value: Optional[int] = None) -> int:
+        raw = (os.getenv(name) or "").strip()
+        try:
+            value = int(raw) if raw else default
+        except ValueError:
+            value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
     def __init__(self):
         _load_runtime_env()
         
@@ -110,6 +131,14 @@ class Config:
         self.DEFAULT_DM_LIMIT = 5
         self.PREMIUM_DM_LIMIT = 15
         self.ADMIN_USER_IDS = [self.ADMIN_ID] if self.ADMIN_ID else []
+
+        # --- PRODUCTION STABILITY TUNING ---
+        self.REASONING_MAX_API_RETRIES = self._get_int("REASONING_MAX_API_RETRIES", 3, min_value=1, max_value=6)
+        self.REASONING_MAX_LOOPS = self._get_int("REASONING_MAX_LOOPS", 3, min_value=1, max_value=6)
+        self.FINAL_MAX_API_RETRIES = self._get_int("FINAL_MAX_API_RETRIES", 3, min_value=1, max_value=6)
+        self.FALLBACK_MAX_API_RETRIES = self._get_int("FALLBACK_MAX_API_RETRIES", 2, min_value=1, max_value=5)
+        self.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = self._get_bool("SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS", False)
+        self.SEARCH_ALLOW_PARTIAL_ANSWER = self._get_bool("SEARCH_ALLOW_PARTIAL_ANSWER", True)
         
         # --- GEMINI SAFETY SETTINGS ---
         self.SAFETY_SETTINGS = [
@@ -194,3 +223,9 @@ PREMIUM_RATE_LIMIT = config.PREMIUM_RATE_LIMIT
 DEFAULT_DM_LIMIT = config.DEFAULT_DM_LIMIT
 PREMIUM_DM_LIMIT = config.PREMIUM_DM_LIMIT
 ADMIN_USER_IDS = config.ADMIN_USER_IDS
+REASONING_MAX_API_RETRIES = config.REASONING_MAX_API_RETRIES
+REASONING_MAX_LOOPS = config.REASONING_MAX_LOOPS
+FINAL_MAX_API_RETRIES = config.FINAL_MAX_API_RETRIES
+FALLBACK_MAX_API_RETRIES = config.FALLBACK_MAX_API_RETRIES
+SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = config.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS
+SEARCH_ALLOW_PARTIAL_ANSWER = config.SEARCH_ALLOW_PARTIAL_ANSWER
