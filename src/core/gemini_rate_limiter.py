@@ -74,18 +74,17 @@ class GeminiRateLimiter:
 
     def get_counters_snapshot(self) -> dict:
         now = time.time()
-        while self._minute_req_ts and now - self._minute_req_ts[0] >= 60:
-            self._minute_req_ts.popleft()
-        while self._minute_tokens and now - self._minute_tokens[0][0] >= 60:
-            self._minute_tokens.popleft()
-        if datetime.date.today() != self._rpd_date:
-            rpd_used = 0
-        else:
-            rpd_used = self._rpd_count
+        req_ts_snapshot = list(self._minute_req_ts)
+        token_snapshot = list(self._minute_tokens)
+
+        rpm_used = sum(1 for ts in req_ts_snapshot if now - ts < 60)
+        tpm_used = sum(tokens for ts, tokens in token_snapshot if now - ts < 60)
+        rpd_used = self._rpd_count if datetime.date.today() == self._rpd_date else 0
+
         return {
-            "rpm_used": len(self._minute_req_ts),
+            "rpm_used": rpm_used,
             "rpm_limit": self.rpm_limit,
-            "tpm_used": sum(item[1] for item in self._minute_tokens),
+            "tpm_used": tpm_used,
             "tpm_limit": self.tpm_limit,
             "rpd_used": rpd_used,
             "rpd_limit": self.rpd_limit,

@@ -1,37 +1,118 @@
 import uuid
 import json
+import re
+import hashlib
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from src.core.config import logger
 from src.database.repository import DatabaseRepository
 
 
 class NoteManager:
     """Manager for user notes and memory management."""
-    
+
+    GLOBAL_PROMOTE_DISTINCT_USERS = 3
+
     def __init__(self, db_repo: DatabaseRepository):
         self.db_repo = db_repo
         self.logger = logger
-    
+
+    def _normalize_fact_text(self, text: str) -> str:
+        normalized = (text or "").strip().lower()
+        normalized = re.sub(r"\s+", " ", normalized)
+        normalized = re.sub(r"[^\w\s]", "", normalized)
+        return normalized
+
+    def _classify_note(self, content: str) -> Tuple[str, str, int, str]:
+        text = (content or "").strip()
+        lowered = text.lower()
+
+        blocked_markers = [
+            "dox",
+            "doxxing",
+            "mạo danh",
+            "impersonat",
+            "xúc phạm",
+            "lăng mạ",
+            "số điện thoại",
+            "địa chỉ nhà",
+            "cccd",
+            "cmnd",
+        ]
+        if any(marker in lowered for marker in blocked_markers):
+            return "blocked", "blocked", 0, ""
+
+        forced_alias_pattern = re.search(r"\bgọi\s+.+\s+là\s+", lowered)
+        if forced_alias_pattern and ("người" in lowered or "user" in lowered or "thằng" in lowered):
+            return "blocked", "blocked", 0, ""
+
+        personal_markers = [
+            "tôi thích",
+            "mình thích",
+            "my favorite",
+            "i prefer",
+            "gọi tôi",
+            "call me",
+            "cấu hình máy",
+            "tên tôi",
+            "my name",
+        ]
+
+        if any(marker in lowered for marker in personal_markers):
+            return "personal_preference", "user", 6, ""
+
+        normalized = self._normalize_fact_text(text)
+        fact_hash = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:20] if normalized else ""
+        return "global_knowledge", "candidate_global", 4, fact_hash
+
     async def save_note_to_db(self, user_id: str, content: str, source: str) -> str:
         """Save an auto-note to database."""
         try:
             note_id = str(uuid.uuid4())
+            note_type, scope, importance, fact_hash = self._classify_note(content)
+
+            if note_type == "blocked":
+                self.logger.warning(f"Blocked unsafe note for user {user_id}")
+                return "Mình không thể lưu note này vì nội dung không an toàn hoặc có dấu hiệu lạm dụng."
+
             metadata = {
                 "type": "auto_note" if source == "chat_inference" else "manual",
                 "source": source,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "note_type": note_type,
+                "scope": scope,
+                "fact_hash": fact_hash,
             }
-            
-            success = await self.db_repo.add_user_note_db(user_id, note_id, content, metadata)
-            
-            if success:
-                self.logger.info(f"Auto-note saved for {user_id}. Source: {source}")
-                return f"Đã ghi nhớ thông tin: '{content[:50]}...'"
-            else:
+
+            success = await self.db_repo.add_user_note_db(
+                user_id,
+                note_id,
+                content,
+                metadata,
+                scope=scope,
+                importance=importance,
+                note_type=note_type,
+                fact_hash=fact_hash,
+            )
+
+            if not success:
                 self.logger.error(f"Error saving auto-note for {user_id}")
                 return "Lỗi khi cố gắng lưu note."
-        
+
+            if note_type == "global_knowledge" and fact_hash:
+                distinct_users = await self.db_repo.count_distinct_users_by_fact_hash_db(fact_hash)
+                if distinct_users >= self.GLOBAL_PROMOTE_DISTINCT_USERS:
+                    promoted_count = await self.db_repo.promote_fact_hash_to_global_db(fact_hash)
+                    self.logger.info(
+                        f"Auto-promoted fact_hash={fact_hash} to global after {distinct_users} users. rows={promoted_count}"
+                    )
+                    return f"Đã lưu note và nâng thành kiến thức chung sau khi được nhiều user xác nhận ({distinct_users})."
+
+                return f"Đã lưu note dạng candidate chung ({distinct_users}/{self.GLOBAL_PROMOTE_DISTINCT_USERS} user xác nhận)."
+
+            self.logger.info(f"Auto-note saved for {user_id}. Source: {source}, type={note_type}, scope={scope}")
+            return f"Đã ghi nhớ thông tin: '{content[:50]}...'"
+
         except Exception as e:
             self.logger.error(f"Exception in save_note_to_db: {e}")
             return f"Exception when saving note: {e}"
@@ -57,7 +138,16 @@ class NoteManager:
                 return success
             else:
                 note_id = str(uuid.uuid4())
-                success = await self.db_repo.add_user_note_db(user_id, note_id, content, metadata)
+                success = await self.db_repo.add_user_note_db(
+                    user_id,
+                    note_id,
+                    content,
+                    metadata,
+                    scope="user",
+                    importance=5,
+                    note_type="file_note",
+                    fact_hash="",
+                )
                 
                 if success:
                     self.logger.info(f"File note saved for {user_id}. File: {filename}")
@@ -69,37 +159,84 @@ class NoteManager:
             self.logger.error(f"Exception in save_file_note_to_db: {e}")
             return False
     
+    def _should_include_global(self, query: str) -> bool:
+        lowered = (query or "").strip().lower()
+        if not lowered:
+            return False
+
+        personal_markers = [
+            "tôi",
+            "mình",
+            "my",
+            "me",
+            "của tôi",
+            "cá nhân",
+        ]
+        if any(marker in lowered for marker in personal_markers):
+            return False
+
+        global_markers = [
+            "chung",
+            "mọi người",
+            "toàn server",
+            "global",
+            "best practice",
+            "kinh nghiệm",
+            "quy ước",
+        ]
+        return any(marker in lowered for marker in global_markers)
+
     async def retrieve_notes_from_db(self, user_id: str, query: str) -> str:
         """Retrieve notes from database with optional search."""
         try:
-            notes: List[Dict[str, Any]] = await self.db_repo.get_user_notes_db(user_id, search_query=query)
-            
+            include_global = self._should_include_global(query)
+            notes: List[Dict[str, Any]] = await self.db_repo.get_user_notes_db(
+                user_id,
+                search_query=query,
+                include_global=include_global,
+                limit=20,
+            )
+
+            if not notes and include_global and query:
+                notes = await self.db_repo.get_user_notes_db(
+                    user_id,
+                    search_query=None,
+                    include_global=True,
+                    limit=10,
+                )
+
             if not notes:
                 return "Không tìm thấy note nào khớp với nội dung."
-            
+
             formatted_notes = []
             for note in notes:
                 try:
-                    metadata = json.loads(note['metadata'])
-                    meta_str = f"Loại: {metadata.get('type', 'N/A')}, Nguồn: {metadata.get('source', 'N/A')}"
+                    metadata = json.loads(note['metadata']) if note.get('metadata') else {}
+                    meta_str = (
+                        f"Loại: {metadata.get('type', note.get('note_type', 'N/A'))}, "
+                        f"Nguồn: {metadata.get('source', 'N/A')}, "
+                        f"Scope: {note.get('scope', 'user')}"
+                    )
                 except Exception:
-                    meta_str = "Metadata lỗi"
-                
+                    meta_str = f"Scope: {note.get('scope', 'user')}"
+
                 formatted_notes.append(
                     f"--- [Note (ID: {note['note_id']}) ---\n"
                     f"[Thông tin: {meta_str}, Ngày lưu: {note['created_at']}]\n"
                     f"[Nội dung]:\n{note['content']}\n"
                     f"---"
                 )
-            
-            self.logger.info(f"Retrieved {len(notes)} notes for {user_id} with query: {query}")
-            
+
+            self.logger.info(
+                f"Retrieved {len(notes)} notes for {user_id} with query: {query}, include_global={include_global}"
+            )
+
             result_str = "\n\n".join(formatted_notes)
             if len(result_str) > 4000:
                 result_str = result_str[:4000] + "\n... (Result too long, truncated)"
-            
+
             return result_str
-        
+
         except Exception as e:
             self.logger.error(f"Exception in retrieve_notes_from_db: {e}")
             return f"Exception when retrieving notes: {e}"

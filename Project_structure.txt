@@ -2,40 +2,31 @@ Azuris_refactor_code_base/
 ├── README.md
 ├── PROJECT_INFO.txt
 ├── Project_structure.txt
+├── AGENT_HANDOFF_PROJECT_CONTEXT.md
 ├── requirements.txt
 ├── .env.example
-├── .env
 ├── main.py
 ├── run_bot.py
 ├── run_bot.sh
 ├── data/
-│   ├── short_term_memory.json
 │   ├── chat_history.db
 │   ├── chat_history_backup.db
+│   ├── short_term_memory.json
 │   ├── quota_state.json
-│   ├── weather_cache_ho_chi_minh_city.json
 │   └── voice_lock/
-│       └── users.json
-├── uploaded_files/                 (runtime attachment storage)
 └── src/
-    ├── __init__.py
     ├── core/
-    │   ├── __init__.py
     │   ├── api_config.py
     │   ├── api_proxy.py
     │   ├── api_router.py
     │   ├── config.py
-    │   ├── fallback_sys_prompt.py
     │   ├── gemini_rate_limiter.py
-    │   ├── lite_sys_prompt.py
     │   ├── logger.py
     │   ├── prompt_loader.py
     │   └── system_prompt.py
     ├── database/
-    │   ├── __init__.py
     │   └── repository.py
     ├── handlers/
-    │   ├── __init__.py
     │   ├── bot_core.py
     │   ├── bot_server.py
     │   └── message_handler.py
@@ -44,20 +35,69 @@ Azuris_refactor_code_base/
     │   ├── fallback_system_prompt.txt
     │   └── lite_reasoning_prompt.txt
     ├── managers/
-    │   ├── __init__.py
     │   ├── cache_manager.py
     │   ├── cleanup_manager.py
     │   ├── note_manager.py
     │   └── premium_manager.py
     ├── services/
-    │   ├── __init__.py
     │   ├── file_parser.py
     │   └── memory_service.py
     ├── tools/
-    │   ├── __init__.py
-    │   └── tools.py             (Gemini tool declarations: 6)
+    │   └── tools.py
     └── voice/
-        ├── __init__.py
         └── voice_lock.py
 
-Note: Không liệt kê các file generate như __pycache__/*.pyc.
+================================================================================
+ROLE MAP
+================================================================================
+
+Root files:
+- main.py:
+  Thin entrypoint gọi launcher chính.
+
+- run_bot.py:
+  Runtime launcher chính (bot-only hoặc bot + Flask server).
+
+- README.md:
+  Quick start + kiến trúc ngắn gọn + command/tool overview.
+
+- PROJECT_INFO.txt:
+  Technical overview chi tiết hơn, gồm memory architecture và roadmap.
+
+- AGENT_HANDOFF_PROJECT_CONTEXT.md:
+  Context gói gọn để gửi cho agent phân tích ngoài khi không thể gửi full source.
+
+Core runtime modules:
+- src/handlers/bot_core.py:
+  Khởi tạo bot, đăng ký slash commands, quản lý admin interaction views.
+
+- src/handlers/message_handler.py:
+  Pipeline xử lý message, gọi model, gọi tools, ghép final response.
+
+Memory and persistence:
+- src/database/repository.py:
+  SQLite schema + queries + global note moderation operations.
+
+- src/managers/note_manager.py:
+  Classification policy cho notes, retrieval scope logic, promote candidate->global.
+
+- src/services/memory_service.py:
+  Legacy JSON memory utility path.
+
+Tool layer:
+- src/tools/tools.py:
+  Khai báo tools và dispatch khi model yêu cầu gọi tool.
+
+Prompt and config:
+- src/core/system_prompt.py:
+  Hành vi assistant, quy tắc memory, output policy.
+
+- src/core/prompt_loader.py:
+  Nạp prompt templates dùng cho các tầng model.
+
+================================================================================
+NOTES
+================================================================================
+
+- Không sửa code trong src chỉ để thay docs, trừ khi chủ động làm feature/fix.
+- Khi cập nhật tính năng mới, đồng bộ lại README + PROJECT_INFO + handoff doc.

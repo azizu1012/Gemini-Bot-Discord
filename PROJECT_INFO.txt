@@ -1,200 +1,161 @@
 ================================================================================
-AZURIS - TECHNICAL PROJECT INFO (CURRENT CODEBASE)
+AZURIS - PROJECT TECHNICAL INFO
 ================================================================================
 
-Scope tài liệu này:
-- Phản ánh trạng thái code hiện tại trong `src/`.
-- Loại bỏ nội dung legacy/lặp lại/claim marketing không kiểm chứng.
-- Dùng làm technical reference ngắn gọn, không thay thế source code.
+Mục tiêu tài liệu:
+- Tóm tắt kiến trúc và kỹ thuật theo trạng thái code hiện tại.
+- Làm tài liệu tham chiếu nhanh cho maintainers hoặc agent phân tích ngoài.
 
 
 ================================================================================
-1) RUNTIME OVERVIEW
+1) PRODUCT GOALS
+================================================================================
+
+Azuris được thiết kế để:
+- Trả lời hội thoại Discord theo ngữ cảnh.
+- Dùng tool-calling để lấy thông tin thời gian thực.
+- Duy trì memory dài hạn hữu dụng, không chỉ short-term.
+- Bảo vệ ranh giới riêng tư giữa users trong môi trường multi-user.
+
+
+================================================================================
+2) RUNTIME OVERVIEW
 ================================================================================
 
 Entry points:
-- `main.py`
-- `run_bot.py`
-- `run_bot.sh`
+- main.py (thin entrypoint)
+- run_bot.py (launcher chính)
 
-Core flow trong `src/handlers/message_handler.py`:
+Luồng xử lý chính nằm ở:
+- src/handlers/message_handler.py
+
+Flow tóm tắt:
 1. Nhận message (DM hoặc mention).
-2. Kiểm tra quyền/giới hạn/tải file đính kèm nếu có.
-3. Gọi pipeline Gemini 2 tầng:
-   - Tier 1: `_call_gemini_reasoning_loop()`
-   - Tier 2: `_call_gemini_final()`
-4. Nếu Tier 2 lỗi quá ngưỡng retry -> fallback `_fallback_lite_as_flash()`.
-5. Trả response đã được làm sạch artifact nội bộ.
-
-Model aliases đang dùng:
-- `REASONING_MODEL_ALIAS = "gemini-flash-lite-latest"`
-- `FINAL_MODEL_ALIAS = "gemini-flash-latest"`
-- `FALLBACK_MODEL_ALIAS = REASONING_MODEL_ALIAS`
-
-Prompt loading:
-- `src/core/prompt_loader.py` nạp prompt từ:
-  - `src/instructions/azuris_system_prompt.txt`
-  - `src/instructions/lite_reasoning_prompt.txt`
-  - `src/instructions/fallback_system_prompt.txt`
+2. Build context gần nhất từ DB.
+3. Chạy reasoning loop (có thể gọi tools).
+4. Chạy final synthesis.
+5. Ghi lịch sử user/assistant vào DB.
 
 
 ================================================================================
-2) GEMINI PIPELINE DETAILS
+3) MEMORY ARCHITECTURE (DB-FIRST, HYBRID SCOPE)
 ================================================================================
 
-Tier 1 (reasoning + tool loop):
-- Function: `_call_gemini_reasoning_loop()`
-- Max retries: 5
-- Max tool-loop iterations: 5
-- Output: tuple `(reasoning_output, tool_results)`
-- Budget guard: tối đa 1 lần `web_search` cho mỗi user turn trong reasoning loop
+Thành phần chính:
+- src/database/repository.py
+- src/managers/note_manager.py
+- src/tools/tools.py (save_note/retrieve_notes bridge)
 
-Tier 2 (final synthesis):
-- Function: `_call_gemini_final()`
-- Max retries: 5
-- Dùng 3-block context injection:
-  - BLOCK 1: user input (truncated)
-  - BLOCK 2: reasoning output
-  - BLOCK 3: tool results
+Mô hình scope:
+- user: mặc định, an toàn riêng tư.
+- candidate_global: fact dùng chung ở trạng thái chờ xác nhận.
+- global: fact đã đủ điều kiện chia sẻ.
 
-Fallback tier (lite-as-final):
-- Function: `_fallback_lite_as_flash()`
-- Max retries: 3
-- Trigger khi final tier không khả dụng sau retry
+Policy:
+- Ưu tiên retrieval theo user trước.
+- Chỉ include global khi intent phù hợp.
+- Chặn note mang dấu hiệu lạm dụng như impersonation/harassment/dox-like content.
 
-Output hygiene:
-- Làm sạch các artifact nội bộ như `<THINKING>`, `<tool_code>`, `<tool_result>` trước khi gửi user.
+Auto-promotion:
+- Facts được normalize + hash.
+- Khi nhiều user khác nhau xác nhận cùng fact hash, hệ thống có thể promote lên global.
 
 
 ================================================================================
-3) COMMAND INVENTORY (CURRENT)
+4) DATABASE SNAPSHOT
 ================================================================================
 
-Slash commands trong `src/handlers/bot_core.py`:
+Bảng chính:
+- messages(user_id, role, content, timestamp)
+- user_notes(user_id, note_id, content, metadata, created_at, scope, importance,
+             updated_at, is_active, note_type, fact_hash)
 
-Core/Admin commands:
-- `/reset-chat`
-- `/premium`
-- `/reset-all`
-- `/message_to`
-
-Voice room commands:
-- `/lock`
-- `/unlock`
-- `/move`
-- `/move_all`
-- `/set_room`
-- `/add_privet`
-- `/remove_privet`
-- `/list_privet`
-
-Ghi chú:
-- Nhóm voice commands chỉ được đăng ký khi `VoiceLockManager` được khởi tạo thành công
-  (ví dụ `ADMIN_ID` hợp lệ theo `BotCore._build_voice_lock_manager()`).
+Điểm kỹ thuật:
+- Có migration idempotent để thêm cột/index an toàn.
+- Có index phục vụ history retrieval và scoped note retrieval.
+- Có API cho list/demote global notes.
 
 
 ================================================================================
-4) TOOLS & SEARCH STACK (CURRENT)
+5) TOOLS & SEARCH
 ================================================================================
 
-Tool declarations trong `src/tools/tools.py`: 6 tools
-1. `web_search`
-2. `get_weather`
-3. `calculate`
-4. `save_note`
-5. `retrieve_notes`
-6. `image_recognition`
+Tools hiện có:
+1. web_search
+2. get_weather
+3. calculate
+4. save_note
+5. retrieve_notes
+6. image_recognition
 
-Search flow:
-- Primary: DuckDuckGo (`run_search_apis`, stream count đọc từ `GOOGLE_SEARCH_STREAMS`, clamp 1..2)
-- Fallback providers (khi cần và có key): SerpAPI, Tavily, Exa
-- Fallback chỉ chạy khi forced hoặc khi primary không đủ context theo logic sufficiency check
-- Có cache cho web search trong `ToolsManager`
+Search strategy:
+- Primary: DuckDuckGo streams.
+- Fallback providers (khi có key và cần): SerpAPI, Tavily, Exa.
 
 
 ================================================================================
-5) RATE LIMITING & RELIABILITY
+6) ADMIN & MODERATION FEATURES
 ================================================================================
 
-Per-user message limit:
-- `RATE_LIMIT_THRESHOLD = 6`
-- `RATE_LIMIT_WINDOW = 90` giây
+Slash commands đã có:
+- /global-notes
+- /global-note-demote
 
-Global request controls:
-- `API_REQUEST_SEMAPHORE = asyncio.Semaphore(2)`
-- `MIN_REQUEST_INTERVAL = 0.6` giây
-
-Transient error handling (Gemini):
-- Retry path bao gồm các nhóm lỗi: `429`, `resource_exhausted`, `unavailable`, `service unavailable`, `overloaded`
-- Backoff dạng tăng dần theo attempt
-- Trong reasoning tier, trạng thái reasoning/tool-results được giữ qua retry
+Trải nghiệm quản trị:
+- Hỗ trợ chọn qua dropdown.
+- Có pagination để duyệt nhiều records dễ hơn.
+- Dùng để kiểm soát tri thức shared/global và xử lý note không phù hợp.
 
 
 ================================================================================
-6) DATA, STORAGE, SERVICES
+7) KEY MODULE RESPONSIBILITIES
 ================================================================================
 
-Data/services chính:
-- `src/database/repository.py`: SQLite operations
-- `src/services/memory_service.py`: JSON short-term memory
-- `src/services/file_parser.py`: parse file đính kèm
-- `src/managers/note_manager.py`: notes persistence
-- `src/managers/premium_manager.py`: premium access
-- `src/managers/cache_manager.py`: cache quản lý
-- `src/managers/cleanup_manager.py`: cleanup/disk checks
+- src/handlers/bot_core.py:
+  Discord lifecycle, slash commands, admin interaction views.
 
-Runtime data thường nằm dưới:
-- `data/`
-- `uploaded_files/`
+- src/handlers/message_handler.py:
+  Message pipeline orchestration, model call flow, tool loop integration.
 
+- src/tools/tools.py:
+  Tool declaration and dispatch.
 
-================================================================================
-7) SOURCE STRUCTURE (CURRENT `src/`)
-================================================================================
+- src/managers/note_manager.py:
+  Memory classification and retrieval policy.
 
-`src/`
-- `core/`
-- `database/`
-- `handlers/`
-- `instructions/`
-- `managers/`
-- `services/`
-- `tools/`
-- `voice/`
+- src/database/repository.py:
+  SQLite persistence, schema migration, retrieval/moderation queries.
 
-Các module đáng chú ý:
-- `src/handlers/message_handler.py`
-- `src/handlers/bot_core.py`
-- `src/tools/tools.py`
-- `src/core/api_config.py`
-- `src/core/prompt_loader.py`
+- src/services/memory_service.py:
+  Legacy JSON memory utilities (không còn là source chính runtime).
 
 
 ================================================================================
-8) CONFIGURATION SNAPSHOT
+8) WHEN TO STAY SQLITE VS MOVE POSTGRES
 ================================================================================
 
-Bắt buộc tối thiểu:
-- `DISCORD_TOKEN`
-- `GEMINI_API_KEY_1` (có thể thêm nhiều key: `GEMINI_API_KEY_2...`)
+SQLite là đủ khi:
+- single-node deployment,
+- traffic vừa,
+- ưu tiên đơn giản vận hành.
 
-Thường dùng thêm:
-- `ADMIN_USER_IDS`
-- Search fallback keys: `SERP_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`
-- `WEATHER_API_KEY`
-- `HF_TOKEN`
+Nên cân nhắc PostgreSQL khi:
+- concurrency tăng rõ,
+- cần scale nhiều process/instance,
+- cần observability và transaction control nâng cao.
 
-Chi tiết đầy đủ: xem `.env.example`.
+Khuyến nghị migration:
+- Giữ interface repository ổn định.
+- Chuẩn bị adapter để thay backend DB dần.
 
 
 ================================================================================
-9) DOCUMENTATION POLICY
+9) NEXT PRIORITIES
 ================================================================================
 
-File này cố ý tránh:
-- hardcode line-count/class-count/benchmark numbers dễ drift,
-- thông tin legacy không còn khớp code,
-- nội dung lặp lại giữa nhiều section.
+1. Tăng test coverage cho memory policy (scope, promote/demote, blocked cases).
+2. Thêm metrics theo stage (reasoning/tool/final/db latency).
+3. Thêm audit trail cho admin actions trên global memory.
+4. Tinh chỉnh ranking retrieval (importance + recency + relevance).
 
-Khi code thay đổi, cập nhật docs theo source-of-truth từ `src/` trước.
 ================================================================================

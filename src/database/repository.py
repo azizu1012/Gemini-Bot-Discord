@@ -15,6 +15,12 @@ class DatabaseRepository:
         self.db_path = db_path
         self.backup_path = backup_path
         self.logger = logger
+        db_dir = os.path.dirname(self.db_path)
+        backup_dir = os.path.dirname(self.backup_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
+        if backup_dir:
+            os.makedirs(backup_dir, exist_ok=True)
     
     async def init_db(self) -> None:
         """Initialize database tables."""
@@ -25,17 +31,59 @@ class DatabaseRepository:
         cursor.execute('''CREATE TABLE IF NOT EXISTS messages
                          (user_id TEXT, role TEXT, content TEXT, timestamp TEXT)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS user_notes
-                         (user_id TEXT, 
-                          note_id TEXT PRIMARY KEY, 
-                          content TEXT, 
-                          metadata TEXT, 
-                          created_at TEXT)''')
+                         (user_id TEXT,
+                          note_id TEXT PRIMARY KEY,
+                          content TEXT,
+                          metadata TEXT,
+                          created_at TEXT,
+                          scope TEXT DEFAULT 'user',
+                          importance INTEGER DEFAULT 0,
+                          updated_at TEXT,
+                          is_active INTEGER DEFAULT 1,
+                          note_type TEXT DEFAULT 'personal_preference',
+                          fact_hash TEXT DEFAULT '')''')
+
+        self._ensure_schema_migrations(cursor)
+
+    def _ensure_schema_migrations(self, cursor: sqlite3.Cursor) -> None:
+        """Apply idempotent schema migrations and indexes."""
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row[0] for row in cursor.fetchall()}
+
+        if 'messages' in tables:
+            cursor.execute('''CREATE INDEX IF NOT EXISTS idx_messages_user_ts ON messages (user_id, timestamp)''')
+
+        if 'user_notes' not in tables:
+            return
+
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_id ON user_notes (user_id)''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_created ON user_notes (user_id, created_at)''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_scope_created ON user_notes (scope, created_at)''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_active_created ON user_notes (user_id, is_active, created_at)''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_fact_hash ON user_notes (fact_hash)''')
+
+        cursor.execute("PRAGMA table_info(user_notes)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if 'scope' not in columns:
+            cursor.execute("ALTER TABLE user_notes ADD COLUMN scope TEXT DEFAULT 'user'")
+        if 'importance' not in columns:
+            cursor.execute("ALTER TABLE user_notes ADD COLUMN importance INTEGER DEFAULT 0")
+        if 'updated_at' not in columns:
+            cursor.execute("ALTER TABLE user_notes ADD COLUMN updated_at TEXT")
+        if 'is_active' not in columns:
+            cursor.execute("ALTER TABLE user_notes ADD COLUMN is_active INTEGER DEFAULT 1")
+        if 'note_type' not in columns:
+            cursor.execute("ALTER TABLE user_notes ADD COLUMN note_type TEXT DEFAULT 'personal_preference'")
+        if 'fact_hash' not in columns:
+            cursor.execute("ALTER TABLE user_notes ADD COLUMN fact_hash TEXT DEFAULT ''")
     
     def _init_db_sync(self) -> None:
         """Synchronous database initialization."""
         conn = None
         try:
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
             conn = sqlite3.connect(self.db_path, timeout=10)
             c = conn.cursor()
             self._create_tables(c)
@@ -111,6 +159,14 @@ class DatabaseRepository:
                 conn.close()
             await self.init_db()
             conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+
+        try:
+            self._ensure_schema_migrations(c)
+            conn.commit()
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Schema migration failed while ensuring table {table_name}: {e}")
+
         return conn
     
     async def log_message_db(self, user_id: str, role: str, content: str) -> None:
@@ -131,29 +187,24 @@ class DatabaseRepository:
             if conn:
                 conn.close()
     
-    async def get_user_history_from_db(self, user_id: str, limit: int = 10) -> List[Dict[str, str]]:
-        """Get user chat history from database."""
+    def _get_user_history_from_db_sync(self, user_id: str, limit: int = 10) -> List[Dict[str, str]]:
         conn = None
         history = []
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            
+
             c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
             if not c.fetchone():
-                self.logger.warning("Bảng 'messages' không tồn tại, không thể lấy history.")
-                if conn:
-                    conn.close()
-                await self.init_db()
                 return []
-            
+
             c.execute(
                 "SELECT role, content FROM messages WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
                 (user_id, limit)
             )
             rows = c.fetchall()
-            
+
             for row in reversed(rows):
                 history.append({"role": row['role'], "content": row['content']})
         except sqlite3.DatabaseError as e:
@@ -162,8 +213,39 @@ class DatabaseRepository:
             if conn:
                 conn.close()
         return history
+
+    async def get_user_history_from_db(self, user_id: str, limit: int = 10) -> List[Dict[str, str]]:
+        """Get user chat history from database."""
+        history = await asyncio.to_thread(self._get_user_history_from_db_sync, user_id, limit)
+        if history:
+            return history
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+            if not c.fetchone():
+                self.logger.warning("Bảng 'messages' không tồn tại, không thể lấy history.")
+                await self.init_db()
+        except sqlite3.DatabaseError:
+            pass
+        finally:
+            if conn:
+                conn.close()
+        return history
     
-    async def add_user_note_db(self, user_id: str, note_id: str, content: str, metadata: Dict[str, Any]) -> bool:
+    async def add_user_note_db(
+        self,
+        user_id: str,
+        note_id: str,
+        content: str,
+        metadata: Dict[str, Any],
+        scope: str = "user",
+        importance: int = 0,
+        note_type: str = "personal_preference",
+        fact_hash: str = "",
+    ) -> bool:
         """Add a user note to the database."""
         conn = None
         try:
@@ -171,10 +253,12 @@ class DatabaseRepository:
             c = conn.cursor()
             created_at = datetime.now().isoformat()
             metadata_str = json.dumps(metadata)
-            
+
             c.execute(
-                "INSERT INTO user_notes (user_id, note_id, content, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, note_id, content, metadata_str, created_at)
+                """INSERT INTO user_notes
+                (user_id, note_id, content, metadata, created_at, updated_at, scope, importance, is_active, note_type, fact_hash)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+                (user_id, note_id, content, metadata_str, created_at, created_at, scope, importance, note_type, fact_hash)
             )
             conn.commit()
             return True
@@ -186,20 +270,19 @@ class DatabaseRepository:
             if conn:
                 conn.close()
     
-    async def get_file_note_by_filename_db(self, user_id: str, filename: str) -> Optional[Dict[str, Any]]:
-        """Get a file note by filename."""
+    def _get_file_note_by_filename_sync(self, user_id: str, filename: str) -> Optional[Dict[str, Any]]:
         conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            
+
             c.execute(
                 "SELECT note_id, content, metadata, created_at FROM user_notes WHERE user_id = ?",
                 (user_id,)
             )
             rows = c.fetchall()
-            
+
             for row in rows:
                 try:
                     metadata = json.loads(row['metadata'])
@@ -214,17 +297,20 @@ class DatabaseRepository:
         finally:
             if conn:
                 conn.close()
+
+    async def get_file_note_by_filename_db(self, user_id: str, filename: str) -> Optional[Dict[str, Any]]:
+        """Get a file note by filename."""
+        return await asyncio.to_thread(self._get_file_note_by_filename_sync, user_id, filename)
     
-    async def update_user_note_db(self, note_id: str, content: str, metadata: dict) -> bool:
-        """Update a user note."""
+    def _update_user_note_sync(self, note_id: str, content: str, metadata: dict) -> bool:
         conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             c = conn.cursor()
             metadata_str = json.dumps(metadata)
-            
+
             c.execute(
-                "UPDATE user_notes SET content = ?, metadata = ?, created_at = ? WHERE note_id = ?",
+                "UPDATE user_notes SET content = ?, metadata = ?, updated_at = ? WHERE note_id = ?",
                 (content, metadata_str, datetime.now().isoformat(), note_id)
             )
             conn.commit()
@@ -235,31 +321,49 @@ class DatabaseRepository:
         finally:
             if conn:
                 conn.close()
+
+    async def update_user_note_db(self, note_id: str, content: str, metadata: dict) -> bool:
+        """Update a user note."""
+        return await asyncio.to_thread(self._update_user_note_sync, note_id, content, metadata)
     
-    async def get_user_notes_db(self, user_id: str, search_query: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get user notes with optional search."""
+    def _get_user_notes_sync(
+        self,
+        user_id: str,
+        search_query: Optional[str] = None,
+        include_global: bool = False,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
         conn = None
         notes = []
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
-            
+
             c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_notes'")
             if not c.fetchone():
-                self.logger.warning("Bảng 'user_notes' không tồn tại, không thể lấy note.")
-                await self.init_db()
                 return []
-            
-            base_query = "SELECT note_id, content, metadata, created_at FROM user_notes WHERE user_id = ?"
+
+            if include_global:
+                base_query = (
+                    "SELECT note_id, content, metadata, created_at, updated_at, scope, importance, note_type, fact_hash "
+                    "FROM user_notes WHERE is_active = 1 AND (user_id = ? OR scope = 'global')"
+                )
+            else:
+                base_query = (
+                    "SELECT note_id, content, metadata, created_at, updated_at, scope, importance, note_type, fact_hash "
+                    "FROM user_notes WHERE is_active = 1 AND user_id = ?"
+                )
             params: tuple = (user_id,)
-            
+
             if search_query:
                 base_query += " AND (content LIKE ? OR metadata LIKE ?)"
                 params += (f"%{search_query}%", f"%{search_query}%")
-            
-            base_query += " ORDER BY created_at DESC LIMIT 20"
-            
+
+            safe_limit = max(1, min(limit, 100))
+            base_query += " ORDER BY importance DESC, COALESCE(updated_at, created_at) DESC LIMIT ?"
+            params += (safe_limit,)
+
             c.execute(base_query, params)
             rows = c.fetchall()
             notes = [dict(row) for row in rows]
@@ -269,7 +373,153 @@ class DatabaseRepository:
             if conn:
                 conn.close()
         return notes
-    
+
+    async def get_user_notes_db(
+        self,
+        user_id: str,
+        search_query: Optional[str] = None,
+        include_global: bool = False,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get user notes with optional search."""
+        notes = await asyncio.to_thread(self._get_user_notes_sync, user_id, search_query, include_global, limit)
+        if notes:
+            return notes
+
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_notes'")
+            if not c.fetchone():
+                self.logger.warning("Bảng 'user_notes' không tồn tại, không thể lấy note.")
+                await self.init_db()
+        except sqlite3.DatabaseError:
+            pass
+        finally:
+            if conn:
+                conn.close()
+        return notes
+
+    def _count_distinct_users_by_fact_hash_sync(self, fact_hash: str) -> int:
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+            c.execute(
+                """SELECT COUNT(DISTINCT user_id)
+                FROM user_notes
+                WHERE is_active = 1 AND note_type = 'global_knowledge' AND fact_hash = ?""",
+                (fact_hash,)
+            )
+            row = c.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while counting fact_hash users: {str(e)}")
+            return 0
+        finally:
+            if conn:
+                conn.close()
+
+    async def count_distinct_users_by_fact_hash_db(self, fact_hash: str) -> int:
+        return await asyncio.to_thread(self._count_distinct_users_by_fact_hash_sync, fact_hash)
+
+    def _promote_fact_hash_to_global_sync(self, fact_hash: str) -> int:
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+            c.execute(
+                """UPDATE user_notes
+                SET scope = 'global', updated_at = ?
+                WHERE is_active = 1 AND note_type = 'global_knowledge' AND fact_hash = ?""",
+                (datetime.now().isoformat(), fact_hash)
+            )
+            conn.commit()
+            return c.rowcount if c.rowcount is not None else 0
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while promoting fact_hash to global: {str(e)}")
+            return 0
+        finally:
+            if conn:
+                conn.close()
+
+    async def promote_fact_hash_to_global_db(self, fact_hash: str) -> int:
+        return await asyncio.to_thread(self._promote_fact_hash_to_global_sync, fact_hash)
+
+    def _get_global_notes_sync(self, limit: int = 20) -> List[Dict[str, Any]]:
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            safe_limit = max(1, min(limit, 100))
+            c.execute(
+                """SELECT note_id, user_id, content, created_at, updated_at, scope, importance, note_type, fact_hash
+                FROM user_notes
+                WHERE is_active = 1 AND scope = 'global'
+                ORDER BY COALESCE(updated_at, created_at) DESC
+                LIMIT ?""",
+                (safe_limit,)
+            )
+            rows = c.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while listing global notes: {str(e)}")
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    async def get_global_notes_db(self, limit: int = 20) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._get_global_notes_sync, limit)
+
+    def _demote_global_note_by_id_sync(self, note_id: str) -> bool:
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+            c.execute(
+                """UPDATE user_notes
+                SET scope = 'user', updated_at = ?
+                WHERE note_id = ? AND scope = 'global'""",
+                (datetime.now().isoformat(), note_id)
+            )
+            conn.commit()
+            return (c.rowcount or 0) > 0
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while demoting global note by id: {str(e)}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    async def demote_global_note_by_id_db(self, note_id: str) -> bool:
+        return await asyncio.to_thread(self._demote_global_note_by_id_sync, note_id)
+
+    def _demote_global_fact_hash_sync(self, fact_hash: str) -> int:
+        conn = None
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            c = conn.cursor()
+            c.execute(
+                """UPDATE user_notes
+                SET scope = 'candidate_global', updated_at = ?
+                WHERE is_active = 1 AND scope = 'global' AND fact_hash = ?""",
+                (datetime.now().isoformat(), fact_hash)
+            )
+            conn.commit()
+            return c.rowcount or 0
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while demoting global notes by fact_hash: {str(e)}")
+            return 0
+        finally:
+            if conn:
+                conn.close()
+
+    async def demote_global_fact_hash_db(self, fact_hash: str) -> int:
+        return await asyncio.to_thread(self._demote_global_fact_hash_sync, fact_hash)
+
     async def clear_user_data_db(self, user_id: str) -> bool:
         """Clear all user data from database."""
         conn = None
@@ -299,16 +549,15 @@ class DatabaseRepository:
                     conn.close()
         return False
     
-    async def clear_all_data_db(self) -> bool:
-        """Clear all data from database."""
+    def _clear_all_data_sync(self) -> bool:
         conn = None
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             c = conn.cursor()
-            
+
             c.execute("DELETE FROM messages")
             c.execute("DELETE FROM user_notes")
-            
+
             conn.commit()
             self.logger.info("ADMIN: Cleared all data (messages + notes tables).")
             return True
@@ -318,3 +567,7 @@ class DatabaseRepository:
         finally:
             if conn:
                 conn.close()
+
+    async def clear_all_data_db(self) -> bool:
+        """Clear all data from database."""
+        return await asyncio.to_thread(self._clear_all_data_sync)

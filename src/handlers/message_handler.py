@@ -56,7 +56,7 @@ class MessageHandler:
         
         # Initialize FileParser with CleanupManager
         self.file_parser = FileParserService(cleanup_mgr=CleanupManager())
-        self.tools_mgr = ToolsManager()
+        self.tools_mgr = ToolsManager(note_mgr=self.note_mgr)
         self.premium_mgr = PremiumManager()
         
         # Rate limiting (per user)
@@ -277,7 +277,22 @@ class MessageHandler:
             
             # Merge context
             content = content + reply_context
-            
+
+            # Fast path for low-information ping messages to avoid unnecessary quota burn
+            if not message.attachments and not reply_context:
+                normalized_ping = re.sub(r"[^\w\s]", " ", content.lower()).strip()
+                tokens = [token for token in normalized_ping.split() if token]
+                greeting_tokens = {"alo", "hi", "hello", "chào", "chao", "ping"}
+                filler_tokens = {"bạn", "ban", "ơi", "oi"}
+                if (
+                    tokens
+                    and len(tokens) <= 4
+                    and all(token in greeting_tokens or token in filler_tokens for token in tokens)
+                    and any(token in greeting_tokens for token in tokens)
+                ):
+                    await message.reply("Mình đây. Bạn cần mình hỗ trợ cụ thể gì?", mention_author=False)
+                    return
+
             # 4. Handle Attachments (Images vs Files)
             attachment_data = ""
             if message.attachments:
@@ -314,8 +329,8 @@ class MessageHandler:
                     # CASE C: UNSUPPORTED
                     attachment_data += f"\n[System Note: User uploaded file '{attachment.filename}' but format is NOT supported.]\n"
             
-            # 5. Build History & Messages
-            history = await self.memory_service.get_user_history_async(user_id)
+            # 5. Build History & Messages (DB-first)
+            history = await self.db_repo.get_user_history_from_db(user_id, limit=12)
             messages = []
             for msg in history:
                 role = "model" if msg["role"] == "assistant" else msg["role"]
@@ -335,10 +350,7 @@ class MessageHandler:
             async with message.channel.typing():
                 response_text = await self._call_gemini_api(messages, user_id)
             
-            # 7. Log to memory and DB
-            await self.memory_service.log_message_memory(user_id, "user", user_message)
-            await self.memory_service.log_message_memory(user_id, "assistant", response_text)
-            
+            # 7. Log to DB (DB-first memory source)
             await self.db_repo.log_message_db(user_id, "user", user_message)
             await self.db_repo.log_message_db(user_id, "assistant", response_text)
             
@@ -351,21 +363,23 @@ class MessageHandler:
 
     # --- SMART KEY MANAGEMENT METHODS ---
     
-    def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, str]]]:
         """
         Get best API key + provider model id, optionally forcing a specific model alias.
 
         Returns:
-            Tuple[api_key, model_id, model_alias] or (None, None, None) if exhausted
+            Tuple[api_key, model_id, model_alias, reservation_meta]
         """
-        # Try router selection
         if preferred_model_alias:
-            api_key, model_alias = self.api_router.get_next_key_for_model(preferred_model_alias)
+            reservation = self.api_router.get_next_key_for_model_reservation(preferred_model_alias)
         else:
-            api_key, model_alias = self.api_router.get_next_key()
+            reservation = self.api_router.get_next_key_reservation()
 
-        if api_key and model_alias:
-            return api_key, self.api_router.get_model_id(model_alias), model_alias
+        if reservation:
+            api_key = reservation.get("key")
+            model_alias = reservation.get("model_alias")
+            if api_key and model_alias:
+                return api_key, self.api_router.get_model_id(model_alias), model_alias, reservation
 
         # Fallback to legacy method
         self.logger.warning("⚠️ Router exhausted, trying legacy key selection...")
@@ -375,7 +389,7 @@ class MessageHandler:
 
             if not active_keys:
                 self.logger.error("ALL API KEYS ARE FROZEN!")
-                return None, None, None
+                return None, None, None, None
 
             min_usage = min(self.key_status[k]['usage'] for k in active_keys)
             best_candidates = [k for k in active_keys if self.key_status[k]['usage'] == min_usage]
@@ -383,7 +397,13 @@ class MessageHandler:
             chosen_key = random.choice(best_candidates)
             self.key_status[chosen_key]['usage'] += 1
             fallback_alias = preferred_model_alias or self.api_router.get_preferred_model()
-            return chosen_key, self.api_router.get_model_id(fallback_alias), fallback_alias
+            legacy_reservation = {
+                "key": chosen_key,
+                "model_alias": fallback_alias,
+                "pool": "legacy",
+                "counter_key": chosen_key,
+            }
+            return chosen_key, self.api_router.get_model_id(fallback_alias), fallback_alias, legacy_reservation
 
     def _mark_key_as_failed(
         self,
@@ -392,14 +412,18 @@ class MessageHandler:
         duration: int = 60,
         reason: str = "rate_limit",
         permanently_exhaust: bool = False,
+        reservation: Optional[Dict[str, str]] = None,
     ):
         """Mark key as failed using router cooldown/exhaust policies."""
         model = model_alias or self.api_router.get_current_model()
+        pool = (reservation or {}).get("pool", "main")
+        counter_key = (reservation or {}).get("counter_key")
 
-        if permanently_exhaust:
-            self.api_router.mark_key_exhausted(key, model)
-        else:
-            self.api_router.mark_key_cooldown(key, model, duration)
+        if pool != "legacy":
+            if permanently_exhaust:
+                self.api_router.mark_key_exhausted(key, model, pool=pool, counter_key=counter_key)
+            else:
+                self.api_router.mark_key_cooldown(key, model, duration, pool=pool, counter_key=counter_key)
 
         with self.key_lock:
             if key in self.key_status:
@@ -409,6 +433,13 @@ class MessageHandler:
             self.logger.warning(f"🚫 API Key ...{key[-4:]} marked invalid and excluded for current quota cycle.")
         else:
             self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to rate limit/quota.")
+
+    def _commit_selected_key(self, reservation: Optional[Dict[str, str]]) -> None:
+        if not reservation:
+            return
+        if reservation.get("pool") == "legacy":
+            return
+        self.api_router.commit_key_usage(reservation)
 
     def _is_rate_limit_error(self, error_str: str) -> bool:
         lowered = (error_str or "").lower()
@@ -435,17 +466,16 @@ class MessageHandler:
 
     def _is_invalid_key_error(self, error_str: str) -> bool:
         lowered = (error_str or "").lower()
-        return any(token in lowered for token in [
+        strict_invalid_markers = [
             "api_key_invalid",
             "api key invalid",
+            "invalid api key",
             "api key not found",
             "key not found",
-            "invalid api key",
-            "permission denied",
-            "credential",
-            "unauthenticated",
-            "authentication failed",
-        ])
+            "invalid argument: api key",
+            "provided api key is invalid",
+        ]
+        return any(token in lowered for token in strict_invalid_markers)
 
 
     async def _throttle_api_request(self, api_key: str) -> None:
@@ -494,6 +524,34 @@ class MessageHandler:
                     chunks.append(text)
         return "\n".join(chunks)
 
+    def _prepare_user_input_block(self, user_input: str, max_chars: int = 2200) -> str:
+        text = (user_input or "").strip()
+        if len(text) <= max_chars:
+            return text
+        remaining = len(text) - max_chars
+        return f"{text[:max_chars]}\n...[truncated {remaining} chars to fit context]"
+
+    def _is_tool_result_sufficient(self, tool_results: str) -> bool:
+        if not tool_results:
+            return False
+        lower = tool_results.lower()
+        markers = [
+            "top trusted sources",
+            "required reputable sources",
+            "reputable sources found",
+        ]
+        if not all(marker in lower for marker in markers):
+            return False
+
+        req_match = re.search(r"required reputable sources:\s*(\d+)", lower)
+        found_match = re.search(r"reputable sources found:\s*(\d+)", lower)
+        if not req_match or not found_match:
+            return False
+
+        required = int(req_match.group(1))
+        found = int(found_match.group(1))
+        return found >= required and "chưa đủ nguồn uy tín" not in lower
+
     def _build_fallback_system_prompt(self, user_input: str, reasoning_result: str, tool_results: str) -> str:
         prompt_template = get_fallback_system_prompt()
         prompt_text = prompt_template.replace("[USER_INPUT_HERE]", user_input.strip())
@@ -509,8 +567,11 @@ class MessageHandler:
         messages: List[Dict[str, Any]],
         max_output_tokens: int,
         model_alias: Optional[str] = None,
+        extra_text: str = "",
     ) -> bool:
         prompt_text = self._flatten_prompt_text(messages)
+        if extra_text:
+            prompt_text = f"{extra_text}\n{prompt_text}" if prompt_text else extra_text
         target_model = model_alias or self.api_router.get_preferred_model()
         return await self.api_router.acquire_gemini_quota(prompt_text, max_output_tokens, target_model)
 
@@ -546,6 +607,21 @@ class MessageHandler:
         # TIER 1: Use Flash-Lite for reasoning loops + tool calls
         reasoning_result, tool_results = await self._call_gemini_reasoning_loop(messages, user_id)
 
+        # Wait-until-sufficient: one additional retrieval pass if evidence is still weak
+        if tool_results and not self._is_tool_result_sufficient(tool_results):
+            self.logger.info(f"Evidence insufficient for {user_id}. Running one additional retrieval pass.")
+            followup_messages = [msg.copy() for msg in messages]
+            followup_messages.append({
+                "role": "user",
+                "parts": [{"text": "Continue current request. Retrieve missing evidence with one focused web_search. Use [FORCE FALLBACK] only if needed."}],
+            })
+
+            retry_reasoning, retry_tool_results = await self._call_gemini_reasoning_loop(followup_messages, user_id)
+            if retry_reasoning and retry_reasoning not in {"Reasoning completed", "Reasoning loop failed"}:
+                reasoning_result = retry_reasoning
+            if retry_tool_results:
+                tool_results = f"{tool_results}\n\n[RETRY PASS]\n{retry_tool_results}" if tool_results else retry_tool_results
+
         # TIER 2: Use Flash for final output (with reasoning context, no thinking needed)
         final_output = await self._call_gemini_final(messages, reasoning_result, tool_results, user_id)
 
@@ -562,10 +638,10 @@ class MessageHandler:
 
         tools = self.tools_mgr.get_all_tools()
         generation_config = {
-            "temperature": 0.7,
+            "temperature": 0.35,
             "top_p": 0.9,
             "top_k": 40,
-            "max_output_tokens": 2000,
+            "max_output_tokens": 2600,
         }
 
         reasoning_messages = [msg.copy() for msg in messages]
@@ -576,6 +652,7 @@ class MessageHandler:
         for attempt in range(MAX_RETRIES):
             api_key: Optional[str] = None
             used_model_alias: Optional[str] = None
+            key_reservation: Optional[Dict[str, str]] = None
 
             try:
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
@@ -588,13 +665,14 @@ class MessageHandler:
                         reasoning_messages,
                         generation_config["max_output_tokens"],
                         reasoning_model_alias,
+                        extra_text=system_instruction,
                     )
                     if not quota_ok:
-                        return ("API quota exceeded", "")
+                        return ("API busy, please retry shortly.", "")
 
-                    api_key, model_name, used_model_alias = self._get_best_api_key(reasoning_model_alias)
+                    api_key, model_name, used_model_alias, key_reservation = self._get_best_api_key(reasoning_model_alias)
                     if not api_key or not model_name:
-                        return ("API quota exceeded", "")
+                        return ("API unavailable, please retry shortly.", "")
 
                     self.logger.info(f"Reasoning loop {iteration} for user {user_id} ({model_name})")
                     await self._throttle_api_request(api_key)
@@ -607,7 +685,8 @@ class MessageHandler:
                         messages=reasoning_messages,
                         tools=tools,
                     )
-                    
+                    self._commit_selected_key(key_reservation)
+
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
                         break
@@ -622,7 +701,7 @@ class MessageHandler:
                         self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
 
                         if tool_name == "web_search" and web_search_calls >= 1:
-                            budget_msg = "Search budget reached for this turn. Use existing context to answer."
+                            budget_msg = "Search budget reached for this turn. If evidence is insufficient, ask user for a little more time or a direct trusted link."
                             reasoning_messages.append({"role": "model", "parts": [part]})
                             reasoning_messages.append({
                                 "role": "function",
@@ -633,7 +712,10 @@ class MessageHandler:
                         tool_res = await self.tools_mgr.call_tool(fc, user_id)
                         if tool_name == "web_search":
                             web_search_calls += 1
-                        tool_results_list.append(f"[{fc.name}] {tool_res}")
+                            intent_query = (args.get("query") or "").strip()
+                            tool_results_list.append(f"[{fc.name}|intent={intent_query}] {tool_res}")
+                        else:
+                            tool_results_list.append(f"[{fc.name}] {tool_res}")
 
                         reasoning_messages.append({"role": "model", "parts": [part]})
                         reasoning_messages.append({
@@ -662,49 +744,56 @@ class MessageHandler:
                         
                         if tool_matches:
                             # Found tool mentions in text - extract and call them
+                            executed_tool = False
                             for tool_name, args_str in tool_matches:
                                 self.logger.debug(f"Detected tool in text: {tool_name}({args_str})")
-                                # Parse arguments (simple key="value" extraction)
                                 args_dict = {}
                                 for arg_match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']+)["\']', args_str):
                                     key, value = arg_match.groups()
                                     args_dict[key] = value
-                                
-                                if args_dict:
-                                    tool_name_l = tool_name.lower()
-                                    if tool_name_l == "web_search" and not args_dict.get("query"):
-                                        continue
 
-                                    # Enforce one web search call per turn
-                                    if tool_name_l == "web_search" and web_search_calls >= 1:
-                                        budget_msg = "Search budget reached for this turn. Use existing context to answer."
-                                        reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
-                                        reasoning_messages.append({
-                                            "role": "function",
-                                            "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}]
-                                        })
-                                        break
+                                if not args_dict:
+                                    continue
 
-                                    # Create fake function_call object
-                                    class FakeFunctionCall:
-                                        def __init__(self, name, args):
-                                            self.name = name
-                                            self.args = args
+                                tool_name_l = tool_name.lower()
+                                if tool_name_l == "web_search" and not args_dict.get("query"):
+                                    continue
 
-                                    fc = FakeFunctionCall(tool_name_l, args_dict)
-                                    tool_res = await self.tools_mgr.call_tool(fc, user_id)
-                                    if tool_name_l == "web_search":
-                                        web_search_calls += 1
-                                    tool_results_list.append(f"[{tool_name_l}] {tool_res}")
-
-                                    # Add to message history
+                                # Enforce one web search call per turn
+                                if tool_name_l == "web_search" and web_search_calls >= 1:
+                                    budget_msg = "Search budget reached for this turn. If evidence is insufficient, ask user for a little more time or a direct trusted link."
                                     reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
                                     reasoning_messages.append({
                                         "role": "function",
-                                        "parts": [{"function_response": {"name": tool_name_l, "response": {"content": str(tool_res)}}}]
+                                        "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}]
                                     })
-                                    break  # Continue loop for next tool
-                            continue
+                                    executed_tool = True
+                                    break
+
+                                class FakeFunctionCall:
+                                    def __init__(self, name, args):
+                                        self.name = name
+                                        self.args = args
+
+                                fc = FakeFunctionCall(tool_name_l, args_dict)
+                                tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                                if tool_name_l == "web_search":
+                                    web_search_calls += 1
+                                    intent_query = (args_dict.get("query") or "").strip()
+                                    tool_results_list.append(f"[{tool_name_l}|intent={intent_query}] {tool_res}")
+                                else:
+                                    tool_results_list.append(f"[{tool_name_l}] {tool_res}")
+
+                                reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
+                                reasoning_messages.append({
+                                    "role": "function",
+                                    "parts": [{"function_response": {"name": tool_name_l, "response": {"content": str(tool_res)}}}]
+                                })
+                                executed_tool = True
+                                break
+
+                            if executed_tool:
+                                continue
                         
                         # No tools found - reasoning complete
                         if text and len(text) > 3:
@@ -728,6 +817,7 @@ class MessageHandler:
                             duration=86400,
                             reason="invalid_key",
                             permanently_exhaust=True,
+                            reservation=key_reservation,
                         )
                     self.logger.warning("Lite model received invalid API key error. Rotating key immediately.")
                     continue
@@ -741,7 +831,7 @@ class MessageHandler:
                             f"⚠️ Lite Key ...{api_key[-4:]} {error_type}. Retrying with preserved reasoning state "
                             f"(attempt {attempt + 1}/{MAX_RETRIES})."
                         )
-                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type)
+                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type, reservation=key_reservation)
                     else:
                         self.logger.warning(
                             f"⚠️ Lite transient {error_type} without selected key. Retrying with preserved reasoning state "
@@ -779,10 +869,17 @@ class MessageHandler:
         MAX_RETRIES = 5
         final_model_alias = FINAL_MODEL_ALIAS
 
+        if tool_results and not self._is_tool_result_sufficient(tool_results):
+            return (
+                "Mình cần thêm một chút thời gian để xác minh đủ nguồn uy tín trước khi kết luận. "
+                "Nếu bạn có link chính thức/trusted thì gửi thêm để mình khóa kết quả chính xác hơn."
+            )
+
         for attempt in range(MAX_RETRIES):
             api_key: Optional[str] = None
             model_name: Optional[str] = None
             used_model_alias: Optional[str] = None
+            key_reservation: Optional[Dict[str, str]] = None
 
             try:
                 
@@ -794,11 +891,13 @@ class MessageHandler:
                 if original_messages and original_messages[-1].get("role") == "user":
                     user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")
                 
+                user_input_block = self._prepare_user_input_block(user_input)
+
                 # Format 3-block context for injection
                 three_block_context = f"""
 === CONTEXT FROM PRELIMINARY ANALYSIS ===
 [BLOCK 1 - USER REQUEST]
-{user_input[:300]}
+{user_input_block}
 
 [BLOCK 2 - REASONING OUTPUT]
 {reasoning_result}
@@ -820,7 +919,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     "temperature": 0.7,
                     "top_p": 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 2000,
+                    "max_output_tokens": 2600,
                 }
                 
                 # Create final messages: user asks model to synthesize
@@ -833,11 +932,13 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     final_messages,
                     generation_config["max_output_tokens"],
                     final_model_alias,
+                    extra_text=system_with_context,
                 )
                 if not quota_ok:
-                    return "[System] API daily quota exceeded, please try again tomorrow."
+                    self.logger.warning("Final model quota gate blocked; trying lite fallback finalizer.")
+                    return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
 
-                api_key, model_name, used_model_alias = self._get_best_api_key(final_model_alias)
+                api_key, model_name, used_model_alias, key_reservation = self._get_best_api_key(final_model_alias)
                 if not api_key or not model_name:
                     self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
                     return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
@@ -853,7 +954,8 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     generation_config=generation_config,
                     messages=final_messages,
                 )
-                
+                self._commit_selected_key(key_reservation)
+
                 candidate = response.candidates[0] if response.candidates else None
                 if not (candidate and candidate.content and candidate.content.parts):
                     return "No final response"
@@ -891,6 +993,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                             duration=86400,
                             reason="invalid_key",
                             permanently_exhaust=True,
+                            reservation=key_reservation,
                         )
                     self.logger.warning(f"⚠️ Flash model invalid key on attempt {attempt + 1}/{MAX_RETRIES}; rotating immediately.")
                     continue
@@ -901,7 +1004,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                         self.logger.warning(
                             f"⚠️ Flash Key ...{api_key[-4:]} {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}"
                         )
-                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type)
+                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type, reservation=key_reservation)
 
                     wait_time = 2 + (attempt * 2)
                     self.logger.info(f"⏱️ Waiting {wait_time}s before retry ({error_type})...")
@@ -933,6 +1036,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
             api_key: Optional[str] = None
             model_name: Optional[str] = None
             used_model_alias: Optional[str] = None
+            key_reservation: Optional[Dict[str, str]] = None
 
             try:
                 
@@ -943,8 +1047,9 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                 
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
+                user_input_block = self._prepare_user_input_block(user_input)
                 system_with_context = time_context + self._build_fallback_system_prompt(
-                    user_input[:300],
+                    user_input_block,
                     reasoning_result,
                     tool_results,
                 )
@@ -953,7 +1058,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     "temperature": 0.7,
                     "top_p": 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 2000,
+                    "max_output_tokens": 2600,
                 }
                 
                 final_messages = [{
@@ -965,11 +1070,12 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     final_messages,
                     generation_config["max_output_tokens"],
                     fallback_model_alias,
+                    extra_text=system_with_context,
                 )
                 if not quota_ok:
-                    return "[System] API daily quota exceeded, please try again tomorrow."
+                    return "[System] API is busy right now, please try again shortly."
 
-                api_key, model_name, used_model_alias = self._get_best_api_key(fallback_model_alias)
+                api_key, model_name, used_model_alias, key_reservation = self._get_best_api_key(fallback_model_alias)
                 if not api_key or not model_name:
                     return "[System] API overloaded, please try again later."
 
@@ -984,7 +1090,8 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     generation_config=generation_config,
                     messages=final_messages,
                 )
-                
+                self._commit_selected_key(key_reservation)
+
                 candidate = response.candidates[0] if response.candidates else None
                 if not (candidate and candidate.content and candidate.content.parts):
                     continue
@@ -1016,6 +1123,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                             duration=86400,
                             reason="invalid_key",
                             permanently_exhaust=True,
+                            reservation=key_reservation,
                         )
                     self.logger.warning(f"⚠️ Lite fallback invalid key on attempt {attempt + 1}/3; rotating immediately.")
                     continue
@@ -1024,7 +1132,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     error_type = "unavailable" if self._is_unavailable_error(error_str) else "rate_limit"
                     self.logger.warning(f"⚠️ Lite fallback transient {error_type}. Attempt {attempt + 1}/3")
                     if api_key:
-                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type)
+                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type, reservation=key_reservation)
                     await asyncio.sleep(2 + attempt * 2)
                     continue
 

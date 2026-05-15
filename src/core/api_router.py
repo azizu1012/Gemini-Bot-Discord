@@ -12,7 +12,7 @@ import os
 import json
 import random
 import threading
-from typing import Optional, Tuple, Dict, List
+from typing import Optional, Tuple, Dict, List, Any
 from datetime import datetime, timedelta
 
 from .api_config import (
@@ -140,13 +140,14 @@ class APIRouter:
         self.proxy_calls = 0
         self.direct_calls = 0
 
-        # Gemini limiters by model alias (RPM/TPM/RPD from AVAILABLE_MODELS)
+        # Gemini limiters by model alias (RPM/TPM).
+        # Daily quota authority lives in per-key router counters; limiter RPD is advisory-only and disabled for blocking.
         self.rate_limiters: Dict[str, GeminiRateLimiter] = {}
         for model_alias, cfg in AVAILABLE_MODELS.items():
             self.rate_limiters[model_alias] = GeminiRateLimiter(
                 rpm=int(cfg.get('rpm', 15)),
                 tpm=int(cfg.get('tpm', 250000)),
-                rpd=int(cfg.get('rpd', 0)),
+                rpd=0,
                 max_output_tokens=GEMINI_LIMITER_MAX_OUTPUT_TOKENS,
                 fixed_overhead=GEMINI_LIMITER_FIXED_OVERHEAD,
                 safety_factor=GEMINI_LIMITER_SAFETY_FACTOR,
@@ -164,13 +165,15 @@ class APIRouter:
         print("🔑 API ROUTER - FULL AUTO + PROXY SUPPORT")
         print("=" * 60)
         print(f"🤖 Models (priority): {', '.join(self.model_priority)}")
-        print("📊 Per-model limits (RPM/TPM/RPD per key):")
+        print("📊 Per-model limits (RPM/TPM + RPD per-key and effective):")
+        total_main_keys = max(1, len(self.main_keys))
         for model_alias in self.model_priority:
             cfg = AVAILABLE_MODELS.get(model_alias, {})
             rpm = int(cfg.get('rpm', 0))
             tpm = int(cfg.get('tpm', 0))
-            rpd = int(cfg.get('rpd', get_model_daily_quota(model_alias)))
-            print(f"   - {model_alias}: RPM={rpm}, TPM={tpm}, RPD={rpd}")
+            rpd_per_key = int(cfg.get('rpd', get_model_daily_quota(model_alias)))
+            rpd_effective = rpd_per_key * total_main_keys
+            print(f"   - {model_alias}: RPM={rpm}, TPM={tpm}, RPD/key={rpd_per_key}, RPD/effective={rpd_effective}")
         print(f"🔑 Main keys: {len(self.main_keys)} | Summary: {len(self.summary_keys)}")
 
         if self.use_proxy:
@@ -201,30 +204,37 @@ class APIRouter:
     # QUOTA STATE PERSISTENCE
     # ========================================================================
     
-    def _save_quota_state(self):
-        """Lưu quota state vào JSON file"""
-        try:
-            state = {}
-            
-            with self.model_pools_lock:
-                for model_name, pool in self.model_pools.items():
-                    state[model_name] = {
-                        'quota_counters': pool['quota_counters'].copy(),
-                        'quota_reset_time': pool['quota_reset_time'].isoformat(),
-                        'is_exhausted': pool['is_exhausted']
-                    }
-            
-            with self.summary_pool_lock:
-                state['_summary_pool'] = {
-                    'quota_counters': self.summary_pool['quota_counters'].copy(),
-                    'quota_reset_time': self.summary_pool['quota_reset_time'].isoformat(),
-                    'total_used': self.summary_pool['total_used']
+    def _build_quota_state_snapshot(self) -> Dict[str, Any]:
+        state: Dict[str, Any] = {}
+
+        with self.model_pools_lock:
+            for model_name, pool in self.model_pools.items():
+                state[model_name] = {
+                    'quota_counters': pool['quota_counters'].copy(),
+                    'quota_reset_time': pool['quota_reset_time'].isoformat(),
+                    'is_exhausted': pool['is_exhausted'],
                 }
-            
+
+        with self.summary_pool_lock:
+            state['_summary_pool'] = {
+                'quota_counters': self.summary_pool['quota_counters'].copy(),
+                'quota_reset_time': self.summary_pool['quota_reset_time'].isoformat(),
+                'total_used': self.summary_pool['total_used'],
+            }
+
+        return state
+
+    def _write_quota_state(self, state: Dict[str, Any]) -> None:
+        try:
             with open(self.quota_state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"⚠️ Không thể lưu quota state: {e}")
+
+    def _save_quota_state(self):
+        """Lưu quota state vào JSON file"""
+        state = self._build_quota_state_snapshot()
+        self._write_quota_state(state)
     
     def _load_quota_state(self):
         """Load quota state từ JSON file"""
@@ -252,14 +262,16 @@ class APIRouter:
                         )
                         
                         # Load và validate reset time
+                        load_persisted_exhausted = False
                         try:
                             saved_reset = datetime.fromisoformat(
                                 data.get('quota_reset_time', '')
                             )
                             now = datetime.now()
-                            
+
                             if saved_reset > now:
                                 pool['quota_reset_time'] = saved_reset
+                                load_persisted_exhausted = True
                                 if exhausted_count > 0:
                                     print(f"   📂 Loaded '{model_name}': {exhausted_count} keys exhausted")
                             else:
@@ -268,11 +280,13 @@ class APIRouter:
                                 pool['quota_counters'].clear()
                                 pool['is_exhausted'] = False
                                 print(f"   🔄 New day for '{model_name}'! Quota reset.")
-                        except:
+                        except Exception:
                             pool['quota_reset_time'] = get_quota_reset_time()
                             pool['quota_counters'].clear()
-                        
-                        pool['is_exhausted'] = data.get('is_exhausted', False)
+                            pool['is_exhausted'] = False
+
+                        if load_persisted_exhausted:
+                            pool['is_exhausted'] = data.get('is_exhausted', False)
             
             # Load summary pool state
             if '_summary_pool' in state:
@@ -304,24 +318,25 @@ class APIRouter:
     
     def _reset_quota_if_needed(self, model_name: str):
         """Reset quota nếu đã qua midnight"""
+        should_persist = False
         with self.model_pools_lock:
             if model_name not in self.model_pools:
                 return
-            
+
             pool = self.model_pools[model_name]
             now = datetime.now()
-            
+
             if now >= pool['quota_reset_time']:
                 pool['quota_reset_time'] = get_quota_reset_time(now)
-                
+
                 total_used = sum(pool['quota_counters'].values())
                 if total_used > 0:
                     print(f"\n🌅 NEW DAY! Resetting '{model_name}' quota.")
                     print(f"   📊 Yesterday used: {total_used} requests")
-                
+
                 pool['quota_counters'].clear()
                 pool['is_exhausted'] = False
-                
+
                 # Re-randomize limits
                 model_daily_quota = get_model_daily_quota(model_name)
                 for key_obj in pool['key_pool']:
@@ -329,27 +344,32 @@ class APIRouter:
                         QUOTA_LIMIT_MIN_PERCENT,
                         QUOTA_LIMIT_MAX_PERCENT
                     ))
-                
-                self._save_quota_state()
-    
+                should_persist = True
+
+        if should_persist:
+            self._save_quota_state()
+
     def _reset_summary_pool_if_needed(self):
         """Reset summary pool quota nếu đã qua midnight"""
+        should_persist = False
         with self.summary_pool_lock:
             now = datetime.now()
-            
+
             if now >= self.summary_pool['quota_reset_time']:
                 self.summary_pool['quota_reset_time'] = get_quota_reset_time(now)
                 self.summary_pool['quota_counters'].clear()
                 self.summary_pool['total_used'] = 0
-                
+
                 # Re-randomize limits
                 for key_obj in self.summary_pool['key_pool']:
                     key_obj['random_limit'] = int(DAILY_QUOTA * random.uniform(
                         QUOTA_LIMIT_MIN_PERCENT,
                         QUOTA_LIMIT_MAX_PERCENT
                     ))
-                
-                self._save_quota_state()
+                should_persist = True
+
+        if should_persist:
+            self._save_quota_state()
     
     # ========================================================================
     # MODEL SWITCHING
@@ -421,80 +441,81 @@ class APIRouter:
     # ========================================================================
     
     def get_next_key(self) -> Tuple[Optional[str], Optional[str]]:
-        """
-        FULL AUTO: Lấy API key + model tự động theo priority.
+        """Compatibility API: return key/model without reservation metadata."""
+        reservation = self.get_next_key_reservation()
+        if not reservation:
+            return None, None
+        return reservation['key'], reservation['model_alias']
 
-        Thử lần lượt các model alias theo priority order:
-        1. gemini-flash-latest
-        2. gemini-flash-lite-latest
+    def get_next_key_for_model(self, model_alias: str) -> Tuple[Optional[str], Optional[str]]:
+        """Compatibility API: return key/model for target model without reservation metadata."""
+        reservation = self.get_next_key_for_model_reservation(model_alias)
+        if not reservation:
+            return None, None
+        return reservation['key'], reservation['model_alias']
 
-        Returns:
-            (api_key, model_alias) hoặc (None, None) nếu hết quota
-        """
-        # Try each model in priority order
+    def get_next_key_reservation(self) -> Optional[Dict[str, str]]:
+        """Reserve a key/model candidate without consuming daily quota yet."""
         for target_model in self.model_priority:
             if target_model not in self.model_pools:
                 continue
 
             result = self._try_get_key_from_model(target_model)
-            if result[0]:
+            if result:
                 return result
 
-        # All main pools exhausted - try summary pool
         print("   ⚠️ Main pools exhausted. Trying Summary Pool...")
         result = self._get_key_from_summary()
-        if result[0]:
+        if result:
             return result
 
         print("   ❌ All pools exhausted!")
-        return None, None
+        return None
 
-    def get_next_key_for_model(self, model_alias: str) -> Tuple[Optional[str], Optional[str]]:
-        """Get next key for a specific model alias first, then summary fallback."""
+    def get_next_key_for_model_reservation(self, model_alias: str) -> Optional[Dict[str, str]]:
+        """Reserve candidate for a specific model alias first, then summary fallback."""
         if model_alias in self.model_pools:
             result = self._try_get_key_from_model(model_alias)
-            if result[0]:
+            if result:
                 return result
 
             with self.current_model_lock:
                 self.current_model = model_alias
 
             result = self._get_key_from_summary()
-            if result[0]:
+            if result:
                 return result
-            return None, None
+            return None
 
-        return self.get_next_key()
-    
-    def _try_get_key_from_model(self, model_name: str) -> Tuple[Optional[str], Optional[str]]:
-        """Try to get a key from specific model pool"""
+        return self.get_next_key_reservation()
+
+    def _try_get_key_from_model(self, model_name: str) -> Optional[Dict[str, str]]:
+        """Reserve a key candidate from a specific model pool."""
         self._reset_quota_if_needed(model_name)
-        
+
         with self.model_pools_lock:
             pool = self.model_pools[model_name]
-            
+
             available = []
             for key_obj in pool['key_pool']:
                 key_str = key_obj['key']
-                
+
                 # Check cooldown
                 if 'key_cooldowns' in pool and key_str in pool['key_cooldowns']:
                     if datetime.now() < pool['key_cooldowns'][key_str]:
                         continue
-                    else:
-                        del pool['key_cooldowns'][key_str]
-                
+                    del pool['key_cooldowns'][key_str]
+
                 # Check quota
                 count = pool['quota_counters'].get(key_str, 0)
                 limit = key_obj.get('random_limit', get_model_daily_quota(model_name))
 
                 if count < limit:
                     available.append((key_obj, limit - count))
-            
+
             if not available:
-                return None, None
-            
-            # Weighted random selection
+                return None
+
             if len(available) > 1:
                 weights = [remaining + 1 for _, remaining in available]
                 total_weight = sum(weights)
@@ -503,48 +524,43 @@ class APIRouter:
                 chosen, _ = available[chosen_idx]
             else:
                 chosen, _ = available[0]
-            
-            # INCREMENT
-            pool['quota_counters'][chosen['key']] = pool['quota_counters'].get(chosen['key'], 0) + 1
-        
-        self._save_quota_state()
-        self.total_requests += 1
-        
+
         with self.current_model_lock:
             self.current_model = model_name
-        
-        return chosen['key'], model_name
-    
-    def _get_key_from_summary(self) -> Tuple[Optional[str], Optional[str]]:
-        """Lấy key từ Summary Pool cho model hiện tại"""
+
+        return {
+            "key": chosen['key'],
+            "model_alias": model_name,
+            "pool": "main",
+            "counter_key": chosen['key'],
+        }
+
+    def _get_key_from_summary(self) -> Optional[Dict[str, str]]:
+        """Reserve key candidate from Summary Pool for current model."""
         target_model = self.current_model
         self._reset_summary_pool_if_needed()
-        
+
         with self.summary_pool_lock:
             available = []
             for key_obj in self.summary_pool['key_pool']:
                 key_str = key_obj['key']
                 composite_key = f"{target_model}::{key_str}"
-                
+
                 # Check cooldown
-                if 'key_cooldowns' in self.summary_pool:
-                    if composite_key in self.summary_pool['key_cooldowns']:
-                        if datetime.now() < self.summary_pool['key_cooldowns'][composite_key]:
-                            continue
-                        else:
-                            del self.summary_pool['key_cooldowns'][composite_key]
-                
-                # Check quota (summary counter is per model::key)
+                if 'key_cooldowns' in self.summary_pool and composite_key in self.summary_pool['key_cooldowns']:
+                    if datetime.now() < self.summary_pool['key_cooldowns'][composite_key]:
+                        continue
+                    del self.summary_pool['key_cooldowns'][composite_key]
+
                 count = self.summary_pool['quota_counters'].get(composite_key, 0)
                 limit = get_model_daily_quota(target_model)
 
                 if count < limit:
                     available.append((key_obj, limit - count, composite_key))
-            
+
             if not available:
-                return None, None
-            
-            # Weighted random selection
+                return None
+
             if len(available) > 1:
                 weights = [remaining + 1 for _, remaining, _ in available]
                 total_weight = sum(weights)
@@ -553,41 +569,89 @@ class APIRouter:
                 chosen, _, composite_key = available[chosen_idx]
             else:
                 chosen, _, composite_key = available[0]
-            
-            # INCREMENT
-            self.summary_pool['quota_counters'][composite_key] = \
-                self.summary_pool['quota_counters'].get(composite_key, 0) + 1
-            self.summary_pool['total_used'] += 1
-        
-        self._save_quota_state()
+
+        return {
+            "key": chosen['key'],
+            "model_alias": target_model,
+            "pool": "summary",
+            "counter_key": composite_key,
+        }
+
+    def commit_key_usage(self, reservation: Optional[Dict[str, str]]) -> None:
+        """Commit one successful request against daily quota counters."""
+        if not reservation:
+            return
+
+        pool_name = reservation.get("pool", "main")
+        model_name = reservation.get("model_alias")
+        counter_key = reservation.get("counter_key")
+        if not model_name or not counter_key:
+            return
+
+        if pool_name == "summary":
+            with self.summary_pool_lock:
+                self.summary_pool['quota_counters'][counter_key] = self.summary_pool['quota_counters'].get(counter_key, 0) + 1
+                self.summary_pool['total_used'] += 1
+        else:
+            with self.model_pools_lock:
+                if model_name not in self.model_pools:
+                    return
+                pool = self.model_pools[model_name]
+                pool['quota_counters'][counter_key] = pool['quota_counters'].get(counter_key, 0) + 1
+
         self.total_requests += 1
-        return chosen['key'], target_model
-    
+        self._save_quota_state()
+
     # ========================================================================
     # API CALL UTILITIES
     # ========================================================================
-    
-    def mark_key_cooldown(self, key_str: str, model_name: str, wait_time: float):
-        """Đánh dấu key bị cooldown (429 error)"""
+
+    def mark_key_cooldown(
+        self,
+        key_str: str,
+        model_name: str,
+        wait_time: float,
+        pool: str = "main",
+        counter_key: Optional[str] = None,
+    ):
+        """Đánh dấu key bị cooldown (429/unavailable error)."""
         release_time = datetime.now() + timedelta(seconds=wait_time + 2)
-        
-        with self.model_pools_lock:
-            if model_name in self.model_pools:
-                if 'key_cooldowns' not in self.model_pools[model_name]:
-                    self.model_pools[model_name]['key_cooldowns'] = {}
-                self.model_pools[model_name]['key_cooldowns'][key_str] = release_time
-        
+
+        if pool == "summary":
+            composite_key = counter_key or f"{model_name}::{key_str}"
+            with self.summary_pool_lock:
+                if 'key_cooldowns' not in self.summary_pool:
+                    self.summary_pool['key_cooldowns'] = {}
+                self.summary_pool['key_cooldowns'][composite_key] = release_time
+        else:
+            with self.model_pools_lock:
+                if model_name in self.model_pools:
+                    if 'key_cooldowns' not in self.model_pools[model_name]:
+                        self.model_pools[model_name]['key_cooldowns'] = {}
+                    self.model_pools[model_name]['key_cooldowns'][key_str] = release_time
+
         self.total_429_errors += 1
         key_name = self.key_to_name.get(key_str, "Unknown")
         print(f"   ❌ [429 LIMIT] {key_name} cooldown {wait_time:.1f}s")
-    
-    def mark_key_exhausted(self, key_str: str, model_name: str):
-        """Đánh dấu key đã hết quota (soft exhaust)"""
-        with self.model_pools_lock:
-            if model_name in self.model_pools:
-                pool = self.model_pools[model_name]
-                # Set quota to limit to prevent reuse today
-                pool['quota_counters'][key_str] = 9999
+        self._save_quota_state()
+
+    def mark_key_exhausted(
+        self,
+        key_str: str,
+        model_name: str,
+        pool: str = "main",
+        counter_key: Optional[str] = None,
+    ):
+        """Đánh dấu key đã hết quota (soft exhaust)."""
+        if pool == "summary":
+            composite_key = counter_key or f"{model_name}::{key_str}"
+            with self.summary_pool_lock:
+                self.summary_pool['quota_counters'][composite_key] = 9999
+        else:
+            with self.model_pools_lock:
+                if model_name in self.model_pools:
+                    pool_data = self.model_pools[model_name]
+                    pool_data['quota_counters'][key_str] = 9999
         self._save_quota_state()
     
     def get_current_model(self) -> str:
