@@ -77,12 +77,21 @@ class Config:
         self.CITY = os.getenv('CITY')
         
         # --- FILE PATHS ---
-        self.DB_PATH = os.path.join(os.path.dirname(__file__), '../../data/chat_history.db')
-        self.DB_BACKUP_PATH = os.path.join(os.path.dirname(__file__), '../../data/chat_history_backup.db')
-        self.NOTE_PATH = os.path.join(os.path.dirname(__file__), '../../data/notes.txt')
-        self.MEMORY_PATH = os.path.join(os.path.dirname(__file__), '../../data/short_term_memory.json')
-        self.WEATHER_CACHE_PATH = os.path.join(os.path.dirname(__file__), '../../data/weather_cache.json')
-        self.FILE_STORAGE_PATH = os.path.join(os.path.dirname(__file__), '../../uploaded_files')
+        project_root = Path(__file__).resolve().parents[2]
+
+        def _resolve_runtime_path(env_name: str, default_relative_path: str) -> str:
+            raw_path = (os.getenv(env_name) or "").strip()
+            target = Path(raw_path) if raw_path else (project_root / default_relative_path)
+            if not target.is_absolute():
+                target = project_root / target
+            return str(target.resolve())
+
+        self.DB_PATH = _resolve_runtime_path('DB_PATH', 'data/chat_history.db')
+        self.DB_BACKUP_PATH = _resolve_runtime_path('DB_BACKUP_PATH', 'data/chat_history_backup.db')
+        self.NOTE_PATH = _resolve_runtime_path('NOTE_PATH', 'data/notes.txt')
+        self.MEMORY_PATH = _resolve_runtime_path('MEMORY_PATH', 'data/short_term_memory.json')
+        self.WEATHER_CACHE_PATH = _resolve_runtime_path('WEATHER_CACHE_PATH', 'data/weather_cache.json')
+        self.FILE_STORAGE_PATH = _resolve_runtime_path('FILE_STORAGE_PATH', 'uploaded_files')
 
         # --- VOICE ROOM OWNER LOCK ---
         self.VOICE_LOCK_BASE_DIR = os.path.join(os.path.dirname(__file__), '../../data/voice_lock')

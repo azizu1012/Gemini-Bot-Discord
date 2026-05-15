@@ -543,13 +543,13 @@ class MessageHandler:
         if not all(marker in lower for marker in markers):
             return False
 
-        req_match = re.search(r"required reputable sources:\s*(\d+)", lower)
-        found_match = re.search(r"reputable sources found:\s*(\d+)", lower)
-        if not req_match or not found_match:
+        req_matches = [int(v) for v in re.findall(r"required reputable sources:\s*(\d+)", lower)]
+        found_matches = [int(v) for v in re.findall(r"reputable sources found:\s*(\d+)", lower)]
+        if not req_matches or not found_matches:
             return False
 
-        required = int(req_match.group(1))
-        found = int(found_match.group(1))
+        required = req_matches[-1]
+        found = found_matches[-1]
         return found >= required and "chưa đủ nguồn uy tín" not in lower
 
     def _build_fallback_system_prompt(self, user_input: str, reasoning_result: str, tool_results: str) -> str:

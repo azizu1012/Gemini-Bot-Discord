@@ -105,6 +105,7 @@ def main():
     logger.info(f"Token preview: {_mask_token(config.TOKEN)}")
     logger.info(f"Model: {config.MODEL_NAME}")
     logger.info(f"Gemini API keys available: {len(config.GEMINI_API_KEYS)}")
+    logger.info(f"Database path: {config.DB_PATH}")
 
     try:
         if args.server:
@@ -112,7 +113,7 @@ def main():
         else:
             asyncio.run(run_bot_only(config))
     except KeyboardInterrupt:
-        logger.info("Bot shutdown by user")
+        logger.info("Bot shutdown signal received (KeyboardInterrupt). This often happens during process-manager restart.")
     except Exception as e:
         logger.error(f"Unhandled exception: {e}")
         sys.exit(1)

@@ -27,7 +27,7 @@ class DatabaseRepository:
         await asyncio.to_thread(self._init_db_sync)
     
     def _create_tables(self, cursor: sqlite3.Cursor) -> None:
-        """Create necessary tables."""
+        """Create necessary tables with the latest schema."""
         cursor.execute('''CREATE TABLE IF NOT EXISTS messages
                          (user_id TEXT, role TEXT, content TEXT, timestamp TEXT)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS user_notes
@@ -43,39 +43,35 @@ class DatabaseRepository:
                           note_type TEXT DEFAULT 'personal_preference',
                           fact_hash TEXT DEFAULT '')''')
 
-        self._ensure_schema_migrations(cursor)
-
-    def _ensure_schema_migrations(self, cursor: sqlite3.Cursor) -> None:
-        """Apply idempotent schema migrations and indexes."""
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = {row[0] for row in cursor.fetchall()}
-
-        if 'messages' in tables:
-            cursor.execute('''CREATE INDEX IF NOT EXISTS idx_messages_user_ts ON messages (user_id, timestamp)''')
-
-        if 'user_notes' not in tables:
-            return
-
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_messages_user_ts ON messages (user_id, timestamp)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_id ON user_notes (user_id)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_created ON user_notes (user_id, created_at)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_scope_created ON user_notes (scope, created_at)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_active_created ON user_notes (user_id, is_active, created_at)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_fact_hash ON user_notes (fact_hash)''')
 
+    def _schema_is_fresh_compatible(self, cursor: sqlite3.Cursor) -> bool:
+        """Validate expected columns for the current schema."""
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_notes'")
+        if not cursor.fetchone():
+            return False
+
         cursor.execute("PRAGMA table_info(user_notes)")
         columns = {row[1] for row in cursor.fetchall()}
-        if 'scope' not in columns:
-            cursor.execute("ALTER TABLE user_notes ADD COLUMN scope TEXT DEFAULT 'user'")
-        if 'importance' not in columns:
-            cursor.execute("ALTER TABLE user_notes ADD COLUMN importance INTEGER DEFAULT 0")
-        if 'updated_at' not in columns:
-            cursor.execute("ALTER TABLE user_notes ADD COLUMN updated_at TEXT")
-        if 'is_active' not in columns:
-            cursor.execute("ALTER TABLE user_notes ADD COLUMN is_active INTEGER DEFAULT 1")
-        if 'note_type' not in columns:
-            cursor.execute("ALTER TABLE user_notes ADD COLUMN note_type TEXT DEFAULT 'personal_preference'")
-        if 'fact_hash' not in columns:
-            cursor.execute("ALTER TABLE user_notes ADD COLUMN fact_hash TEXT DEFAULT ''")
+        expected = {
+            'user_id',
+            'note_id',
+            'content',
+            'metadata',
+            'created_at',
+            'scope',
+            'importance',
+            'updated_at',
+            'is_active',
+            'note_type',
+            'fact_hash',
+        }
+        return expected.issubset(columns)
     
     def _init_db_sync(self) -> None:
         """Synchronous database initialization."""
@@ -87,17 +83,41 @@ class DatabaseRepository:
             conn = sqlite3.connect(self.db_path, timeout=10)
             c = conn.cursor()
             self._create_tables(c)
+            if not self._schema_is_fresh_compatible(c):
+                raise sqlite3.DatabaseError("Legacy/invalid schema detected")
             conn.commit()
-            self.logger.info("DB initialized (messages + user_notes tables)")
+            self.logger.info("DB initialized with fresh schema (messages + user_notes tables)")
         except sqlite3.DatabaseError as e:
-            self.logger.error(f"Cannot initialize DB: {str(e)}. Attempting to re-create DB.")
+            self.logger.error(f"Cannot initialize DB with current schema: {str(e)}. Rebuilding DB file.")
             if conn:
                 conn.close()
+            self._rebuild_db_sync()
+        finally:
+            if conn:
+                conn.close()
+
+    def _rebuild_db_sync(self) -> None:
+        """Recreate DB file from scratch using current schema."""
+        conn = None
+        try:
+            db_dir = os.path.dirname(self.db_path)
+            if db_dir:
+                os.makedirs(db_dir, exist_ok=True)
+
+            if os.path.exists(self.db_path):
+                broken_copy = f"{self.db_path}.broken.{datetime.now().strftime('%Y%m%d%H%M%S')}"
+                try:
+                    shutil.move(self.db_path, broken_copy)
+                    self.logger.warning(f"Moved incompatible DB to {broken_copy}")
+                except Exception:
+                    os.remove(self.db_path)
+                    self.logger.warning("Removed incompatible DB file.")
+
             conn = sqlite3.connect(self.db_path, timeout=10)
             c = conn.cursor()
             self._create_tables(c)
             conn.commit()
-            self.logger.info("New DB created (messages + user_notes tables) after error.")
+            self.logger.info("Created fresh DB with latest schema.")
         finally:
             if conn:
                 conn.close()
@@ -150,24 +170,54 @@ class DatabaseRepository:
     
     async def _ensure_table_exists_and_get_conn(self, table_name: str) -> sqlite3.Connection:
         """Ensure table exists before getting connection."""
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        c = conn.cursor()
-        c.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}'")
-        if not c.fetchone():
-            self.logger.warning(f"Bảng '{table_name}' không tồn tại, đang khởi tạo lại DB...")
-            if conn:
-                conn.close()
-            await self.init_db()
-            conn = sqlite3.connect(self.db_path, timeout=10)
-            c = conn.cursor()
+        last_error: Optional[Exception] = None
 
-        try:
-            self._ensure_schema_migrations(c)
-            conn.commit()
-        except sqlite3.DatabaseError as e:
-            self.logger.error(f"Schema migration failed while ensuring table {table_name}: {e}")
+        for attempt in range(3):
+            conn: Optional[sqlite3.Connection] = None
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=10)
+                c = conn.cursor()
+                c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+                table_exists = bool(c.fetchone())
+                schema_ok = self._schema_is_fresh_compatible(c)
 
-        return conn
+                if not table_exists or not schema_ok:
+                    self.logger.warning(f"DB schema/table missing for '{table_name}', reinitializing fresh DB...")
+                    conn.close()
+                    await self.init_db()
+                    conn = sqlite3.connect(self.db_path, timeout=10)
+                    c = conn.cursor()
+                    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+                    if not c.fetchone():
+                        raise sqlite3.DatabaseError(f"Table {table_name} still missing after init")
+
+                return conn
+
+            except sqlite3.OperationalError as e:
+                last_error = e
+                if conn:
+                    conn.close()
+                if "database is locked" in str(e).lower() and attempt < 2:
+                    self.logger.warning(f"DB locked while ensuring table {table_name}, retry {attempt + 1}/3")
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                self.logger.error(f"DB operational error while ensuring table {table_name}: {e}")
+                break
+
+            except sqlite3.DatabaseError as e:
+                last_error = e
+                if conn:
+                    conn.close()
+                self.logger.error(f"DB schema check failed while ensuring table {table_name}: {e}")
+                if attempt < 2:
+                    await self.init_db()
+                    continue
+                break
+
+        if isinstance(last_error, Exception):
+            raise last_error
+
+        return sqlite3.connect(self.db_path, timeout=10)
     
     async def log_message_db(self, user_id: str, role: str, content: str) -> None:
         """Log a message to the database."""
