@@ -1,10 +1,11 @@
 aiofiles
 aiohttp
 discord.py
+ddgs
 python-dotenv
 exa-py
 Flask
-google-generativeai
+google-genai
 --find-links https://storage.googleapis.com/generativeai-downloads/wheels/
 google-api-python-client
 google-auth-httplib2

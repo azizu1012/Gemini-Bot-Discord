@@ -1,19 +1,23 @@
 import discord
 from discord.ext import commands
 import asyncio
-import google.generativeai as genai
+from google import genai
 import time
 from datetime import datetime, timedelta
 from collections import defaultdict, deque
-from typing import Any, Optional, Dict, List
+from typing import Any, Optional, Dict, List, Tuple
 import json
 import threading
 import re
 import random
 
 from src.core.config import logger, Config
-from src.core.system_prompt import AZURIS_SYSTEM_PROMPT
-from src.core.lite_sys_prompt import LITE_SYSTEM_PROMPT
+from src.core.prompt_loader import (
+    get_azuris_system_prompt,
+    get_lite_reasoning_prompt,
+    get_fallback_system_prompt,
+)
+from src.core.api_router import get_api_router
 from src.database.repository import DatabaseRepository
 from src.services.memory_service import MemoryService
 from src.services.file_parser import FileParserService
@@ -24,14 +28,19 @@ from src.managers.premium_manager import PremiumManager
 from src.tools.tools import ToolsManager
 
 
+REASONING_MODEL_ALIAS = "gemini-flash-lite-latest"
+FINAL_MODEL_ALIAS = "gemini-flash-latest"
+FALLBACK_MODEL_ALIAS = REASONING_MODEL_ALIAS
+
+
 class MessageHandler:
     """Core message processing with Gemini API integration."""
     
     # ✅ Global API Request Queue (to avoid 429 - Google Gemini 20 req/min limit)
     API_REQUEST_QUEUE = asyncio.Queue()
-    API_REQUEST_SEMAPHORE = asyncio.Semaphore(5)  # 1 request at a time
+    API_REQUEST_SEMAPHORE = asyncio.Semaphore(2)
     LAST_API_REQUEST_TIME = 0.0
-    MIN_REQUEST_INTERVAL = 2.0  # Minimum 2 seconds between requests (reduced for faster rotation)
+    MIN_REQUEST_INTERVAL = 0.6
     COOLDOWN_WINDOW = 1800  # 30 minutes
     MAX_REQUESTS_PER_WINDOW = 15  # 15 requests per 30 minutes warning threshold
     
@@ -55,12 +64,12 @@ class MessageHandler:
         self.RATE_LIMIT_THRESHOLD = 6  # Max messages
         self.RATE_LIMIT_WINDOW = 90  # Per x seconds
         
-        # --- API KEY MANAGEMENT ---
-        # 1. Track usage stats (Load Balancing + 429 Failover)
+        # --- API ROUTER (Daily Quota + global limiter) ---
+        self.api_router = get_api_router()
+        
+        # Legacy fallback (kept for compatibility)
         self.key_status = {k: {'usage': 0, 'frozen_until': 0.0} for k in self.config.GEMINI_API_KEYS}
         self.key_lock = threading.Lock()
-        
-        # 2. Track request history for rate limit warnings (Throttling)
         self.api_key_request_history: Dict[str, List[float]] = {}
         self.api_key_history_lock = threading.Lock()
     
@@ -237,7 +246,10 @@ class MessageHandler:
             reply_context = ""
             if not is_dm and message.reference:
                 try:
-                    replied_msg = await message.channel.fetch_message(message.reference.message_id)
+                    reference_id = message.reference.message_id
+                    if reference_id is None:
+                        raise ValueError("Missing reply message id")
+                    replied_msg = await message.channel.fetch_message(reference_id)
                     replied_content = replied_msg.content
                     
                     # Add info about attachments in replied message
@@ -288,7 +300,9 @@ class MessageHandler:
                     if filename_lower.endswith(SUPPORTED_TEXT_EXTS):
                         try:
                             parsed = await self.file_parser.parse_attachment(attachment)
-                            if "error" in parsed:
+                            if not parsed:
+                                attachment_data += f"\n[System Error: Lỗi khi đọc file {attachment.filename}: empty parser response]\n"
+                            elif "error" in parsed:
                                 attachment_data += f"\n[System Error: Lỗi khi đọc file {attachment.filename}: {parsed.get('error')}]\n"
                             else:
                                 attachment_data += f"\n[File Content: {parsed['filename']}]\n{parsed['content']}\n"
@@ -337,32 +351,102 @@ class MessageHandler:
 
     # --- SMART KEY MANAGEMENT METHODS ---
     
-    def _get_best_api_key(self) -> Optional[str]:
-        """Load balancing: Choose available key with least usage."""
+    def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """
+        Get best API key + provider model id, optionally forcing a specific model alias.
+
+        Returns:
+            Tuple[api_key, model_id, model_alias] or (None, None, None) if exhausted
+        """
+        # Try router selection
+        if preferred_model_alias:
+            api_key, model_alias = self.api_router.get_next_key_for_model(preferred_model_alias)
+        else:
+            api_key, model_alias = self.api_router.get_next_key()
+
+        if api_key and model_alias:
+            return api_key, self.api_router.get_model_id(model_alias), model_alias
+
+        # Fallback to legacy method
+        self.logger.warning("⚠️ Router exhausted, trying legacy key selection...")
         with self.key_lock:
             now = time.time()
-            # Filter active keys (not frozen)
             active_keys = [k for k, v in self.key_status.items() if v['frozen_until'] < now]
-            
+
             if not active_keys:
-                self.logger.error("ALL API KEYS ARE FROZEN (429)!")
-                return None
-            
-            # Find min usage among active keys to balance load
+                self.logger.error("ALL API KEYS ARE FROZEN!")
+                return None, None, None
+
             min_usage = min(self.key_status[k]['usage'] for k in active_keys)
             best_candidates = [k for k in active_keys if self.key_status[k]['usage'] == min_usage]
-            
-            # Pick one randomly
+
             chosen_key = random.choice(best_candidates)
             self.key_status[chosen_key]['usage'] += 1
-            return chosen_key
+            fallback_alias = preferred_model_alias or self.api_router.get_preferred_model()
+            return chosen_key, self.api_router.get_model_id(fallback_alias), fallback_alias
 
-    def _mark_key_as_failed(self, key: str, duration: int = 60):
-        """Freeze key for duration seconds (Failover)."""
+    def _mark_key_as_failed(
+        self,
+        key: str,
+        model_alias: Optional[str] = None,
+        duration: int = 60,
+        reason: str = "rate_limit",
+        permanently_exhaust: bool = False,
+    ):
+        """Mark key as failed using router cooldown/exhaust policies."""
+        model = model_alias or self.api_router.get_current_model()
+
+        if permanently_exhaust:
+            self.api_router.mark_key_exhausted(key, model)
+        else:
+            self.api_router.mark_key_cooldown(key, model, duration)
+
         with self.key_lock:
             if key in self.key_status:
                 self.key_status[key]['frozen_until'] = time.time() + duration
-                self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to 429.")
+
+        if reason == "invalid_key":
+            self.logger.warning(f"🚫 API Key ...{key[-4:]} marked invalid and excluded for current quota cycle.")
+        else:
+            self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to rate limit/quota.")
+
+    def _is_rate_limit_error(self, error_str: str) -> bool:
+        lowered = (error_str or "").lower()
+        return any(token in lowered for token in [
+            "429",
+            "quota",
+            "resource exhausted",
+            "resource_exhausted",
+            "rate limit",
+            "503",
+            "unavailable",
+            "service unavailable",
+            "overloaded",
+        ])
+
+    def _is_unavailable_error(self, error_str: str) -> bool:
+        lowered = (error_str or "").lower()
+        return any(token in lowered for token in [
+            "503",
+            "unavailable",
+            "service unavailable",
+            "overloaded",
+        ])
+
+    def _is_invalid_key_error(self, error_str: str) -> bool:
+        lowered = (error_str or "").lower()
+        return any(token in lowered for token in [
+            "api_key_invalid",
+            "api key invalid",
+            "api key not found",
+            "key not found",
+            "invalid api key",
+            "permission denied",
+            "credential",
+            "unauthenticated",
+            "authentication failed",
+        ])
+
 
     async def _throttle_api_request(self, api_key: str) -> None:
         """
@@ -400,74 +484,128 @@ class MessageHandler:
                         f"Key ...{api_key[-4:]} usage high: {len(self.api_key_request_history[api_key])}/{self.MAX_REQUESTS_PER_WINDOW} in 30m."
                     )
 
+    def _flatten_prompt_text(self, messages: List[Dict[str, Any]]) -> str:
+        chunks: List[str] = []
+        for msg in messages:
+            parts = msg.get("parts", [])
+            for part in parts:
+                text = part.get("text") if isinstance(part, dict) else None
+                if text:
+                    chunks.append(text)
+        return "\n".join(chunks)
+
+    def _build_fallback_system_prompt(self, user_input: str, reasoning_result: str, tool_results: str) -> str:
+        prompt_template = get_fallback_system_prompt()
+        prompt_text = prompt_template.replace("[USER_INPUT_HERE]", user_input.strip())
+        prompt_text = prompt_text.replace("[REASONING_OUTPUT_HERE]", reasoning_result.strip())
+        prompt_text = prompt_text.replace(
+            "[TOOL_RESULTS_HERE]",
+            tool_results.strip() if tool_results else "(Không có tool được gọi)",
+        )
+        return prompt_text
+
+    async def _acquire_gemini_quota(
+        self,
+        messages: List[Dict[str, Any]],
+        max_output_tokens: int,
+        model_alias: Optional[str] = None,
+    ) -> bool:
+        prompt_text = self._flatten_prompt_text(messages)
+        target_model = model_alias or self.api_router.get_preferred_model()
+        return await self.api_router.acquire_gemini_quota(prompt_text, max_output_tokens, target_model)
+
+    async def _generate_gemini_content(
+        self,
+        api_key: str,
+        model_name: str,
+        system_instruction: str,
+        generation_config: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Any]] = None,
+    ):
+        request_config = dict(generation_config)
+        request_config["system_instruction"] = system_instruction
+        request_config["safety_settings"] = self.config.SAFETY_SETTINGS
+        if tools:
+            request_config["tools"] = tools
+
+        client = genai.Client(api_key=api_key)
+        return await asyncio.to_thread(
+            client.models.generate_content,
+            model=model_name,
+            contents=messages,
+            config=request_config,
+        )
+
     async def _call_gemini_api(self, messages: List[Dict[str, Any]], user_id: str) -> str:
         """Two-Tier Model Strategy: Flash-Lite (reasoning) → Flash (final output).
-        
+
         If Flash fails (429), fallback to Lite model with 3-block context + fallback prompt.
         """
-        
+
         # TIER 1: Use Flash-Lite for reasoning loops + tool calls
         reasoning_result, tool_results = await self._call_gemini_reasoning_loop(messages, user_id)
-        
+
         # TIER 2: Use Flash for final output (with reasoning context, no thinking needed)
         final_output = await self._call_gemini_final(messages, reasoning_result, tool_results, user_id)
-        
+
         return final_output
     
-    async def _call_gemini_reasoning_loop(self, messages: List[Dict[str, Any]], user_id: str) -> tuple:
+    async def _call_gemini_reasoning_loop(self, messages: List[Dict[str, Any]], user_id: str) -> Tuple[str, str]:
         """TIER 1: Flash-Lite model for reasoning loops and tool calls.
-        
+
         Returns:
             tuple: (reasoning_output: str, tool_results: str)
         """
         MAX_RETRIES = 5
-        
+        reasoning_model_alias = REASONING_MODEL_ALIAS
+
+        tools = self.tools_mgr.get_all_tools()
+        generation_config = {
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "top_k": 40,
+            "max_output_tokens": 2000,
+        }
+
+        reasoning_messages = [msg.copy() for msg in messages]
+        tool_results_list: List[str] = []
+        web_search_calls = 0
+        iteration = 0
+
         for attempt in range(MAX_RETRIES):
-            api_key = self._get_best_api_key()
-            if not api_key:
-                return ("API quota exceeded", "")
-            
+            api_key: Optional[str] = None
+            used_model_alias: Optional[str] = None
+
             try:
-                genai.configure(api_key=api_key)
-                
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
                 time_context = f"Current time: {current_time_str}\n"
-                
-                # Use LITE prompt (simple reasoning, not optimized output)
-                system_instruction = time_context + LITE_SYSTEM_PROMPT
-                tools = self.tools_mgr.get_all_tools()
-                
-                # TIER 1: Flash-Lite (cheaper, reasoning only)
-                generation_config = {
-                    "temperature": 0.7,  # Lower temp for focused reasoning
-                    "top_p": 0.9,
-                    "top_k": 40,
-                    "max_output_tokens": 2000,  # Lite model shorter output
-                }
-                
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash-lite",  # Lite model for reasoning
-                    system_instruction=system_instruction,
-                    tools=tools,
-                    safety_settings=self.config.SAFETY_SETTINGS,
-                    generation_config=generation_config
-                )
-                
-                await self._throttle_api_request(api_key)
-                
-                # Reasoning loop (up to 5 iterations)
-                iteration = 0
-                reasoning_messages = [msg.copy() for msg in messages]  # Copy for tier 1
-                tool_results_list = []  # Track all tool results
-                
+                system_instruction = time_context + get_lite_reasoning_prompt()
+
                 while iteration < 5:
                     iteration += 1
-                    self.logger.info(f"Reasoning loop {iteration} for user {user_id} (Lite model)")
-                    
-                    response = await asyncio.to_thread(
-                        model.generate_content, 
-                        reasoning_messages, 
-                        stream=False
+                    quota_ok = await self._acquire_gemini_quota(
+                        reasoning_messages,
+                        generation_config["max_output_tokens"],
+                        reasoning_model_alias,
+                    )
+                    if not quota_ok:
+                        return ("API quota exceeded", "")
+
+                    api_key, model_name, used_model_alias = self._get_best_api_key(reasoning_model_alias)
+                    if not api_key or not model_name:
+                        return ("API quota exceeded", "")
+
+                    self.logger.info(f"Reasoning loop {iteration} for user {user_id} ({model_name})")
+                    await self._throttle_api_request(api_key)
+
+                    response = await self._generate_gemini_content(
+                        api_key=api_key,
+                        model_name=model_name,
+                        system_instruction=system_instruction,
+                        generation_config=generation_config,
+                        messages=reasoning_messages,
+                        tools=tools,
                     )
                     
                     candidate = response.candidates[0] if response.candidates else None
@@ -479,15 +617,27 @@ class MessageHandler:
                     # Handle tool calls during reasoning
                     if part.function_call and part.function_call.name:
                         fc = part.function_call
+                        tool_name = (fc.name or "").lower()
                         args = dict(fc.args) if fc.args else {}
                         self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
-                        
+
+                        if tool_name == "web_search" and web_search_calls >= 1:
+                            budget_msg = "Search budget reached for this turn. Use existing context to answer."
+                            reasoning_messages.append({"role": "model", "parts": [part]})
+                            reasoning_messages.append({
+                                "role": "function",
+                                "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}],
+                            })
+                            continue
+
                         tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                        if tool_name == "web_search":
+                            web_search_calls += 1
                         tool_results_list.append(f"[{fc.name}] {tool_res}")
-                        
+
                         reasoning_messages.append({"role": "model", "parts": [part]})
                         reasoning_messages.append({
-                            "role": "function", 
+                            "role": "function",
                             "parts": [{"function_response": {"name": fc.name, "response": {"content": str(tool_res)}}}]
                         })
                         continue
@@ -501,14 +651,13 @@ class MessageHandler:
                         # 2. In <tool_code>: <tool_code>print(calculate(...))</tool_code>
                         # 3. In markdown: ```calculate(...) ```
                         
-                        # First check for <tool_code> blocks
+                        # Strict fallback parser: only parse explicit tool_code or TOOL_CALL marker
                         tool_code_match = re.search(r'<tool_code>(.*?)</tool_code>', text, re.IGNORECASE | re.DOTALL)
+                        tool_matches = []
                         if tool_code_match:
                             tool_code_content = tool_code_match.group(1)
-                            # Extract tool calls from code
                             tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes)\s*\(\s*([^)]+)\)', tool_code_content, re.IGNORECASE)
-                        else:
-                            # Fall back to direct pattern matching
+                        elif text.strip().upper().startswith("TOOL_CALL:"):
                             tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes)\s*\(\s*([^)]+)\)', text, re.IGNORECASE)
                         
                         if tool_matches:
@@ -522,21 +671,37 @@ class MessageHandler:
                                     args_dict[key] = value
                                 
                                 if args_dict:
+                                    tool_name_l = tool_name.lower()
+                                    if tool_name_l == "web_search" and not args_dict.get("query"):
+                                        continue
+
+                                    # Enforce one web search call per turn
+                                    if tool_name_l == "web_search" and web_search_calls >= 1:
+                                        budget_msg = "Search budget reached for this turn. Use existing context to answer."
+                                        reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
+                                        reasoning_messages.append({
+                                            "role": "function",
+                                            "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}]
+                                        })
+                                        break
+
                                     # Create fake function_call object
                                     class FakeFunctionCall:
                                         def __init__(self, name, args):
                                             self.name = name
                                             self.args = args
-                                    
-                                    fc = FakeFunctionCall(tool_name.lower(), args_dict)
+
+                                    fc = FakeFunctionCall(tool_name_l, args_dict)
                                     tool_res = await self.tools_mgr.call_tool(fc, user_id)
-                                    tool_results_list.append(f"[{tool_name}] {tool_res}")
-                                    
+                                    if tool_name_l == "web_search":
+                                        web_search_calls += 1
+                                    tool_results_list.append(f"[{tool_name_l}] {tool_res}")
+
                                     # Add to message history
                                     reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
                                     reasoning_messages.append({
                                         "role": "function",
-                                        "parts": [{"function_response": {"name": tool_name.lower(), "response": {"content": str(tool_res)}}}]
+                                        "parts": [{"function_response": {"name": tool_name_l, "response": {"content": str(tool_res)}}}]
                                     })
                                     break  # Continue loop for next tool
                             continue
@@ -554,15 +719,49 @@ class MessageHandler:
                 
             except Exception as e:
                 error_str = str(e)
-                if "429" in error_str or "quota" in error_str.lower():
-                    self.logger.warning(f"⚠️ Lite Key ...{api_key[-4:]} rate limited. Retrying...")
-                    self._mark_key_as_failed(api_key)
+
+                if self._is_invalid_key_error(error_str):
+                    if api_key:
+                        self._mark_key_as_failed(
+                            api_key,
+                            used_model_alias,
+                            duration=86400,
+                            reason="invalid_key",
+                            permanently_exhaust=True,
+                        )
+                    self.logger.warning("Lite model received invalid API key error. Rotating key immediately.")
                     continue
-                
-                self.logger.error(f"Lite model error: {e}")
+
+                if self._is_rate_limit_error(error_str):
+                    error_type = "unavailable" if self._is_unavailable_error(error_str) else "rate_limit"
+                    wait_time = 2 + (attempt * 2)
+
+                    if api_key:
+                        self.logger.warning(
+                            f"⚠️ Lite Key ...{api_key[-4:]} {error_type}. Retrying with preserved reasoning state "
+                            f"(attempt {attempt + 1}/{MAX_RETRIES})."
+                        )
+                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type)
+                    else:
+                        self.logger.warning(
+                            f"⚠️ Lite transient {error_type} without selected key. Retrying with preserved reasoning state "
+                            f"(attempt {attempt + 1}/{MAX_RETRIES})."
+                        )
+
+                    self.logger.info(
+                        f"Reasoning state preserved: messages={len(reasoning_messages)} "
+                        f"tool_results={len(tool_results_list)} web_search_calls={web_search_calls}"
+                    )
+                    self.logger.info(f"⏱️ Reasoning retry backoff {wait_time}s ({error_type}).")
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                self.logger.error(f"Lite model error (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+                await asyncio.sleep(1 + attempt)
                 continue
         
-        return "Reasoning loop failed"
+        tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
+        return "Reasoning loop failed", tool_results_str
     
     async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str) -> str:
         """TIER 2: Flash model for final output (uses reasoning from tier 1).
@@ -578,16 +777,14 @@ class MessageHandler:
             user_id: User ID for logging
         """
         MAX_RETRIES = 5
-        
+        final_model_alias = FINAL_MODEL_ALIAS
+
         for attempt in range(MAX_RETRIES):
-            api_key = self._get_best_api_key()
-            if not api_key:
-                # All keys frozen - fallback to Lite with 3-block context
-                self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
-                return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
-            
+            api_key: Optional[str] = None
+            model_name: Optional[str] = None
+            used_model_alias: Optional[str] = None
+
             try:
-                genai.configure(api_key=api_key)
                 
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
@@ -615,7 +812,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                 
                 # Inject 3-block into system prompt
                 system_with_context = (
-                    time_context + AZURIS_SYSTEM_PROMPT +
+                    time_context + get_azuris_system_prompt() +
                     three_block_context
                 )
                 
@@ -626,27 +823,35 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     "max_output_tokens": 2000,
                 }
                 
-                model = genai.GenerativeModel(
-                    model_name=self.config.MODEL_NAME,  # Flash (better quality)
-                    system_instruction=system_with_context,
-                    safety_settings=self.config.SAFETY_SETTINGS,
-                    generation_config=generation_config
-                )
-                
-                await self._throttle_api_request(api_key)
-                
                 # Create final messages: user asks model to synthesize
                 final_messages = [{
                     "role": "user",
                     "parts": [{"text": "Dựa vào 3 block context ở trên, hãy đưa ra câu trả lời hoàn chỉnh cho yêu cầu của user."}]
                 }]
-                
-                self.logger.info(f"Final output for user {user_id} (Flash model, attempt {attempt + 1}/{MAX_RETRIES})")
-                
-                response = await asyncio.to_thread(
-                    model.generate_content, 
-                    final_messages, 
-                    stream=False
+
+                quota_ok = await self._acquire_gemini_quota(
+                    final_messages,
+                    generation_config["max_output_tokens"],
+                    final_model_alias,
+                )
+                if not quota_ok:
+                    return "[System] API daily quota exceeded, please try again tomorrow."
+
+                api_key, model_name, used_model_alias = self._get_best_api_key(final_model_alias)
+                if not api_key or not model_name:
+                    self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
+                    return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
+
+                await self._throttle_api_request(api_key)
+
+                self.logger.info(f"Final output for user {user_id} ({model_name}, attempt {attempt + 1}/{MAX_RETRIES})")
+
+                response = await self._generate_gemini_content(
+                    api_key=api_key,
+                    model_name=model_name,
+                    system_instruction=system_with_context,
+                    generation_config=generation_config,
+                    messages=final_messages,
                 )
                 
                 candidate = response.candidates[0] if response.candidates else None
@@ -677,22 +882,37 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                 
             except Exception as e:
                 error_str = str(e)
-                if "429" in error_str or "quota" in error_str.lower():
-                    self.logger.warning(f"⚠️ Flash Key ...{api_key[-4:]} rate limited (429). Attempt {attempt + 1}/{MAX_RETRIES}")
-                    self._mark_key_as_failed(api_key, duration=60)
-                    
-                    # Wait before retry (exponential backoff: 2s, 4s, 6s, 8s, 10s)
+
+                if self._is_invalid_key_error(error_str):
+                    if api_key:
+                        self._mark_key_as_failed(
+                            api_key,
+                            used_model_alias,
+                            duration=86400,
+                            reason="invalid_key",
+                            permanently_exhaust=True,
+                        )
+                    self.logger.warning(f"⚠️ Flash model invalid key on attempt {attempt + 1}/{MAX_RETRIES}; rotating immediately.")
+                    continue
+
+                if self._is_rate_limit_error(error_str):
+                    error_type = "unavailable" if self._is_unavailable_error(error_str) else "rate_limit"
+                    if api_key:
+                        self.logger.warning(
+                            f"⚠️ Flash Key ...{api_key[-4:]} {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}"
+                        )
+                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type)
+
                     wait_time = 2 + (attempt * 2)
-                    self.logger.info(f"⏱️ Waiting {wait_time}s before retry...")
+                    self.logger.info(f"⏱️ Waiting {wait_time}s before retry ({error_type})...")
                     await asyncio.sleep(wait_time)
-                    
-                    # Last attempt - use fallback
+
                     if attempt == MAX_RETRIES - 1:
                         self.logger.warning(f"❌ Flash model exhausted (5 retries). Fallback to lite model for {user_id}")
                         return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id)
-                    
+
                     continue
-                
+
                 self.logger.error(f"Final model error: {e}")
                 continue
         
@@ -707,42 +927,26 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
         This ensures users always get a response, even under heavy API load.
         """
         MAX_RETRIES = 3
-        
+        fallback_model_alias = FALLBACK_MODEL_ALIAS
+
         for attempt in range(MAX_RETRIES):
-            api_key = self._get_best_api_key()
-            if not api_key:
-                return "[System] API overloaded, please try again later."
-            
+            api_key: Optional[str] = None
+            model_name: Optional[str] = None
+            used_model_alias: Optional[str] = None
+
             try:
-                genai.configure(api_key=api_key)
                 
                 # Extract raw user input for context
                 user_input = ""
                 if original_messages and original_messages[-1].get("role") == "user":
                     user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")
                 
-                # Format 3-block context (same as Flash tier 2)
-                three_block_context = f"""
-=== CONTEXT FROM PRELIMINARY ANALYSIS ===
-[BLOCK 1 - USER REQUEST]
-{user_input[:300]}
-
-[BLOCK 2 - REASONING OUTPUT]
-{reasoning_result}
-
-[BLOCK 3 - TOOL RESULTS]
-{tool_results if tool_results else "(No tools were called)"}
-
-=== YOUR TASK ===
-Synthesize the above 3 blocks into a final response. Integrate naturally without saying "Based on tool results..." or mentioning technical details. Use your personality.
-"""
-                
-                # Use AZURIS personality + 3-block context for fallback
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
-                system_with_context = (
-                    f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n" + 
-                    AZURIS_SYSTEM_PROMPT +
-                    three_block_context
+                time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
+                system_with_context = time_context + self._build_fallback_system_prompt(
+                    user_input[:300],
+                    reasoning_result,
+                    tool_results,
                 )
                 
                 generation_config = {
@@ -752,22 +956,33 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     "max_output_tokens": 2000,
                 }
                 
-                # Use Lite model with personality as fallback Flash
-                model = genai.GenerativeModel(
-                    model_name="gemini-2.5-flash-lite",
-                    system_instruction=system_with_context,
-                    safety_settings=self.config.SAFETY_SETTINGS,
-                    generation_config=generation_config
+                final_messages = [{
+                    "role": "user",
+                    "parts": [{"text": "Dựa vào 3 block context ở trên, hãy đưa ra câu trả lời hoàn chỉnh cho yêu cầu của user."}],
+                }]
+
+                quota_ok = await self._acquire_gemini_quota(
+                    final_messages,
+                    generation_config["max_output_tokens"],
+                    fallback_model_alias,
                 )
-                
+                if not quota_ok:
+                    return "[System] API daily quota exceeded, please try again tomorrow."
+
+                api_key, model_name, used_model_alias = self._get_best_api_key(fallback_model_alias)
+                if not api_key or not model_name:
+                    return "[System] API overloaded, please try again later."
+
                 await self._throttle_api_request(api_key)
-                
-                self.logger.info(f"Fallback: Using Lite model as Flash for {user_id} (attempt {attempt + 1}/3)")
-                
-                response = await asyncio.to_thread(
-                    model.generate_content,
-                    [{"role": "user", "parts": [{"text": "Dựa vào 3 block context ở trên, hãy đưa ra câu trả lời hoàn chỉnh cho yêu cầu của user."}]}],
-                    stream=False
+
+                self.logger.info(f"Fallback: Using {model_name} for {user_id} (attempt {attempt + 1}/3)")
+
+                response = await self._generate_gemini_content(
+                    api_key=api_key,
+                    model_name=model_name,
+                    system_instruction=system_with_context,
+                    generation_config=generation_config,
+                    messages=final_messages,
                 )
                 
                 candidate = response.candidates[0] if response.candidates else None
@@ -792,12 +1007,27 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                 
             except Exception as e:
                 error_str = str(e)
-                if "429" in error_str or "quota" in error_str.lower():
-                    self.logger.warning(f"⚠️ Lite fallback also rate limited. Attempt {attempt + 1}/3")
-                    self._mark_key_as_failed(api_key, duration=60)
+
+                if self._is_invalid_key_error(error_str):
+                    if api_key:
+                        self._mark_key_as_failed(
+                            api_key,
+                            used_model_alias,
+                            duration=86400,
+                            reason="invalid_key",
+                            permanently_exhaust=True,
+                        )
+                    self.logger.warning(f"⚠️ Lite fallback invalid key on attempt {attempt + 1}/3; rotating immediately.")
+                    continue
+
+                if self._is_rate_limit_error(error_str):
+                    error_type = "unavailable" if self._is_unavailable_error(error_str) else "rate_limit"
+                    self.logger.warning(f"⚠️ Lite fallback transient {error_type}. Attempt {attempt + 1}/3")
+                    if api_key:
+                        self._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type)
                     await asyncio.sleep(2 + attempt * 2)
                     continue
-                
+
                 self.logger.error(f"Fallback lite error: {e}")
                 continue
         

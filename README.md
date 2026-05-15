@@ -1,46 +1,86 @@
-# 🔥 AZURIS - Tech-Bro Discord Bot
+# Azuris Discord Bot
 
-**Chad Gibiti** | Gemini 2.5 (2-Tier) | Smart Tools | Production Ready
+Azuris là Discord bot dùng luồng 2 tầng Gemini:
 
-## Quick Start
+- Tier 1: reasoning + tool calling
+- Tier 2: final response synthesis
+- Có fallback khi model final không khả dụng
+
+## Quick start
 
 ```bash
 cd Azuris_refactor_code_base
 pip install -r requirements.txt
 python run_bot.py              # Bot only
-python run_bot.py --server     # + Web server
+python run_bot.py --server     # Bot + Flask server
 ```
 
-## Features
+## Current capabilities
 
-- **2-Tier Model**: Lite (reasoning) + Flash (personality)
-- **Smart Tools**: Search, weather, calculator, notes, images
-- **Auto Fallback**: Lite takes over if Flash fails
-- **Fast Search**: 3 Google CSE in parallel, 6-hour cache
-- **Safe**: API rotation, rate limiting, auto-backup
-- **Premium**: DM access for admin-approved users
+- Tool calling qua Gemini với **6 tools**:
+  - `web_search`
+  - `get_weather`
+  - `calculate`
+  - `save_note`
+  - `retrieve_notes`
+  - `image_recognition`
+- Search pipeline hiện tại:
+  - Primary: DuckDuckGo streams
+  - Fallback (khi cần và có API key): SerpAPI, Tavily, Exa
+- Message history + notes persistence
+- Premium DM access control
+- Optional Flask endpoints: `/health`, `/stats`, `/api/message`, `/api/cache/clear`
 
-## Usage
+## Bot usage
 
-```
-@Azuris your question
+Mention bot trong channel:
+
+```text
+@Azuris câu hỏi của bạn
 ```
 
-**Commands:**
-```
-/reset-chat              - Clear history
-/premium @user add       - Grant access (admin)
-/premium @user remove    - Revoke access (admin)
-```
+## Slash commands
+
+Core/admin:
+
+- `/reset-chat`
+- `/premium`
+- `/reset-all`
+- `/message_to`
+
+Voice room management:
+
+- `/lock`
+- `/unlock`
+- `/move`
+- `/move_all`
+- `/set_room`
+- `/add_privet`
+- `/remove_privet`
+- `/list_privet`
 
 ## Configuration
 
-See `.env.example` for all settings. Required:
+Xem `.env.example` để cấu hình đầy đủ.
+Bắt buộc tối thiểu:
+
 ```env
-DISCORD_TOKEN=your_token
-GEMINI_API_KEY_1=your_key
+DISCORD_TOKEN=...
+GEMINI_API_KEY_1=...
 ```
 
----
+## Source layout
 
-📖 **Details?** See `PROJECT_INFO.txt`
+`src/` gồm các package chính:
+
+- `core`
+- `database`
+- `handlers`
+- `instructions`
+- `managers`
+- `services`
+- `tools`
+- `voice`
+
+---
+Chi tiết kỹ thuật: xem `PROJECT_INFO.txt`.

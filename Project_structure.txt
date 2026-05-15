@@ -1,40 +1,63 @@
 Azuris_refactor_code_base/
-├── README.md                    (User-friendly guide)
-├── PROJECT_INFO.txt             (2500+ word technical doc)
-├── requirements.txt             (27 packages)
-├── .env                         (Configured from @clone)
-├── .env.example                 (Template)
-├── main.py                      (Entry point)
-├── run_bot.py                   (CLI runner)
-├── run_bot.bat                  (Windows launcher)
-│
+├── README.md
+├── PROJECT_INFO.txt
+├── Project_structure.txt
+├── requirements.txt
+├── .env.example
+├── .env
+├── main.py
+├── run_bot.py
+├── run_bot.sh
 ├── data/
 │   ├── short_term_memory.json
-│   └── .gitkeep
-│
+│   ├── chat_history.db
+│   ├── chat_history_backup.db
+│   ├── quota_state.json
+│   ├── weather_cache_ho_chi_minh_city.json
+│   └── voice_lock/
+│       └── users.json
+├── uploaded_files/                 (runtime attachment storage)
 └── src/
+    ├── __init__.py
     ├── core/
-    │   ├── config.py            (Configuration)
-    │   ├── logger.py            (Logging)
-    │   └── system_prompt.py     (NEW - Azuris system prompt)
-    │
+    │   ├── __init__.py
+    │   ├── api_config.py
+    │   ├── api_proxy.py
+    │   ├── api_router.py
+    │   ├── config.py
+    │   ├── fallback_sys_prompt.py
+    │   ├── gemini_rate_limiter.py
+    │   ├── lite_sys_prompt.py
+    │   ├── logger.py
+    │   ├── prompt_loader.py
+    │   └── system_prompt.py
     ├── database/
-    │   └── repository.py        (SQLite operations)
-    │
-    ├── services/
-    │   ├── memory_service.py    (JSON memory)
-    │   └── file_parser.py       (File extraction)
-    │
+    │   ├── __init__.py
+    │   └── repository.py
+    ├── handlers/
+    │   ├── __init__.py
+    │   ├── bot_core.py
+    │   ├── bot_server.py
+    │   └── message_handler.py
+    ├── instructions/
+    │   ├── azuris_system_prompt.txt
+    │   ├── fallback_system_prompt.txt
+    │   └── lite_reasoning_prompt.txt
     ├── managers/
+    │   ├── __init__.py
     │   ├── cache_manager.py
     │   ├── cleanup_manager.py
-    │   ├── premium_manager.py
-    │   └── note_manager.py
-    │
+    │   ├── note_manager.py
+    │   └── premium_manager.py
+    ├── services/
+    │   ├── __init__.py
+    │   ├── file_parser.py
+    │   └── memory_service.py
     ├── tools/
-    │   └── tools.py             (8 Gemini tools)
-    │
-    └── handlers/
-        ├── bot_core.py          (Discord bot)
-        ├── message_handler.py   (Message processing)
-        └── bot_server.py        (Flask web server)
+    │   ├── __init__.py
+    │   └── tools.py             (Gemini tool declarations: 6)
+    └── voice/
+        ├── __init__.py
+        └── voice_lock.py
+
+Note: Không liệt kê các file generate như __pycache__/*.pyc.

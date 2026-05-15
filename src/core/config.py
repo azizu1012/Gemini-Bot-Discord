@@ -1,22 +1,36 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 import logging
-from google.generativeai.types import HarmCategory, HarmBlockThreshold
+
+
+def _load_runtime_env() -> None:
+    current = Path(__file__).resolve()
+    root_env_path = current.parents[3] / ".env"
+    project_env_path = current.parents[2] / ".env"
+
+    if project_env_path.exists():
+        load_dotenv(dotenv_path=project_env_path)
+    elif root_env_path.exists():
+        load_dotenv(dotenv_path=root_env_path)
+    else:
+        load_dotenv()
 
 
 class Config:
     """Singleton configuration manager for the bot."""
     
     def __init__(self):
-        load_dotenv()
+        _load_runtime_env()
         
         # --- LOGGING SETUP ---
         self.logger = self._setup_logger()
         
         # --- DISCORD & BOT ---
         self.TOKEN = os.getenv('DISCORD_TOKEN')
-        self.MODEL_NAME = os.getenv('MODEL_NAME')
+        self.MODEL_NAME = os.getenv('MODEL_NAME', 'gemini-3-flash-preview')
         self.ADMIN_ID = os.getenv('ADMIN_ID', '')
+        self.ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '')
         self.HABE_USER_ID = os.getenv('HABE_USER_ID', '')
         self.MIRA_USER_ID = os.getenv('MIRA_USER_ID', '')
         self.ADO_FAT_USER_ID = os.getenv('ADO_FAT_USER_ID', '')
@@ -24,12 +38,28 @@ class Config:
         self.SUC_VIEN_USER_ID = os.getenv('SUC_VIEN_USER_ID', '')
         self.CHUI_USER_ID = os.getenv('CHUI_USER_ID', '')
         
-        # --- GEMINI API KEYS (DYNAMIC LOAD 1-15+) ---
+        # --- GEMINI API KEYS (DYNAMIC LOAD) ---
         self.GEMINI_API_KEYS = []
-        # Tự động load từ GEMINI_API_KEY_1 đến GEMINI_API_KEY_20
-        for i in range(1, 21): 
-            key = os.getenv(f'GEMINI_API_KEY_{i}')
-            if key:
+        seen_keys = set()
+
+        # Primary format: GEMINI_API_KEY_1..20
+        for i in range(1, 21):
+            key = (os.getenv(f'GEMINI_API_KEY_{i}') or '').strip()
+            if key and key not in seen_keys:
+                seen_keys.add(key)
+                self.GEMINI_API_KEYS.append(key)
+
+        # Compatibility format used by older runtime envs
+        for name in [
+            'GEMINI_API_KEY_PROD',
+            'GEMINI_API_KEY_TEST',
+            'GEMINI_API_KEY_BACKUP',
+            'GEMINI_API_KEY_EXTRA1',
+            'GEMINI_API_KEY_EXTRA2',
+        ]:
+            key = (os.getenv(name) or '').strip()
+            if key and key not in seen_keys:
+                seen_keys.add(key)
                 self.GEMINI_API_KEYS.append(key)
         
         if not self.GEMINI_API_KEYS:
@@ -41,15 +71,6 @@ class Config:
         self.SERPAPI_API_KEY = os.getenv('SERPAPI_API_KEY')
         self.TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
         self.EXA_API_KEY = os.getenv('EXA_API_KEY')
-        self.GOOGLE_CSE_ID = os.getenv('GOOGLE_CSE_ID')
-        self.GOOGLE_CSE_API_KEY = os.getenv('GOOGLE_CSE_API_KEY')
-        self.GOOGLE_CSE_ID_1 = os.getenv("GOOGLE_CSE_ID_1")
-        self.GOOGLE_CSE_API_KEY_1 = os.getenv("GOOGLE_CSE_API_KEY_1")
-        self.GOOGLE_CSE_ID_2 = os.getenv("GOOGLE_CSE_ID_2")
-        self.GOOGLE_CSE_API_KEY_2 = os.getenv("GOOGLE_CSE_API_KEY_2")
-        
-        # --- HUGGING FACE API KEY ---
-        self.HF_TOKEN = os.getenv('HF_TOKEN')
         
         # --- WEATHER API ---
         self.WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
@@ -62,6 +83,13 @@ class Config:
         self.MEMORY_PATH = os.path.join(os.path.dirname(__file__), '../../data/short_term_memory.json')
         self.WEATHER_CACHE_PATH = os.path.join(os.path.dirname(__file__), '../../data/weather_cache.json')
         self.FILE_STORAGE_PATH = os.path.join(os.path.dirname(__file__), '../../uploaded_files')
+
+        # --- VOICE ROOM OWNER LOCK ---
+        self.VOICE_LOCK_BASE_DIR = os.path.join(os.path.dirname(__file__), '../../data/voice_lock')
+        self.VOICE_WHITELIST_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'users.json')
+        self.LOCKED_CHANNELS_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'locked_channels.json')
+        self.ENFORCED_NAMES_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'enforced_names.json')
+        self.VOICE_LOCK_LOG_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'voice_lock.log')
         
         # --- ANTI-SPAM ---
         self.SPAM_THRESHOLD = 3
@@ -76,10 +104,10 @@ class Config:
         
         # --- GEMINI SAFETY SETTINGS ---
         self.SAFETY_SETTINGS = [
-            {"category": HarmCategory.HARM_CATEGORY_HARASSMENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-            {"category": HarmCategory.HARM_CATEGORY_HATE_SPEECH, "threshold": HarmBlockThreshold.BLOCK_NONE},
-            {"category": HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, "threshold": HarmBlockThreshold.BLOCK_NONE},
-            {"category": HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, "threshold": HarmBlockThreshold.BLOCK_NONE},
+            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
         
         # --- MIN FREE SPACE ---
@@ -124,6 +152,7 @@ logger = config.logger
 TOKEN = config.TOKEN
 MODEL_NAME = config.MODEL_NAME
 ADMIN_ID = config.ADMIN_ID
+ADMIN_TOKEN = config.ADMIN_TOKEN
 HABE_USER_ID = config.HABE_USER_ID
 MIRA_USER_ID = config.MIRA_USER_ID
 ADO_FAT_USER_ID = config.ADO_FAT_USER_ID
@@ -137,13 +166,6 @@ SPAM_WINDOW = config.SPAM_WINDOW
 SERPAPI_API_KEY = config.SERPAPI_API_KEY
 TAVILY_API_KEY = config.TAVILY_API_KEY
 EXA_API_KEY = config.EXA_API_KEY
-GOOGLE_CSE_ID = config.GOOGLE_CSE_ID
-GOOGLE_CSE_API_KEY = config.GOOGLE_CSE_API_KEY
-GOOGLE_CSE_ID_1 = config.GOOGLE_CSE_ID_1
-GOOGLE_CSE_API_KEY_1 = config.GOOGLE_CSE_API_KEY_1
-GOOGLE_CSE_ID_2 = config.GOOGLE_CSE_ID_2
-GOOGLE_CSE_API_KEY_2 = config.GOOGLE_CSE_API_KEY_2
-HF_TOKEN = config.HF_TOKEN
 WEATHER_API_KEY = config.WEATHER_API_KEY
 CITY = config.CITY
 DB_PATH = config.DB_PATH
@@ -152,6 +174,11 @@ NOTE_PATH = config.NOTE_PATH
 MEMORY_PATH = config.MEMORY_PATH
 WEATHER_CACHE_PATH = config.WEATHER_CACHE_PATH
 FILE_STORAGE_PATH = config.FILE_STORAGE_PATH
+VOICE_LOCK_BASE_DIR = config.VOICE_LOCK_BASE_DIR
+VOICE_WHITELIST_FILE = config.VOICE_WHITELIST_FILE
+LOCKED_CHANNELS_FILE = config.LOCKED_CHANNELS_FILE
+ENFORCED_NAMES_FILE = config.ENFORCED_NAMES_FILE
+VOICE_LOCK_LOG_FILE = config.VOICE_LOCK_LOG_FILE
 MIN_FREE_SPACE_MB = config.MIN_FREE_SPACE_MB
 DEFAULT_RATE_LIMIT = config.DEFAULT_RATE_LIMIT
 PREMIUM_RATE_LIMIT = config.PREMIUM_RATE_LIMIT
