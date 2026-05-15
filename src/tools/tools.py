@@ -30,7 +30,6 @@ from src.core.config import (
     MODEL_NAME,
 )
 
-
 class ToolsManager:
     """Manager for all AI tools and external API integrations."""
     
