@@ -5,9 +5,8 @@ Optional integration for bot health checks and external API calls.
 
 from flask import Flask, jsonify, request
 from datetime import datetime
-import logging
 
-from src.core.config import get_config, logger
+from src.core.config import logger
 
 
 class BotServer:

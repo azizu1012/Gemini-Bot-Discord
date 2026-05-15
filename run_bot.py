@@ -51,14 +51,14 @@ async def run_bot_with_server(config):
     try:
         # Initialize bot
         bot_core = BotCore(config)
-        logger.info("✅ BotCore initialized")
+        logger.info("✅ BotCore initialized")   
         
         # Initialize message handler
         message_handler = MessageHandler(bot_core, config)
         logger.info("✅ MessageHandler initialized")
         
         # Register message handler
-        @bot_core.bot.event
+        @bot_core.bot.event 
         async def on_message(message):
             await message_handler.handle_message(message, bot_core.bot)
         

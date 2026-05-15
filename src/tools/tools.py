@@ -2,20 +2,21 @@ import asyncio
 import json
 import re
 import os
-import random
+import mimetypes
+import time
 from datetime import datetime, timedelta
 import aiofiles
 import requests
 import sympy as sp
-from google.generativeai.types import Tool, FunctionDeclaration
+from google import genai
+from google.genai import types as genai_types
 import serpapi
 from tavily import TavilyClient
 import exa_py
-import aiohttp
-
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
+try:
+    from ddgs import DDGS
+except ImportError:
+    from duckduckgo_search import DDGS
 
 from src.core.config import (
     logger,
@@ -25,17 +26,9 @@ from src.core.config import (
     SERPAPI_API_KEY,
     TAVILY_API_KEY,
     EXA_API_KEY,
-    GOOGLE_CSE_ID,
-    GOOGLE_CSE_API_KEY,
-    GOOGLE_CSE_ID_1,
-    GOOGLE_CSE_API_KEY_1,
-    GOOGLE_CSE_ID_2,
-    GOOGLE_CSE_API_KEY_2,
-    HF_TOKEN
+    GEMINI_API_KEYS,
+    MODEL_NAME,
 )
-from dotenv import load_dotenv
-
-load_dotenv()
 
 
 class ToolsManager:
@@ -204,16 +197,29 @@ class ToolsManager:
         self.web_search_cache = {}
         self.image_recognition_cache = {}
         self.weather_lock = asyncio.Lock()
-        self.search_api_counter = 0
         self.search_lock = asyncio.Lock()
         self.cache_lock = asyncio.Lock()
         self.search_cache = {}
+        self._gemini_key_cursor = 0
+        self._invalid_tool_keys = set()
+        self._tool_key_cooldowns = {}
+        self.google_search_streams = self._load_google_search_streams()
+        self.fallback_provider_limit = self._load_fallback_provider_limit()
+        self.gemini_vision_model = os.getenv("GEMINI_VISION_MODEL", MODEL_NAME or "gemini-3-flash-preview")
+
+        if GEMINI_API_KEYS:
+            self.logger.info(
+                f"Search/image tools ready: provider=duckduckgo streams={self.google_search_streams} "
+                f"fallback_limit={self.fallback_provider_limit} vision_model={self.gemini_vision_model}"
+            )
+        else:
+            self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
     
     def get_all_tools(self):
         """Return all tool definitions for Gemini."""
         return [
-            Tool(function_declarations=[
-                FunctionDeclaration(
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="web_search",
                     description=(
                         "Tìm kiếm thông tin cập nhật, sự kiện mới, tin tức, "
@@ -221,10 +227,20 @@ class ToolsManager:
                         "hoặc để xác minh thông tin. KHÔNG DÙNG cho các tác vụ tính toán, "
                         "dịch thuật, tóm tắt, viết lại, hoặc các câu hỏi không cần dữ liệu mới."
                     ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Câu truy vấn tìm kiếm cụ thể, không để trống."
+                            }
+                        },
+                        "required": ["query"]
+                    }
                 )
             ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="get_weather",
                     description="Lấy thông tin thời tiết hiện tại cho một thành phố cụ thể.",
                     parameters={
@@ -234,8 +250,8 @@ class ToolsManager:
                     }
                 )
             ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="calculate",
                     description="Giải các bài toán số học hoặc biểu thức phức tạp, bao gồm các hàm lượng giác, logarit, và đại số.",
                     parameters={
@@ -245,8 +261,8 @@ class ToolsManager:
                     }
                 )
             ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="save_note",
                     description=(
                         "Lưu một mẩu thông tin, sở thích, sự thật, hoặc nội dung quan trọng về người dùng để bạn có thể truy cập lại sau. "
@@ -262,8 +278,8 @@ class ToolsManager:
                     }
                 )
             ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="retrieve_notes",
                     description=(
                         "Truy xuất thông tin đã lưu trữ về người dùng, kiến thức cá nhân, "
@@ -279,8 +295,8 @@ class ToolsManager:
                     }
                 )
             ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="image_recognition",
                     description=(
                         "Nhận diện đối tượng, người nổi tiếng, nhân vật game/anime, đếm vật thể, và trích xuất văn bản (OCR) từ một hình ảnh. "
@@ -294,19 +310,6 @@ class ToolsManager:
                             "question": {"type": "string", "description": "Câu hỏi cụ thể của người dùng về hình ảnh (ví dụ: 'đếm số lượng', 'người này là ai?', 'đây là gì?')."}
                         },
                         "required": ["image_url", "question"]
-                    }
-                )
-            ]),
-            Tool(function_declarations=[
-                FunctionDeclaration(
-                    name="list_google_drive_files",
-                    description="Liệt kê các tệp trong một thư mục cụ thể trên Google Drive. Trả về danh sách tên tệp và ID.",
-                    parameters={
-                        "type": "object",
-                        "properties": {
-                            "folder_id": {"type": "string", "description": "ID của thư mục Google Drive cần liệt kê. Để trống để liệt kê từ thư mục gốc 'My Drive'."}
-                        },
-                        "required": []
                     }
                 )
             ]),
@@ -348,6 +351,127 @@ class ToolsManager:
             del self.image_recognition_cache[oldest_key]
         self.image_recognition_cache[key] = {'data': data, 'timestamp': datetime.now()}
     
+    def _load_google_search_streams(self) -> int:
+        """Load desired primary search stream count (DuckDuckGo, 1..2)."""
+        raw = os.getenv("GOOGLE_SEARCH_STREAMS", "2").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 2
+        return max(1, min(2, value))
+
+    def _load_fallback_provider_limit(self) -> int:
+        """Load fallback provider parallelism limit (1..3)."""
+        raw = os.getenv("SEARCH_FALLBACK_PROVIDER_LIMIT", "1").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 1
+        return max(1, min(3, value))
+
+    def _next_gemini_api_key(self) -> str:
+        if not GEMINI_API_KEYS:
+            return ""
+
+        now = time.time()
+        total = len(GEMINI_API_KEYS)
+        for _ in range(total):
+            key = GEMINI_API_KEYS[self._gemini_key_cursor % total]
+            self._gemini_key_cursor += 1
+
+            if key in self._invalid_tool_keys:
+                continue
+
+            release_ts = self._tool_key_cooldowns.get(key, 0)
+            if release_ts > now:
+                continue
+
+            return key
+
+        return ""
+
+    async def _search_duckduckgo(self, query: str, index: int = 0) -> str:
+        start_ts = datetime.now().timestamp()
+        try:
+            def _do_search():
+                with DDGS() as ddgs:
+                    return list(ddgs.text(query, max_results=5))
+
+            results = await asyncio.to_thread(_do_search)
+            formatted = []
+            for item in results[:5]:
+                title = item.get("title") or "Không có tiêu đề"
+                snippet = (item.get("body") or "").strip()
+                if len(snippet) > 330:
+                    snippet = snippet[:330] + "..."
+
+                link = item.get("href") or item.get("url") or ""
+                if not link:
+                    continue
+                if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
+                    continue
+
+                formatted.append(f"**{title}**: {snippet} (Nguồn: {link})")
+
+            primary_text = "**DuckDuckGo (Primary):**\n" + "\n".join(formatted) if formatted else ""
+            latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+            self.logger.info(
+                f"AB_METRIC search_primary query_idx={index} success={1 if primary_text else 0} "
+                f"latency_ms={latency_ms} provider=duckduckgo"
+            )
+            return primary_text
+        except Exception as e:
+            latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+            self.logger.warning(
+                f"AB_METRIC search_primary query_idx={index} success=0 latency_ms={latency_ms} "
+                f"provider=duckduckgo error={str(e)[:120]}"
+            )
+            return ""
+
+    def _guess_mime_type(self, image_url: str) -> str:
+        mime_type, _ = mimetypes.guess_type(image_url)
+        if mime_type in {"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"}:
+            return mime_type
+        return "image/jpeg"
+
+    def _count_unique_sources(self, text: str) -> int:
+        return len(set(re.findall(r"\(Nguồn: (.*?)\)", text or "")))
+
+    def _is_search_result_sufficient(self, primary_parts: list[str], min_sources: int = 2, min_chars: int = 180) -> bool:
+        merged = "\n".join(part.strip() for part in primary_parts if part)
+        if not merged:
+            return False
+        return self._count_unique_sources(merged) >= min_sources and len(merged) >= min_chars
+
+    def _query_contains_suffix_intent(self, query: str, suffix: str) -> bool:
+        query_lower = f" {query.lower()} "
+        suffix_lower = suffix.strip().lower()
+        if not suffix_lower:
+            return True
+        if f" {suffix_lower} " in query_lower:
+            return True
+
+        suffix_tokens = [tok for tok in re.split(r"\s+", suffix_lower) if tok]
+        if suffix_tokens and all(f" {tok} " in query_lower for tok in suffix_tokens):
+            return True
+
+        return False
+
+    def _build_secondary_query(self, q1: str, suffixes: list[str]) -> str:
+        q1_clean = q1.strip()
+        if not q1_clean:
+            return q1_clean
+
+        for suffix in suffixes:
+            suffix_clean = (suffix or "").strip()
+            if not suffix_clean:
+                continue
+            if self._query_contains_suffix_intent(q1_clean, suffix_clean):
+                return q1_clean
+            return f"{q1_clean} {suffix_clean}"
+
+        return q1_clean
+
     def normalize_city_name(self, city_query: str):
         """Normalize city name to English and Vietnamese."""
         if not city_query:
@@ -452,174 +576,73 @@ class ToolsManager:
             }, ensure_ascii=False)
     
     async def run_image_recognition(self, image_url: str, question: str):
-        """Run image recognition using Hugging Face API."""
+        """Run image understanding using Gemini multimodal API."""
         cached_result = self.get_image_recognition_cache(image_url, question)
         if cached_result:
             self.logger.info(f"Image recognition result from cache for URL: {image_url}, Question: {question[:30]}...")
             return cached_result
-        
-        if not HF_TOKEN:
-            return "Lỗi: Không tìm thấy Hugging Face API token. Vui lòng cấu hình HF_TOKEN trong config.py."
-        
-        API_URL = "https://router.huggingface.co/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": "application/json"}
-        
-        MAX_RETRIES = 5
-        INITIAL_BACKOFF_DELAY = 5
-        
-        for attempt in range(MAX_RETRIES):
-            try:
-                async with aiohttp.ClientSession() as session:
-                    json_payload = {
-                        "model": "Qwen/Qwen2.5-VL-7B-Instruct",
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "image_url", "image_url": {"url": image_url}},
-                                    {"type": "text", "text": question}
-                                ]
-                            }
-                        ],
-                        "max_tokens": 300
-                    }
-                    
-                    async with session.post(API_URL, headers=headers, json=json_payload) as response:
-                        response.raise_for_status()
-                        result = await response.json()
-                        self.logger.info(f"HF Image Recognition raw result: {result}")
-                        
-                        if "choices" in result and result["choices"]:
-                            generated_text = result["choices"][0]["message"]["content"]
-                            assistant_tag = "<|im_start|>assistant\n"
-                            if assistant_tag in generated_text:
-                                final_result = generated_text.split(assistant_tag, 1)[1].strip()
-                            else:
-                                final_result = generated_text.strip()
-                            
-                            self.set_image_recognition_cache(image_url, question, final_result)
-                            return final_result
-                        
-                        error_result = json.dumps(result, ensure_ascii=False)
-                        self.set_image_recognition_cache(image_url, question, error_result)
-                        return error_result
-            
-            except aiohttp.ClientResponseError as e:
-                if e.status == 429:
-                    delay = INITIAL_BACKOFF_DELAY * (2 ** attempt)
-                    self.logger.warning(f"HF API rate limit (429). Retrying in {delay:.2f}s... (Attempt {attempt + 1}/{MAX_RETRIES})")
-                    await asyncio.sleep(delay)
-                else:
-                    self.logger.error(f"HF API error ({e.status}): {e.message}")
-                    return f"Lỗi từ dịch vụ nhận diện hình ảnh (mã {e.status}): {e.message}"
-            except aiohttp.ClientError as e:
-                self.logger.error(f"Connection error to HF API: {e}")
-                return f"Lỗi kết nối đến dịch vụ nhận diện hình ảnh: {e}"
-            except Exception as e:
-                self.logger.error(f"Unknown error in image recognition: {e}")
-                return f"Đã xảy ra lỗi không mong muốn khi xử lý hình ảnh: {e}"
-        
-        return f"Lỗi: Đã thử lại {MAX_RETRIES} lần nhưng không thể kết nối đến dịch vụ nhận diện hình ảnh do giới hạn rate."
-    
-    async def run_list_google_drive_files(self, folder_id: str = None):
-        """List files in Google Drive folder."""
-        self.logger.info(f"Starting to list Google Drive files for folder_id: {folder_id}")
-        
-        if not await asyncio.to_thread(os.path.exists, self.SERVICE_ACCOUNT_FILE):
-            return "Lỗi: Không tìm thấy tệp credentials.json. Vui lòng đảm bảo tệp tồn tại trong thư mục gốc."
-        
+
+        api_key = self._next_gemini_api_key()
+        if not api_key:
+            return "Lỗi: Không tìm thấy Gemini API key để nhận diện ảnh."
+
+        start_ts = datetime.now().timestamp()
         try:
-            creds = await asyncio.to_thread(
-                Credentials.from_service_account_file,
-                self.SERVICE_ACCOUNT_FILE, scopes=self.SCOPES
-            )
-            
-            service = await asyncio.to_thread(build, 'drive', 'v3', credentials=creds)
-            
-            q_folder = f"'{folder_id}' in parents" if folder_id else "'root' in parents"
-            
-            results = await asyncio.to_thread(
-                lambda: service.files().list(
-                    q=f"{q_folder} and trashed=false",
-                    pageSize=30,
-                    fields="nextPageToken, files(id, name, mimeType, webViewLink)"
-                ).execute()
-            )
-            
-            items = results.get('files', [])
-            
-            if not items:
-                return "Không tìm thấy tệp nào trong thư mục này."
-            
-            file_list = []
-            for item in items:
-                file_list.append({
-                    "name": item['name'],
-                    "id": item['id'],
-                    "type": item['mimeType'],
-                    "url": item.get('webViewLink', 'N/A')
-                })
-            
-            self.logger.info(f"Found {len(file_list)} files on Google Drive.")
-            return json.dumps(file_list, ensure_ascii=False, indent=2)
-        
-        except HttpError as error:
-            self.logger.error(f"Google Drive API error: {error}")
-            if error.resp.status == 404:
-                return f"Lỗi: Không tìm thấy thư mục với ID '{folder_id}'. Hãy chắc chắn ID là chính xác và đã được chia sẻ với bot."
-            return f"Đã xảy ra lỗi khi truy cập Google Drive: {error}"
-        except Exception as e:
-            self.logger.error(f"Unknown error with Google Drive: {e}")
-            return f"Đã xảy ra lỗi không mong muốn: {e}"
-    
-    async def _search_cse(self, query: str, cse_id: str, api_key: str, index: int = 0, start_idx: int = 1, force_lang: str = None):
-        """Search using Google Custom Search Engine."""
-        if not cse_id or not api_key:
-            self.logger.warning(f"CSE{index} không được cấu hình ID/API key.")
-            return ""
-        
-        params = {
-            "key": api_key,
-            "cx": cse_id,
-            "q": query,
-            "num": 3,
-            "start": start_idx,
-            "gl": "vn",
-            "hl": force_lang or ("en" if re.search(r"[a-zA-Z]{4,}", query) else "vi"),
-        }
-        
-        try:
+            image_bytes = await asyncio.to_thread(lambda: requests.get(image_url, timeout=12).content)
+            if not image_bytes:
+                return "Lỗi: Không tải được dữ liệu hình ảnh từ URL."
+
+            if len(image_bytes) > self.MAX_FILE_SIZE_BYTES:
+                return "Lỗi: Ảnh vượt quá giới hạn 20MB cho inline image understanding."
+
+            mime_type = self._guess_mime_type(image_url)
+            image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+
+            client = genai.Client(api_key=api_key)
             response = await asyncio.to_thread(
-                requests.get,
-                "https://www.googleapis.com/customsearch/v1",
-                params=params,
-                timeout=10,
+                client.models.generate_content,
+                model=self.gemini_vision_model,
+                contents=[image_part, question],
             )
-            data = response.json()
-            
-            if "items" not in data:
-                self.logger.warning(f"CSE{index} không có kết quả hợp lệ cho query '{query[:60]}'")
-                return ""
-            
-            relevant = []
-            for item in data["items"][:3]:
-                title = item.get("title", "Không có tiêu đề")
-                snippet_raw = item.get("snippet", "")
-                snippet = snippet_raw[:330] + "..." if len(snippet_raw) > 130 else snippet_raw
-                link = item.get("link", "")
-                if any(ad in link.lower() for ad in ["shopee", "lazada", "amazon", "tiki"]):
-                    continue
-                relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
-            
-            if relevant:
-                self.logger.info(f"CSE{index} returned {len(relevant)} valid results.")
-                return f"**Search CSE{index} (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]"
-            return ""
-        
+
+            final_result = (getattr(response, "text", "") or "").strip()
+            if not final_result:
+                final_result = "Không thể nhận diện nội dung ảnh rõ ràng từ truy vấn này."
+
+            self.set_image_recognition_cache(image_url, question, final_result)
+            latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+            self.logger.info(
+                f"AB_METRIC image_tool success=1 latency_ms={latency_ms} bytes={len(image_bytes)} model={self.gemini_vision_model}"
+            )
+            return final_result
         except Exception as e:
-            self.logger.error(f"CSE{index} error calling API: {e}")
-            return ""
+            error_text = str(e)
+            lowered = error_text.lower()
+            if any(token in lowered for token in ["api key not found", "api_key_invalid", "invalid api key", "permission denied"]):
+                self._invalid_tool_keys.add(api_key)
+            elif any(token in lowered for token in ["429", "resource_exhausted", "quota", "rate limit"]):
+                self._tool_key_cooldowns[api_key] = time.time() + 60
+
+            latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+            self.logger.warning(
+                f"AB_METRIC image_tool success=0 latency_ms={latency_ms} error={error_text[:120]}"
+            )
+            return f"Đã xảy ra lỗi khi xử lý hình ảnh bằng Gemini: {e}"
     
+    def _dedupe_source_lines(self, merged: str) -> str:
+        unique_lines = []
+        seen_links = set()
+        for line in merged.splitlines():
+            match = re.search(r"\(Nguồn: (.*?)\)", line)
+            if match:
+                link = match.group(1)
+                if link not in seen_links:
+                    seen_links.add(link)
+                    unique_lines.append(line)
+            else:
+                unique_lines.append(line)
+        return "\n".join(unique_lines)
+
     async def _search_serpapi(self, query: str):
         """Search using SerpAPI."""
         if not SERPAPI_API_KEY:
@@ -648,7 +671,7 @@ class ToolsManager:
                 continue
             relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
         
-        return "**Search SerpAPI (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
+        return "**Search SerpAPI (Dynamic):**\n" + "\n".join(relevant) if relevant else ""
     
     async def _search_tavily(self, query: str):
         """Search using Tavily API."""
@@ -677,7 +700,7 @@ class ToolsManager:
                 continue
             relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
         
-        return "**Search Tavily (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
+        return "**Search Tavily (Dynamic):**\n" + "\n".join(relevant) if relevant else ""
     
     async def _search_exa(self, query: str):
         """Search using Exa API."""
@@ -688,11 +711,13 @@ class ToolsManager:
         params = {
             "query": query,
             "num_results": 3,
-            "use_autoprompt": True,
             "type": "neural"
         }
-        
-        results = await asyncio.to_thread(exa.search, **params)
+
+        try:
+            results = await asyncio.to_thread(exa.search, use_autoprompt=True, **params)
+        except TypeError:
+            results = await asyncio.to_thread(exa.search, **params)
         
         if not results.results:
             return ""
@@ -702,63 +727,79 @@ class ToolsManager:
             title = item.title or 'Không có tiêu đề'
             text = item.text or ''
             snippet = text[:330] + "..." if len(text) > 130 else text
-            link = item.url
+            link = item.url or ''
             if any(ad in link.lower() for ad in ['shopee', 'lazada', 'amazon', 'tiki']):
                 continue
             relevant.append(f"**{title}**: {snippet} (Nguồn: {link})")
         
-        return "**Search Exa.ai (Dynamic):**\n" + "\n".join(relevant) + "\n\n[DÙNG ĐỂ TRẢ LỜI E-GIRL, KHÔNG LEAK NGUỒN]" if relevant else ""
+        return "**Search Exa.ai (Dynamic):**\n" + "\n".join(relevant) if relevant else ""
     
     async def _run_fallback_search(self, query: str):
-        """Run fallback search using alternative APIs."""
-        apis = ["SerpAPI", "Tavily", "Exa"]
-        start_idx = self.search_api_counter % 3
-        self.search_api_counter += 1
-        
-        for i in range(3):
-            api_name = apis[(start_idx + i) % 3]
-            try:
-                if api_name == "SerpAPI" and SERPAPI_API_KEY:
-                    result = await self._search_serpapi(query)
-                elif api_name == "Tavily" and TAVILY_API_KEY:
-                    result = await self._search_tavily(query)
-                elif api_name == "Exa" and EXA_API_KEY:
-                    result = await self._search_exa(query)
-                else:
-                    continue
-                
-                if result:
-                    self.logger.info(f"Fallback {api_name} success for query '{query[:60]}'")
-                    return result
-                else:
-                    self.logger.warning(f"Fallback {api_name} empty or error.")
-            except Exception as e:
-                self.logger.warning(f"Fallback {api_name} error: {e}")
-        
-        self.logger.error("All fallback APIs failed.")
-        return ""
+        """Run fallback search using external providers in parallel and merge results."""
+        providers = []
+        if SERPAPI_API_KEY:
+            providers.append(("SerpAPI", self._search_serpapi(query)))
+        if TAVILY_API_KEY:
+            providers.append(("Tavily", self._search_tavily(query)))
+        if EXA_API_KEY:
+            providers.append(("Exa", self._search_exa(query)))
+
+        if not providers:
+            self.logger.warning("Không có external search API key để fallback.")
+            self.logger.warning("AB_METRIC search_fallback providers=0 success=0")
+            return ""
+
+        providers = providers[:self.fallback_provider_limit]
+        names = [name for name, _ in providers]
+        self.logger.info(f"Running fallback providers: {', '.join(names)}")
+
+        results = await asyncio.gather(*(task for _, task in providers), return_exceptions=True)
+
+        merged_parts = []
+        for (name, _), result in zip(providers, results):
+            if isinstance(result, Exception):
+                self.logger.warning(f"Fallback {name} error: {result}")
+                continue
+            if result:
+                self.logger.info(f"Fallback {name} success for query '{query[:60]}'")
+                merged_parts.append(result)
+            else:
+                self.logger.warning(f"Fallback {name} empty.")
+
+        if not merged_parts:
+            self.logger.error("All fallback APIs failed.")
+            self.logger.warning(f"AB_METRIC search_fallback providers={len(providers)} success=0")
+            return ""
+
+        self.logger.info(f"AB_METRIC search_fallback providers={len(providers)} success=1 results={len(merged_parts)}")
+        return "\n\n".join(merged_parts)
     
     async def run_search_apis(self, query: str, mode: str = "general"):
-        """Run web search with CSE and fallback APIs."""
+        """Run DuckDuckGo primary search with external fallback APIs."""
         cached_result = self.get_web_search_cache(query)
         if cached_result:
             self.logger.info(f"Web search result from cache for query: {query[:50]}...")
             return cached_result
         
-        self.logger.info(f"CALLING 3x CSE SMART SEARCH for '{query}' (mode: {mode})")
-        
+        active_primary_streams = self.google_search_streams
+        self.logger.info(f"CALLING {active_primary_streams}x DuckDuckGo primary search for '{query}' (mode: {mode})")
+
         FORCE_FALLBACK_REQUEST = "[FORCE FALLBACK]" in query.upper()
         q_base = query.replace("[FORCE FALLBACK]", "").strip()
-        
+
         sub_queries = []
         if " và " in q_base or " and " in q_base.lower() or "," in q_base:
             splitters = re.split(r"\s*(?:và|and|,)\s*", q_base, flags=re.IGNORECASE)
             sub_queries = [q.strip() for q in splitters if q.strip()]
         else:
             sub_queries = [q_base.strip()]
-        
+
+        if len(sub_queries) > 1:
+            self.logger.info(f"Subquery fanout capped to 1 for cost control (from {len(sub_queries)}).")
+            sub_queries = sub_queries[:1]
+
         final_results = []
-        
+
         for q_sub in sub_queries:
             async with self.search_lock:
                 query_lower = q_sub.lower()
@@ -769,67 +810,75 @@ class ToolsManager:
                     if any(keyword in query_lower for keyword in data["keywords"]):
                         selected_topic = topic
                         break
-                
+
                 self.logger.info(f"Classified: {selected_topic.upper()}. Searching for: '{q_sub}'")
-                
+
                 suffixes = self.SEARCH_TOPICS[selected_topic]["suffixes"]
-                random.shuffle(suffixes)
-                
+
                 q1 = q_sub.strip()
-                q2 = f"{q1} {suffixes[0]} OR {suffixes[1]}" if len(suffixes) > 1 else q1
-                q3 = f"{q1} {suffixes[2]} OR {suffixes[3]}" if len(suffixes) > 3 else q1
-                
-                fallback_q = f"{q_sub.strip()} {self.SEARCH_TOPICS['general']['suffixes'][0]} OR {self.SEARCH_TOPICS['general']['suffixes'][1]}"
-                
-                self.logger.info(f"Queries: Q1='{q1}', Q2='{q2}', Q3='{q3}'")
-                
-                cse0_task = asyncio.create_task(self._search_cse(q1, GOOGLE_CSE_ID, GOOGLE_CSE_API_KEY, 0, start_idx=1, force_lang="vi"))
-                cse1_task = asyncio.create_task(self._search_cse(q2, GOOGLE_CSE_ID_1, GOOGLE_CSE_API_KEY_1, 1, start_idx=1, force_lang="en"))
-                cse2_task = asyncio.create_task(self._search_cse(q3, GOOGLE_CSE_ID_2, GOOGLE_CSE_API_KEY_2, 2, start_idx=1, force_lang="en"))
-                
-                cse0_result, cse1_result, cse2_result = await asyncio.gather(
-                    cse0_task, cse1_task, cse2_task, return_exceptions=True
+                q2 = self._build_secondary_query(q1, suffixes)
+
+                fallback_q = q_sub.strip()
+                if not any(word in fallback_q.lower() for word in ["latest", "new", "current", "mới", "hiện tại"]):
+                    fallback_q = f"{fallback_q} latest OR newest OR current"
+
+                self.logger.info(f"Queries: Q1='{q1}', Q2='{q2}'")
+
+                primary_queries = [q1]
+                if active_primary_streams > 1 and q2 and q2.lower() != q1.lower():
+                    primary_queries.append(q2)
+                primary_tasks = [
+                    asyncio.create_task(self._search_duckduckgo(p_query, idx))
+                    for idx, p_query in enumerate(primary_queries)
+                ]
+                primary_results = await asyncio.gather(*primary_tasks, return_exceptions=True)
+
+                primary_parts = []
+                for idx, p_result in enumerate(primary_results):
+                    if isinstance(p_result, Exception):
+                        self.logger.error(f"PrimarySearch{idx} error: {p_result}")
+                        primary_parts.append("")
+                    else:
+                        primary_parts.append(p_result or "")
+
+                has_primary_result = any(primary_parts)
+                has_enough_primary_context = self._is_search_result_sufficient(primary_parts)
+                should_run_fallback = (
+                    FORCE_FALLBACK_REQUEST
+                    or (not has_primary_result)
+                    or (has_primary_result and not has_enough_primary_context)
                 )
-                
-                def safe_result(r, name):
-                    if isinstance(r, Exception):
-                        self.logger.error(f"{name} error: {r}")
-                        return ""
-                    return r or ""
-                
-                cse0_result = safe_result(cse0_result, "CSE0")
-                cse1_result = safe_result(cse1_result, "CSE1")
-                cse2_result = safe_result(cse2_result, "CSE2")
-                
-                should_run_fallback = FORCE_FALLBACK_REQUEST or not (cse0_result or cse1_result or cse2_result)
-                
+
                 fallback_result = ""
+                fallback_trigger_reason = "none"
                 if should_run_fallback:
-                    log_message = "AI requested [FORCE FALLBACK]" if FORCE_FALLBACK_REQUEST else "All CSE empty/error"
-                    self.logger.warning(f"{log_message} → Running Fallback API.")
-                    
+                    if FORCE_FALLBACK_REQUEST:
+                        fallback_trigger_reason = "forced"
+                        reason = "AI requested [FORCE FALLBACK]"
+                    elif not has_primary_result:
+                        fallback_trigger_reason = "empty_primary"
+                        reason = "All DuckDuckGo streams empty/error"
+                    else:
+                        fallback_trigger_reason = "insufficient_primary"
+                        reason = "DuckDuckGo context chưa đủ thông tin"
+                    self.logger.warning(f"{reason} → Running external fallback APIs.")
+
                     fallback_result = await self._run_fallback_search(fallback_q)
                     if fallback_result:
-                        self.logger.info(f"Fallback success.")
+                        self.logger.info("Fallback success.")
                     else:
                         self.logger.warning("Fallback failed.")
-                
-                parts = [str(x) for x in [cse0_result, cse1_result, cse2_result, fallback_result] if x]
-                
+
+                parts = [str(x) for x in [*primary_parts, fallback_result] if x]
+
+                self.logger.info(
+                    f"AB_METRIC search_query topic={selected_topic} primary_success={1 if has_primary_result else 0} "
+                    f"fallback_trigger={1 if should_run_fallback else 0} fallback_reason={fallback_trigger_reason}"
+                )
+
                 if parts:
                     merged = "\n\n".join(parts)
-                    unique_lines = []
-                    seen_links = set()
-                    for line in merged.splitlines():
-                        match = re.search(r"\(Nguồn: (.*?)\)", line)
-                        if match:
-                            link = match.group(1)
-                            if link not in seen_links:
-                                seen_links.add(link)
-                                unique_lines.append(line)
-                        else:
-                            unique_lines.append(line)
-                    final_text = "\n".join(unique_lines)
+                    final_text = self._dedupe_source_lines(merged)
                     final_results.append(f"### 🔍 [Chủ đề: {selected_topic.upper()}] Kết quả cho '{q_sub}':\n{final_text.strip()}")
         
         if final_results:
@@ -838,13 +887,13 @@ class ToolsManager:
             self.logger.info(f"Completed search for {len(final_results)} subqueries and cached.")
             return combined_final_results
         
-        self.logger.error("All 3 CSE + fallback FAILED.")
+        self.logger.error("All DuckDuckGo primary + fallback providers FAILED.")
         return ""
     
     async def call_tool(self, function_call, user_id: str):
         """Dispatch tool calls to appropriate handlers."""
         name = function_call.name
-        args = dict(function_call.args)
+        args = dict(function_call.args) if function_call.args else {}
         self.logger.info(f"TOOL CALLED: {name} | Args: {args} | User: {user_id}")
         
         try:
@@ -878,11 +927,7 @@ class ToolsManager:
                 if not image_url or not question:
                     return "Lỗi: 'image_url' và 'question' không được rỗng cho image_recognition."
                 return await self.run_image_recognition(image_url, question)
-            
-            elif name == "list_google_drive_files":
-                folder_id = args.get("folder_id")
-                return await self.run_list_google_drive_files(folder_id)
-            
+
             else:
                 return "Tool không tồn tại!"
         
