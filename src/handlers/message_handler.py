@@ -10,6 +10,7 @@ import json
 import threading
 import re
 import random
+import traceback
 
 from src.core.config import logger, Config
 from src.core.prompt_loader import (
@@ -72,6 +73,8 @@ class MessageHandler:
         self.key_lock = threading.Lock()
         self.api_key_request_history: Dict[str, List[float]] = {}
         self.api_key_history_lock = threading.Lock()
+        self._gemini_clients: Dict[str, Any] = {}
+        self._gemini_clients_lock = threading.Lock()
     
     def _sanitize_mentions(self, text: str) -> str:
         """Disable @mention by replacing @ with escaped \\@ to prevent pings.
@@ -477,6 +480,64 @@ class MessageHandler:
         ]
         return any(token in lowered for token in strict_invalid_markers)
 
+    def _get_or_create_gemini_client(self, api_key: str):
+        with self._gemini_clients_lock:
+            existing = self._gemini_clients.get(api_key)
+            if existing is not None:
+                return existing
+            client = genai.Client(api_key=api_key)
+            self._gemini_clients[api_key] = client
+            return client
+
+    @staticmethod
+    def _extract_errno(error: Exception) -> Optional[int]:
+        candidates = [error, getattr(error, "__cause__", None), getattr(error, "__context__", None)]
+        for candidate in candidates:
+            if candidate is None:
+                continue
+            errno_value = getattr(candidate, "errno", None)
+            if isinstance(errno_value, int):
+                return errno_value
+        return None
+
+    def _log_gemini_exception(
+        self,
+        *,
+        stage: str,
+        error: Exception,
+        user_id: Optional[str] = None,
+        model_alias: Optional[str] = None,
+        model_name: Optional[str] = None,
+        api_key: Optional[str] = None,
+        attempt: Optional[int] = None,
+        max_attempts: Optional[int] = None,
+    ) -> None:
+        key_alias = f"...{api_key[-4:]}" if api_key else "<none>"
+        errno_value = self._extract_errno(error)
+        attempt_label = ""
+        if attempt is not None and max_attempts is not None:
+            attempt_label = f" attempt={attempt}/{max_attempts}"
+
+        self.logger.error(
+            f"[{stage}] exception{attempt_label} user={user_id or '<unknown>'} "
+            f"model_alias={model_alias or '<unknown>'} model_name={model_name or '<unknown>'} "
+            f"key={key_alias} errno={errno_value} error={type(error).__name__}: {error}"
+        )
+        self.logger.error(traceback.format_exc())
+
+    async def close_gemini_clients(self) -> None:
+        clients_to_close: List[Any] = []
+        with self._gemini_clients_lock:
+            for client in self._gemini_clients.values():
+                clients_to_close.append(client)
+            self._gemini_clients.clear()
+
+        for client in clients_to_close:
+            try:
+                await asyncio.to_thread(client.close)
+            except Exception as close_error:
+                self.logger.warning(f"Gemini client close warning: {close_error}")
+
 
     async def _throttle_api_request(self, api_key: str) -> None:
         """
@@ -613,7 +674,7 @@ class MessageHandler:
         if tools:
             request_config["tools"] = tools
 
-        client = genai.Client(api_key=api_key)
+        client = self._get_or_create_gemini_client(api_key)
         return await asyncio.to_thread(
             client.models.generate_content,
             model=model_name,
@@ -680,6 +741,7 @@ class MessageHandler:
 
         for attempt in range(MAX_RETRIES):
             api_key: Optional[str] = None
+            model_name: Optional[str] = None
             used_model_alias: Optional[str] = None
             key_reservation: Optional[Dict[str, str]] = None
 
@@ -875,7 +937,16 @@ class MessageHandler:
                     await asyncio.sleep(wait_time)
                     continue
 
-                self.logger.error(f"Lite model error (attempt {attempt + 1}/{MAX_RETRIES}): {e}")
+                self._log_gemini_exception(
+                    stage="reasoning_lite",
+                    error=e,
+                    user_id=user_id,
+                    model_alias=used_model_alias,
+                    model_name=model_name,
+                    api_key=api_key,
+                    attempt=attempt + 1,
+                    max_attempts=MAX_RETRIES,
+                )
                 await asyncio.sleep(1 + attempt)
                 continue
         
@@ -1058,7 +1129,16 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
 
                     continue
 
-                self.logger.error(f"Final model error: {e}")
+                self._log_gemini_exception(
+                    stage="final_flash",
+                    error=e,
+                    user_id=user_id,
+                    model_alias=used_model_alias,
+                    model_name=model_name,
+                    api_key=api_key,
+                    attempt=attempt + 1,
+                    max_attempts=MAX_RETRIES,
+                )
                 continue
         
         # Fallback if all retries exhausted
@@ -1178,7 +1258,16 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     await asyncio.sleep(2 + attempt * 2)
                     continue
 
-                self.logger.error(f"Fallback lite error: {e}")
+                self._log_gemini_exception(
+                    stage="fallback_lite",
+                    error=e,
+                    user_id=user_id,
+                    model_alias=used_model_alias,
+                    model_name=model_name,
+                    api_key=api_key,
+                    attempt=attempt + 1,
+                    max_attempts=MAX_RETRIES,
+                )
                 continue
         
         return "[System] Model unavailable, please try again later."

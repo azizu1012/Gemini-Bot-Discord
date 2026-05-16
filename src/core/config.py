@@ -1,14 +1,19 @@
+import logging
 import os
 from pathlib import Path
+from typing import Dict, Optional
+
 from dotenv import load_dotenv
-import logging
-from typing import Optional
 
 
-def _load_runtime_env() -> None:
+def _detect_project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _load_runtime_env(project_root: Path) -> None:
     current = Path(__file__).resolve()
     root_env_path = current.parents[3] / ".env"
-    project_env_path = current.parents[2] / ".env"
+    project_env_path = project_root / ".env"
 
     if project_env_path.exists():
         load_dotenv(dotenv_path=project_env_path)
@@ -42,89 +47,86 @@ class Config:
         return value
 
     def __init__(self):
-        _load_runtime_env()
-        
+        self.PROJECT_ROOT = _detect_project_root()
+        _load_runtime_env(self.PROJECT_ROOT)
+
+        # --- FILE PATHS (ABSOLUTE & CWD-INDEPENDENT) ---
+        self.DB_PATH = self._resolve_db_path()
+        self.DB_BACKUP_PATH = self._resolve_db_backup_path()
+        self.NOTE_PATH = self._resolve_runtime_path("NOTE_PATH", "data/notes.txt")
+        self.MEMORY_PATH = self._resolve_runtime_path("MEMORY_PATH", "data/short_term_memory.json")
+        self.WEATHER_CACHE_PATH = self._resolve_runtime_path("WEATHER_CACHE_PATH", "data/weather_cache.json")
+        self.FILE_STORAGE_PATH = self._resolve_runtime_path("FILE_STORAGE_PATH", "uploaded_files")
+        self.QUOTA_STATE_PATH = self._resolve_runtime_path("ROUTER_QUOTA_STATE_FILE", "data/quota_state.json")
+        self.LOG_PATH = self._resolve_runtime_path("BOT_LOG_PATH", "bot.log")
+
+        # Keep router config aligned with absolute runtime path.
+        os.environ["ROUTER_QUOTA_STATE_FILE"] = self.QUOTA_STATE_PATH
+
+        # --- VOICE ROOM OWNER LOCK ---
+        self.VOICE_LOCK_BASE_DIR = self._resolve_runtime_path("VOICE_LOCK_BASE_DIR", "data/voice_lock")
+        self.VOICE_WHITELIST_FILE = str(Path(self.VOICE_LOCK_BASE_DIR) / "users.json")
+        self.LOCKED_CHANNELS_FILE = str(Path(self.VOICE_LOCK_BASE_DIR) / "locked_channels.json")
+        self.ENFORCED_NAMES_FILE = str(Path(self.VOICE_LOCK_BASE_DIR) / "enforced_names.json")
+        self.VOICE_LOCK_LOG_FILE = str(Path(self.VOICE_LOCK_BASE_DIR) / "voice_lock.log")
+
+        self._ensure_runtime_directories()
+
         # --- LOGGING SETUP ---
         self.logger = self._setup_logger()
-        
+
         # --- DISCORD & BOT ---
-        self.TOKEN = os.getenv('DISCORD_TOKEN')
-        self.MODEL_NAME = os.getenv('MODEL_NAME', 'gemini-3-flash-preview')
-        self.ADMIN_ID = os.getenv('ADMIN_ID', '')
-        self.ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '')
-        self.HABE_USER_ID = os.getenv('HABE_USER_ID', '')
-        self.MIRA_USER_ID = os.getenv('MIRA_USER_ID', '')
-        self.ADO_FAT_USER_ID = os.getenv('ADO_FAT_USER_ID', '')
-        self.MUC_RIM_USER_ID = os.getenv('MUC_RIM_USER_ID', '')
-        self.SUC_VIEN_USER_ID = os.getenv('SUC_VIEN_USER_ID', '')
-        self.CHUI_USER_ID = os.getenv('CHUI_USER_ID', '')
-        
+        self.TOKEN = os.getenv("DISCORD_TOKEN")
+        self.MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3-flash-preview")
+        self.ADMIN_ID = os.getenv("ADMIN_ID", "")
+        self.ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
+        self.HABE_USER_ID = os.getenv("HABE_USER_ID", "")
+        self.MIRA_USER_ID = os.getenv("MIRA_USER_ID", "")
+        self.ADO_FAT_USER_ID = os.getenv("ADO_FAT_USER_ID", "")
+        self.MUC_RIM_USER_ID = os.getenv("MUC_RIM_USER_ID", "")
+        self.SUC_VIEN_USER_ID = os.getenv("SUC_VIEN_USER_ID", "")
+        self.CHUI_USER_ID = os.getenv("CHUI_USER_ID", "")
+
         # --- GEMINI API KEYS (DYNAMIC LOAD) ---
         self.GEMINI_API_KEYS = []
         seen_keys = set()
 
-        # Primary format: GEMINI_API_KEY_1..20
         for i in range(1, 21):
-            key = (os.getenv(f'GEMINI_API_KEY_{i}') or '').strip()
+            key = (os.getenv(f"GEMINI_API_KEY_{i}") or "").strip()
             if key and key not in seen_keys:
                 seen_keys.add(key)
                 self.GEMINI_API_KEYS.append(key)
 
-        # Compatibility format used by older runtime envs
         for name in [
-            'GEMINI_API_KEY_PROD',
-            'GEMINI_API_KEY_TEST',
-            'GEMINI_API_KEY_BACKUP',
-            'GEMINI_API_KEY_EXTRA1',
-            'GEMINI_API_KEY_EXTRA2',
+            "GEMINI_API_KEY_PROD",
+            "GEMINI_API_KEY_TEST",
+            "GEMINI_API_KEY_BACKUP",
+            "GEMINI_API_KEY_EXTRA1",
+            "GEMINI_API_KEY_EXTRA2",
         ]:
-            key = (os.getenv(name) or '').strip()
+            key = (os.getenv(name) or "").strip()
             if key and key not in seen_keys:
                 seen_keys.add(key)
                 self.GEMINI_API_KEYS.append(key)
-        
+
         if not self.GEMINI_API_KEYS:
             self.logger.error("Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.")
         else:
             self.logger.info(f"✅ Đã thiết lập {len(self.GEMINI_API_KEYS)} Gemini API keys cho Smart Rotation.")
-        
+
         # --- SEARCH API KEYS ---
-        self.SERPAPI_API_KEY = os.getenv('SERPAPI_API_KEY')
-        self.TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
-        self.EXA_API_KEY = os.getenv('EXA_API_KEY')
-        
+        self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
+        self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+        self.EXA_API_KEY = os.getenv("EXA_API_KEY")
+
         # --- WEATHER API ---
-        self.WEATHER_API_KEY = os.getenv('WEATHER_API_KEY')
-        self.CITY = os.getenv('CITY')
-        
-        # --- FILE PATHS ---
-        project_root = Path(__file__).resolve().parents[2]
+        self.WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
+        self.CITY = os.getenv("CITY")
 
-        def _resolve_runtime_path(env_name: str, default_relative_path: str) -> str:
-            raw_path = (os.getenv(env_name) or "").strip()
-            target = Path(raw_path) if raw_path else (project_root / default_relative_path)
-            if not target.is_absolute():
-                target = project_root / target
-            return str(target.resolve())
-
-        self.DB_PATH = _resolve_runtime_path('DB_PATH', 'data/chat_history.db')
-        self.DB_BACKUP_PATH = _resolve_runtime_path('DB_BACKUP_PATH', 'data/chat_history_backup.db')
-        self.NOTE_PATH = _resolve_runtime_path('NOTE_PATH', 'data/notes.txt')
-        self.MEMORY_PATH = _resolve_runtime_path('MEMORY_PATH', 'data/short_term_memory.json')
-        self.WEATHER_CACHE_PATH = _resolve_runtime_path('WEATHER_CACHE_PATH', 'data/weather_cache.json')
-        self.FILE_STORAGE_PATH = _resolve_runtime_path('FILE_STORAGE_PATH', 'uploaded_files')
-
-        # --- VOICE ROOM OWNER LOCK ---
-        self.VOICE_LOCK_BASE_DIR = os.path.join(os.path.dirname(__file__), '../../data/voice_lock')
-        self.VOICE_WHITELIST_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'users.json')
-        self.LOCKED_CHANNELS_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'locked_channels.json')
-        self.ENFORCED_NAMES_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'enforced_names.json')
-        self.VOICE_LOCK_LOG_FILE = os.path.join(self.VOICE_LOCK_BASE_DIR, 'voice_lock.log')
-        
         # --- ANTI-SPAM ---
         self.SPAM_THRESHOLD = 3
         self.SPAM_WINDOW = 30
-        
+
         # --- RATE & DM LIMITS ---
         self.DEFAULT_RATE_LIMIT = "10/60"
         self.PREMIUM_RATE_LIMIT = "20/60"
@@ -139,7 +141,7 @@ class Config:
         self.FALLBACK_MAX_API_RETRIES = self._get_int("FALLBACK_MAX_API_RETRIES", 2, min_value=1, max_value=5)
         self.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = self._get_bool("SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS", True)
         self.SEARCH_ALLOW_PARTIAL_ANSWER = self._get_bool("SEARCH_ALLOW_PARTIAL_ANSWER", True)
-        
+
         # --- GEMINI SAFETY SETTINGS ---
         self.SAFETY_SETTINGS = [
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -147,34 +149,94 @@ class Config:
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ]
-        
+
         # --- MIN FREE SPACE ---
         self.MIN_FREE_SPACE_MB = 100
-    
+
+    def _resolve_runtime_path(self, env_name: str, default_relative_path: str) -> str:
+        raw_path = (os.getenv(env_name) or "").strip()
+        target = Path(raw_path) if raw_path else (self.PROJECT_ROOT / default_relative_path)
+        if not target.is_absolute():
+            target = self.PROJECT_ROOT / target
+        return str(target.resolve())
+
+    def _resolve_db_path(self) -> str:
+        raw_db = (os.getenv("DB_PATH") or "").strip()
+        if raw_db:
+            return self._resolve_runtime_path("DB_PATH", "data/bot_database.db")
+
+        data_dir = self.PROJECT_ROOT / "data"
+        preferred = data_dir / "bot_database.db"
+        legacy = data_dir / "chat_history.db"
+
+        if preferred.exists():
+            return str(preferred.resolve())
+        if legacy.exists():
+            return str(legacy.resolve())
+        return str(preferred.resolve())
+
+    def _resolve_db_backup_path(self) -> str:
+        raw_backup = (os.getenv("DB_BACKUP_PATH") or "").strip()
+        if raw_backup:
+            return self._resolve_runtime_path("DB_BACKUP_PATH", "data/bot_database.db.backup")
+
+        db_path = Path(self.DB_PATH)
+        default_backup = db_path.with_suffix(db_path.suffix + ".backup")
+        return str(default_backup.resolve())
+
+    def _ensure_runtime_directories(self) -> None:
+        runtime_dirs = {
+            Path(self.DB_PATH).parent,
+            Path(self.DB_BACKUP_PATH).parent,
+            Path(self.MEMORY_PATH).parent,
+            Path(self.WEATHER_CACHE_PATH).parent,
+            Path(self.FILE_STORAGE_PATH),
+            Path(self.QUOTA_STATE_PATH).parent,
+            Path(self.VOICE_LOCK_BASE_DIR),
+            Path(self.LOG_PATH).parent,
+        }
+        for directory in runtime_dirs:
+            if directory:
+                directory.mkdir(parents=True, exist_ok=True)
+
+    def get_runtime_paths(self) -> Dict[str, str]:
+        return {
+            "project_root": str(self.PROJECT_ROOT),
+            "db_path": self.DB_PATH,
+            "db_backup_path": self.DB_BACKUP_PATH,
+            "memory_path": self.MEMORY_PATH,
+            "file_storage_path": self.FILE_STORAGE_PATH,
+            "weather_cache_path": self.WEATHER_CACHE_PATH,
+            "quota_state_path": self.QUOTA_STATE_PATH,
+            "voice_lock_base_dir": self.VOICE_LOCK_BASE_DIR,
+            "log_path": self.LOG_PATH,
+        }
+
     def _setup_logger(self):
         """Setup logging system."""
-        logger = logging.getLogger('bot_gemini')
+        logger = logging.getLogger("bot_gemini")
         logger.setLevel(logging.INFO)
-        
+
         if logger.handlers:
             return logger
-        
-        formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-        
-        file_handler = logging.FileHandler('bot.log', encoding='utf-8')
+
+        formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+
+        file_handler = logging.FileHandler(self.LOG_PATH, encoding="utf-8")
         file_handler.setFormatter(formatter)
-        
+
         stream_handler = logging.StreamHandler()
         stream_handler.setFormatter(formatter)
-        
+
         logger.handlers = [file_handler, stream_handler]
         logger.propagate = False
-        
+
         return logger
 
 
 # Global instance
 _config = None
+
 
 def get_config() -> Config:
     """Get or create the global config instance."""
@@ -229,3 +291,6 @@ FINAL_MAX_API_RETRIES = config.FINAL_MAX_API_RETRIES
 FALLBACK_MAX_API_RETRIES = config.FALLBACK_MAX_API_RETRIES
 SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = config.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS
 SEARCH_ALLOW_PARTIAL_ANSWER = config.SEARCH_ALLOW_PARTIAL_ANSWER
+PROJECT_ROOT = str(config.PROJECT_ROOT)
+LOG_PATH = config.LOG_PATH
+QUOTA_STATE_PATH = config.QUOTA_STATE_PATH

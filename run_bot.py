@@ -3,8 +3,9 @@
 Run Azuris bot with optional web server.
 
 Usage:
-    python run_bot.py                  # Run bot only
-    python run_bot.py --server         # Run bot + Flask web server
+    python run_bot.py                     # Run bot only
+    python run_bot.py --server            # Run bot + Flask web server
+    python run_bot.py --preflight         # Validate runtime and exit
 """
 
 import argparse
@@ -13,9 +14,10 @@ import sys
 from threading import Thread
 
 from src.core.config import get_config, logger
+from src.core.preflight import emit_startup_banner, run_preflight_checks
 from src.handlers.bot_core import BotCore
-from src.handlers.message_handler import MessageHandler
 from src.handlers.bot_server import BotServer
+from src.handlers.message_handler import MessageHandler
 
 
 def _mask_token(token: str) -> str:
@@ -35,6 +37,7 @@ def _register_message_handler(bot_core: BotCore, message_handler: MessageHandler
 
 async def run_bot_only(config):
     """Run bot without web server."""
+    message_handler = None
     try:
         bot_core = BotCore(config)
         logger.info("BotCore initialized")
@@ -53,10 +56,14 @@ async def run_bot_only(config):
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         sys.exit(1)
+    finally:
+        if message_handler is not None:
+            await message_handler.close_gemini_clients()
 
 
 async def run_bot_with_server(config):
     """Run bot with Flask web server."""
+    message_handler = None
     try:
         bot_core = BotCore(config)
         logger.info("BotCore initialized")
@@ -85,18 +92,32 @@ async def run_bot_with_server(config):
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         sys.exit(1)
+    finally:
+        if message_handler is not None:
+            await message_handler.close_gemini_clients()
 
 
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(description="Azuris Discord Bot")
     parser.add_argument("--server", action="store_true", help="Enable Flask web server")
-    parser.add_argument("--config", type=str, default=".env", help="Config file path")
+    parser.add_argument("--preflight", action="store_true", help="Validate runtime paths/dependencies and exit")
+    parser.add_argument("--config", type=str, default=".env", help="Config file path (legacy, retained for compatibility)")
 
     args = parser.parse_args()
 
     config = get_config()
     logger.info("Configuration loaded")
+    emit_startup_banner(config)
+
+    preflight_require_token = not args.preflight
+    preflight_ok, _ = run_preflight_checks(config, require_token=preflight_require_token)
+    if not preflight_ok:
+        sys.exit(1)
+
+    if args.preflight:
+        logger.info("Preflight only mode complete.")
+        sys.exit(0)
 
     if not config.TOKEN:
         logger.error("Missing DISCORD_TOKEN. Please set it in your environment.")

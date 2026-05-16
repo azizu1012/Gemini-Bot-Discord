@@ -15,6 +15,7 @@ Hoặc chạy launcher:
 ```bash
 python run_bot.py
 python run_bot.py --server
+python run_bot.py --preflight
 ```
 
 Linux/Ubuntu launcher có hỗ trợ PM2:
@@ -23,6 +24,69 @@ Linux/Ubuntu launcher có hỗ trợ PM2:
 ./run_bot.sh --server
 ./run_bot.sh --pm2 --server
 ./run_bot.sh --pm2-fresh --server
+./run_bot.sh --preflight-only
+```
+
+## Runtime hardening (cross-platform)
+
+- Path runtime đã được chuẩn hóa theo `PROJECT_ROOT` tuyệt đối, không còn phụ thuộc `cwd`.
+- Runtime folders/file sẽ tự tạo trước khi dùng (`data/`, `uploaded_files/`, `logs/`, quota state, voice lock files...).
+- Startup banner luôn in:
+  - Python executable
+  - current working directory
+  - project root
+  - resolved runtime paths
+- Preflight (`--preflight`) sẽ validate:
+  - dependency versions quan trọng
+  - writable DB/memory/upload/quota/log paths
+
+## Deploy runbook chuẩn (Linux + PM2)
+
+1. Clone đúng repo và cài venv:
+
+```bash
+git clone https://github.com/azizu1012/Gemini-Bot-Discord.git Azuris_bot
+cd Azuris_bot
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+2. Cấu hình `.env` (tối thiểu `DISCORD_TOKEN`, `GEMINI_API_KEY_1...`).
+
+3. Chạy preflight trước khi start:
+
+```bash
+python run_bot.py --preflight
+```
+
+4. Start bằng ecosystem có `cwd` cố định:
+
+```bash
+BOT_ENABLE_SERVER=1 pm2 start ecosystem.config.js --only azuris-bot --update-env
+# hoặc bot-only:
+BOT_ENABLE_SERVER=0 pm2 start ecosystem.config.js --only azuris-bot --update-env
+pm2 save
+```
+
+5. Verify sau deploy:
+
+```bash
+pm2 logs azuris-bot --lines 120
+```
+
+Checklist log cần thấy:
+- Startup banner in đúng `Project root` và resolved paths.
+- Không còn `unable to open database file`.
+- Không còn `Fallback lite error: [Errno 2]`.
+
+6. Nếu PM2 bị lỗi stale `pidusage`:
+
+```bash
+pm2 update
+pm2 restart azuris-bot
+pm2 save
 ```
 
 ## Cấu hình tối thiểu
