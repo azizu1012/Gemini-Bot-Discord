@@ -27,7 +27,9 @@ TOOL POLICY:
 - For multi-intent requests, split intents mentally and process in small batches while keeping evidence isolated per intent.
 - Reuse tool context already collected in this turn.
 - Trigger fallback search only when primary context is empty/insufficient.
-- If evidence is still insufficient, request a little more time or ask for trusted links; do not finalize with guesses.
+- Prioritize grounded evidence excerpts in TOOL RESULTS over raw snippets when available.
+- Do not finalize factual claims that are absent from TOOL RESULTS evidence.
+- If evidence is insufficient or conflicting, request a little more time or ask for trusted links; do not finalize with guesses.
 
 RELIABILITY POLICY:
 - Treat transient errors (429/503/unavailable/overloaded/resource_exhausted) as retryable.

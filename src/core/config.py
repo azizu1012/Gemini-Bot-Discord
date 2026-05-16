@@ -137,7 +137,7 @@ class Config:
         self.REASONING_MAX_LOOPS = self._get_int("REASONING_MAX_LOOPS", 3, min_value=1, max_value=6)
         self.FINAL_MAX_API_RETRIES = self._get_int("FINAL_MAX_API_RETRIES", 3, min_value=1, max_value=6)
         self.FALLBACK_MAX_API_RETRIES = self._get_int("FALLBACK_MAX_API_RETRIES", 2, min_value=1, max_value=5)
-        self.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = self._get_bool("SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS", False)
+        self.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = self._get_bool("SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS", True)
         self.SEARCH_ALLOW_PARTIAL_ANSWER = self._get_bool("SEARCH_ALLOW_PARTIAL_ANSWER", True)
         
         # --- GEMINI SAFETY SETTINGS ---

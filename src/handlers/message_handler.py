@@ -534,30 +534,39 @@ class MessageHandler:
     def _is_tool_result_sufficient(self, tool_results: str) -> bool:
         if not tool_results:
             return False
+
         lower = tool_results.lower()
-        markers = [
-            "top trusted sources",
-            "required reputable sources",
-            "reputable sources found",
+        marker_groups = [
+            ["top ranked sources", "required quality sources", "quality sources found"],
+            ["top trusted sources", "required reputable sources", "reputable sources found"],
         ]
-        if not all(marker in lower for marker in markers):
+        if not any(all(marker in lower for marker in group) for group in marker_groups):
             return False
 
-        req_matches = [int(v) for v in re.findall(r"required reputable sources:\s*(\d+)", lower)]
-        found_matches = [int(v) for v in re.findall(r"reputable sources found:\s*(\d+)", lower)]
+        req_matches = [
+            int(v)
+            for v in re.findall(r"required (?:quality|reputable) sources:\s*(\d+)", lower)
+        ]
+        found_matches = [
+            int(v)
+            for v in re.findall(r"(?:quality|reputable) sources found:\s*(\d+)", lower)
+        ]
         if not req_matches or not found_matches:
             return False
 
         required = req_matches[-1]
         found = found_matches[-1]
-        return found >= required and "chưa đủ nguồn uy tín" not in lower
+        return found >= required and "chưa đủ nguồn chất lượng" not in lower and "chưa đủ nguồn uy tín" not in lower
 
     def _has_minimum_search_evidence(self, tool_results: str) -> bool:
         if not tool_results:
             return False
 
         lower = tool_results.lower()
-        found_matches = [int(v) for v in re.findall(r"reputable sources found:\s*(\d+)", lower)]
+        found_matches = [
+            int(v)
+            for v in re.findall(r"(?:quality|reputable) sources found:\s*(\d+)", lower)
+        ]
         if found_matches and found_matches[-1] >= 1:
             return True
 
@@ -629,7 +638,7 @@ class MessageHandler:
                 followup_messages = [msg.copy() for msg in messages]
                 followup_messages.append({
                     "role": "user",
-                    "parts": [{"text": "Continue current request. Retrieve missing evidence with one focused web_search. Use [FORCE FALLBACK] only if needed."}],
+                    "parts": [{"text": "Continue current request. Retrieve missing evidence with one focused web_search, prioritize authoritative/official sources, compare claims, and avoid asking user for extra links. Use [FORCE FALLBACK] only if needed."}],
                 })
 
                 retry_reasoning, retry_tool_results = await self._call_gemini_reasoning_loop(followup_messages, user_id)
@@ -721,7 +730,7 @@ class MessageHandler:
                         self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
 
                         if tool_name == "web_search" and web_search_calls >= 1:
-                            budget_msg = "Search budget reached for this turn. If evidence is insufficient, ask user for a little more time or a direct trusted link."
+                            budget_msg = "Search budget reached for this turn. Keep the current evidence and continue with cautious synthesis; do not request extra links from user."
                             reasoning_messages.append({"role": "model", "parts": [part]})
                             reasoning_messages.append({
                                 "role": "function",
@@ -781,7 +790,7 @@ class MessageHandler:
 
                                 # Enforce one web search call per turn
                                 if tool_name_l == "web_search" and web_search_calls >= 1:
-                                    budget_msg = "Search budget reached for this turn. If evidence is insufficient, ask user for a little more time or a direct trusted link."
+                                    budget_msg = "Search budget reached for this turn. Keep the current evidence and continue with cautious synthesis; do not request extra links from user."
                                     reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
                                     reasoning_messages.append({
                                         "role": "function",
@@ -899,10 +908,14 @@ class MessageHandler:
                     "Respond with uncertainty markers and suggest official verification link for final confirmation."
                 ).strip()
             else:
-                return (
-                    "Mình cần thêm một chút thời gian để xác minh đủ nguồn uy tín trước khi kết luận. "
-                    "Nếu bạn có link chính thức/trusted thì gửi thêm để mình khóa kết quả chính xác hơn."
-                )
+                self.logger.info(f"Evidence still limited for {user_id}; auto-switching to strict uncertainty response mode.")
+                reasoning_result = (
+                    (reasoning_result or "")
+                    + "\n\n[AUTO_RETRIEVAL_LIMIT_REACHED]\n"
+                    "Evidence remains below strict threshold after automatic retrieval. "
+                    "Respond with uncertainty markers, provide the best supported comparison from current sources, "
+                    "and avoid requesting additional links from user."
+                ).strip()
 
         for attempt in range(MAX_RETRIES):
             api_key: Optional[str] = None

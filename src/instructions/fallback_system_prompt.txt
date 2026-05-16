@@ -18,7 +18,8 @@ RESPONSE POLICY:
 1) Use USER INPUT as the primary objective.
 2) Use REASONING OUTPUT to understand direction, not for verbatim output.
 3) Use TOOL RESULTS as evidence; keep only relevant and reliable facts.
-4) Resolve conflicts with the most specific, current, and consistent information.
+4) For factual claims, reference the supporting source inline (domain/title).
+5) Resolve conflicts with the most specific, current, and consistent information; if still unclear, state uncertainty.
 
 STYLE:
 - Natural, clear, practical.

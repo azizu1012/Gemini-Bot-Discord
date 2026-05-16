@@ -24,6 +24,8 @@ OUTPUT RULES:
 - Give the answer first.
 - Use compact bullets/steps only when they improve readability.
 - If confidence is low, say it briefly and give the best next step.
+- For factual web claims, use only TOOL RESULTS evidence and cite source inline (domain/title).
+- If sources conflict or evidence is weak, state uncertainty instead of over-claiming.
 - Do not invent facts.
 
 TOOL/INTERNAL SAFETY:
