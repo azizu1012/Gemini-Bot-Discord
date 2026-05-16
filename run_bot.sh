@@ -71,7 +71,10 @@ else
   echo -e "${GREEN}[OK]${NC} Virtual environment exists"
 fi
 
-VENV_PY="$PROJECT_ROOT/venv/bin/python"
+VENV_PY="$PROJECT_ROOT/venv/bin/python3"
+if [ ! -x "$VENV_PY" ] && [ -x "$PROJECT_ROOT/venv/bin/python" ]; then
+  VENV_PY="$PROJECT_ROOT/venv/bin/python"
+fi
 if [ ! -x "$VENV_PY" ]; then
   echo -e "${RED}[ERROR]${NC} Missing venv interpreter: $VENV_PY"
   exit 1

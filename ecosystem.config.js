@@ -10,7 +10,7 @@ module.exports = {
       cwd: projectRoot,
       script: path.join(projectRoot, "run_bot.py"),
       args: enableServer ? ["--server"] : [],
-      interpreter: path.join(projectRoot, "venv", "bin", "python"),
+      interpreter: path.join(projectRoot, "venv", "bin", "python3"),
       watch: false,
       max_memory_restart: "1G",
       autorestart: true,
