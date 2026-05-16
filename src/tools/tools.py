@@ -1140,7 +1140,7 @@ class ToolsManager:
 
         def _fetch_once(timeout_sec: int) -> str:
             headers = {
-                "User-Agent": "Mozilla/5.0 (AzurisBot/1.0)",
+                "User-Agent": "Mozilla/5.0 (ChadGibitiBot/1.0)",
                 "Accept": "text/html,application/xhtml+xml",
                 "Accept-Language": "en-US,en;q=0.8,vi;q=0.7",
             }

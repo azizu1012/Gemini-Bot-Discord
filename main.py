@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Thin entrypoint for Azuris.
+Thin entrypoint for Chad Gibiti.
 
 This file delegates startup to run_bot.py so there is one canonical
 runtime launcher path to maintain.

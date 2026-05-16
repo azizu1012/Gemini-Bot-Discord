@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run Azuris bot with optional web server.
+Run Chad Gibiti bot with optional web server.
 
 Usage:
     python run_bot.py                     # Run bot only
@@ -47,7 +47,7 @@ async def run_bot_only(config):
 
         _register_message_handler(bot_core, message_handler)
 
-        logger.info("Starting Azuris Discord bot")
+        logger.info("Starting Chad Gibiti Discord bot")
         await bot_core.start(config.TOKEN)
 
     except KeyError as e:
@@ -83,7 +83,7 @@ async def run_bot_with_server(config):
         server_thread.start()
         logger.info("Web server started in background")
 
-        logger.info("Starting Azuris Discord bot with web server")
+        logger.info("Starting Chad Gibiti Discord bot with web server")
         await bot_core.start(config.TOKEN)
 
     except KeyError as e:
@@ -99,7 +99,7 @@ async def run_bot_with_server(config):
 
 def main():
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Azuris Discord Bot")
+    parser = argparse.ArgumentParser(description="Chad Gibiti Discord Bot")
     parser.add_argument("--server", action="store_true", help="Enable Flask web server")
     parser.add_argument("--preflight", action="store_true", help="Validate runtime paths/dependencies and exit")
     parser.add_argument("--config", type=str, default=".env", help="Config file path (legacy, retained for compatibility)")

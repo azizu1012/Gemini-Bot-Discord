@@ -1,6 +1,6 @@
-# Azuris Discord Bot
+# Chad Gibiti Discord Bot
 
-Azuris là Discord bot dùng pipeline Gemini 2 tầng (reasoning/tool loop + final synthesis), có memory dài hạn qua SQLite, shared knowledge có kiểm soát, và lớp ổn định runtime cho production (cache, retry budget, PM2 fresh mode).
+Chad Gibiti là Discord bot dùng pipeline Gemini 2 tầng (reasoning/tool loop + final synthesis), có memory dài hạn qua SQLite, shared knowledge có kiểm soát, và lớp ổn định runtime cho production (cache, retry budget, PM2 fresh mode).
 
 ## Quick start
 

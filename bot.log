@@ -1,0 +1,25 @@
+2026-05-16 22:32:23,746 [INFO] ✅ Đã thiết lập 15 Gemini API keys cho Smart Rotation.
+2026-05-16 22:32:38,137 [INFO] Configuration loaded
+2026-05-16 22:32:38,137 [INFO] ======================================================================
+2026-05-16 22:32:38,137 [INFO] AZURIS STARTUP CONTEXT
+2026-05-16 22:32:38,137 [INFO] ======================================================================
+2026-05-16 22:32:38,137 [INFO] Python executable: C:\Users\Azuree\AppData\Local\Programs\Python\Python313\python.exe
+2026-05-16 22:32:38,137 [INFO] Current working directory: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base
+2026-05-16 22:32:38,137 [INFO] Project root: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base
+2026-05-16 22:32:38,138 [INFO] Runtime path [project_root]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base
+2026-05-16 22:32:38,138 [INFO] Runtime path [db_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\bot_database.db
+2026-05-16 22:32:38,138 [INFO] Runtime path [db_backup_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\bot_database.db.backup
+2026-05-16 22:32:38,138 [INFO] Runtime path [memory_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\short_term_memory.json
+2026-05-16 22:32:38,138 [INFO] Runtime path [file_storage_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\uploaded_files
+2026-05-16 22:32:38,138 [INFO] Runtime path [weather_cache_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\weather_cache.json
+2026-05-16 22:32:38,138 [INFO] Runtime path [quota_state_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\quota_state.json
+2026-05-16 22:32:38,138 [INFO] Runtime path [voice_lock_base_dir]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\voice_lock
+2026-05-16 22:32:38,138 [INFO] Runtime path [log_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\bot.log
+2026-05-16 22:32:38,138 [INFO] ======================================================================
+2026-05-16 22:32:38,149 [INFO] Dependency [google-genai] = 1.52.0
+2026-05-16 22:32:38,150 [INFO] Dependency [discord.py] = 2.6.4
+2026-05-16 22:32:38,150 [INFO] Dependency [python-dotenv] = 1.2.1
+2026-05-16 22:32:38,150 [INFO] Dependency [Flask] = 3.1.2
+2026-05-16 22:32:38,150 [INFO] Dependency [aiohttp] = 3.9.5
+2026-05-16 22:32:38,150 [INFO] Preflight checks passed.
+2026-05-16 22:32:38,150 [INFO] Preflight only mode complete.

@@ -1,5 +1,5 @@
 ================================================================================
-AZURIS - PROJECT TECHNICAL INFO
+CHAD GIBITI - PROJECT TECHNICAL INFO
 ================================================================================
 
 Mục tiêu tài liệu:
@@ -11,7 +11,7 @@ Mục tiêu tài liệu:
 1) PRODUCT GOALS
 ================================================================================
 
-Azuris được thiết kế để:
+Chad Gibiti được thiết kế để:
 - Trả lời hội thoại Discord theo ngữ cảnh.
 - Dùng tool-calling để lấy thông tin thời gian thực.
 - Duy trì memory dài hạn hữu dụng, không chỉ short-term.

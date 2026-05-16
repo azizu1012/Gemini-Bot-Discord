@@ -33,7 +33,7 @@ Azuris_refactor_code_base/
     │   ├── bot_server.py
     │   └── message_handler.py
     ├── instructions/
-    │   ├── azuris_system_prompt.txt
+    │   ├── azuris_system_prompt.txt (legacy filename, content is Chad Gibiti identity)
     │   ├── fallback_system_prompt.txt
     │   └── lite_reasoning_prompt.txt
     ├── managers/
@@ -96,6 +96,7 @@ Tool layer:
 Prompt and config:
 - src/core/system_prompt.py:
   Hành vi assistant, quy tắc memory, output policy.
+  (Identity đã chuyển sang Chad Gibiti)
 
 - src/core/prompt_loader.py:
   Nạp prompt templates dùng cho các tầng model.

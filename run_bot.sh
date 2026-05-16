@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 ################################################################################
-# AZURIS DISCORD BOT - UBUNTU/LINUX LAUNCHER
+# CHAD GIBITI DISCORD BOT - UBUNTU/LINUX LAUNCHER
 # Usage:
 #   ./run_bot.sh
 #   ./run_bot.sh --server
@@ -49,7 +49,7 @@ done
 cd "$PROJECT_ROOT"
 
 echo "==============================================="
-echo "  Azuris Discord Bot - Linux/Ubuntu Launcher"
+echo "  Chad Gibiti Discord Bot - Linux/Ubuntu Launcher"
 echo "==============================================="
 echo "Project root: $PROJECT_ROOT"
 echo ""
