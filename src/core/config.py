@@ -87,6 +87,9 @@ class Config:
         self.SUC_VIEN_USER_ID = os.getenv("SUC_VIEN_USER_ID", "")
         self.CHUI_USER_ID = os.getenv("CHUI_USER_ID", "")
 
+        # --- DONATE ENCRYPTION ---
+        self.DONATE_ENCRYPTION_KEY = os.getenv("DONATE_ENCRYPTION_KEY", "")
+
         # --- GEMINI API KEYS (PATTERN-BASED DYNAMIC LOAD) ---
         # Accept any env var like GEMINI_API_KEY_1..N and optional named extras.
         # Exclude summary-only keys (GEMINI_API_KEY_TOMTAT_*).
@@ -306,3 +309,4 @@ SEARCH_ALLOW_PARTIAL_ANSWER = config.SEARCH_ALLOW_PARTIAL_ANSWER
 PROJECT_ROOT = str(config.PROJECT_ROOT)
 LOG_PATH = config.LOG_PATH
 QUOTA_STATE_PATH = config.QUOTA_STATE_PATH
+DONATE_ENCRYPTION_KEY = config.DONATE_ENCRYPTION_KEY

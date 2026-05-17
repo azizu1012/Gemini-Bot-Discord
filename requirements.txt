@@ -16,3 +16,4 @@ requests
 serpapi
 sympy
 tavily-python
+cryptography
