@@ -87,23 +87,35 @@ class Config:
         self.SUC_VIEN_USER_ID = os.getenv("SUC_VIEN_USER_ID", "")
         self.CHUI_USER_ID = os.getenv("CHUI_USER_ID", "")
 
-        # --- GEMINI API KEYS (DYNAMIC LOAD) ---
+        # --- GEMINI API KEYS (PATTERN-BASED DYNAMIC LOAD) ---
+        # Accept any env var like GEMINI_API_KEY_1..N and optional named extras.
+        # Exclude summary-only keys (GEMINI_API_KEY_TOMTAT_*).
         self.GEMINI_API_KEYS = []
         seen_keys = set()
 
-        for i in range(1, 21):
-            key = (os.getenv(f"GEMINI_API_KEY_{i}") or "").strip()
-            if key and key not in seen_keys:
-                seen_keys.add(key)
-                self.GEMINI_API_KEYS.append(key)
+        indexed_key_names = sorted(
+            [
+                env_name
+                for env_name in os.environ.keys()
+                if env_name.upper().startswith("GEMINI_API_KEY_")
+                and "TOMTAT" not in env_name.upper()
+            ],
+            key=lambda name: (
+                0 if name.upper().replace("GEMINI_API_KEY_", "").isdigit() else 1,
+                int(name.upper().replace("GEMINI_API_KEY_", "")) if name.upper().replace("GEMINI_API_KEY_", "").isdigit() else 10**9,
+                name,
+            ),
+        )
 
-        for name in [
+        fallback_named_keys = [
             "GEMINI_API_KEY_PROD",
             "GEMINI_API_KEY_TEST",
             "GEMINI_API_KEY_BACKUP",
             "GEMINI_API_KEY_EXTRA1",
             "GEMINI_API_KEY_EXTRA2",
-        ]:
+        ]
+
+        for name in indexed_key_names + fallback_named_keys:
             key = (os.getenv(name) or "").strip()
             if key and key not in seen_keys:
                 seen_keys.add(key)

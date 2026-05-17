@@ -32,6 +32,8 @@ from src.core.config import (
     GEMINI_API_KEYS,
     MODEL_NAME,
 )
+from src.core.api_router import get_api_router
+from src.core.api_config import AVAILABLE_MODELS
 
 class ToolsManager:
     """Manager for all AI tools and external API integrations."""
@@ -225,6 +227,7 @@ class ToolsManager:
 
     def __init__(self, note_mgr=None):
         self.logger = logger
+        self.api_router = get_api_router()
         self.note_mgr = note_mgr
         self.web_search_cache = {}
         self.image_recognition_cache = {}
@@ -269,6 +272,15 @@ class ToolsManager:
             )
         else:
             self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
+
+    def _resolve_router_model_alias_for_vision(self) -> str:
+        """Map configured vision model_id to router alias for shared key/quota accounting."""
+        target_model_id = (self.gemini_vision_model or "").strip()
+        if target_model_id:
+            for alias, cfg in AVAILABLE_MODELS.items():
+                if str(cfg.get("model_id", "")).strip() == target_model_id:
+                    return alias
+        return self.api_router.get_preferred_model()
     
     def get_all_tools(self):
         """Return all tool definitions for Gemini."""
@@ -1020,11 +1032,10 @@ class ToolsManager:
             self.logger.info(f"Image recognition result from cache for URL: {image_url}, Question: {question[:30]}...")
             return cached_result
 
-        api_key = self._next_gemini_api_key()
-        if not api_key:
-            return "Lỗi: Không tìm thấy Gemini API key để nhận diện ảnh."
-
         start_ts = datetime.now().timestamp()
+        vision_alias = self._resolve_router_model_alias_for_vision()
+        attempt_budget = max(1, min(5, len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1))
+        last_error = ""
         try:
             image_bytes = await asyncio.to_thread(lambda: requests.get(image_url, timeout=12).content)
             if not image_bytes:
@@ -1036,36 +1047,76 @@ class ToolsManager:
             mime_type = self._guess_mime_type(image_url)
             image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
 
-            client = genai.Client(api_key=api_key)
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=self.gemini_vision_model,
-                contents=[image_part, question],
-            )
+            for attempt in range(1, attempt_budget + 1):
+                reservation = self.api_router.get_next_key_for_model_reservation(vision_alias)
+                api_key = (reservation or {}).get("key") or self._next_gemini_api_key()
+                if not api_key:
+                    break
 
-            final_result = (getattr(response, "text", "") or "").strip()
-            if not final_result:
-                final_result = "Không thể nhận diện nội dung ảnh rõ ràng từ truy vấn này."
+                key_alias = f"...{api_key[-4:]}" if len(api_key) >= 4 else "<short>"
+                try:
+                    # Count image calls into shared key rotation/quota accounting.
+                    if reservation:
+                        self.api_router.commit_key_usage(reservation)
 
-            self.set_image_recognition_cache(image_url, question, final_result)
-            latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
-            self.logger.info(
-                f"AB_METRIC image_tool success=1 latency_ms={latency_ms} bytes={len(image_bytes)} model={self.gemini_vision_model}"
-            )
-            return final_result
+                    client = genai.Client(api_key=api_key)
+                    response = await asyncio.to_thread(
+                        client.models.generate_content,
+                        model=self.gemini_vision_model,
+                        contents=[image_part, question],
+                    )
+
+                    final_result = (getattr(response, "text", "") or "").strip()
+                    if not final_result:
+                        final_result = "Không thể nhận diện nội dung ảnh rõ ràng từ truy vấn này."
+
+                    self._invalid_tool_keys.discard(api_key)
+                    self._tool_key_cooldowns.pop(api_key, None)
+                    self.set_image_recognition_cache(image_url, question, final_result)
+                    latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
+                    self.logger.info(
+                        f"AB_METRIC image_tool success=1 latency_ms={latency_ms} bytes={len(image_bytes)} "
+                        f"model={self.gemini_vision_model} attempt={attempt}/{attempt_budget} key={key_alias} alias={vision_alias}"
+                    )
+                    return final_result
+                except Exception as attempt_error:
+                    error_text = str(attempt_error)
+                    lowered = error_text.lower()
+                    last_error = error_text
+
+                    if any(token in lowered for token in ["api key not found", "api_key_invalid", "invalid api key", "permission denied"]):
+                        self._invalid_tool_keys.add(api_key)
+                        if reservation:
+                            self.api_router.mark_key_exhausted(
+                                api_key,
+                                reservation.get("model_alias", vision_alias),
+                                pool=reservation.get("pool", "main"),
+                                counter_key=reservation.get("counter_key"),
+                            )
+                    elif any(token in lowered for token in ["429", "resource_exhausted", "quota", "rate limit"]):
+                        self._tool_key_cooldowns[api_key] = time.time() + 60
+                        if reservation:
+                            self.api_router.mark_key_cooldown(
+                                api_key,
+                                reservation.get("model_alias", vision_alias),
+                                60,
+                                pool=reservation.get("pool", "main"),
+                                counter_key=reservation.get("counter_key"),
+                            )
+
+                    if attempt >= attempt_budget:
+                        raise
+                    continue
         except Exception as e:
             error_text = str(e)
-            lowered = error_text.lower()
-            if any(token in lowered for token in ["api key not found", "api_key_invalid", "invalid api key", "permission denied"]):
-                self._invalid_tool_keys.add(api_key)
-            elif any(token in lowered for token in ["429", "resource_exhausted", "quota", "rate limit"]):
-                self._tool_key_cooldowns[api_key] = time.time() + 60
 
             latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
             self.logger.warning(
-                f"AB_METRIC image_tool success=0 latency_ms={latency_ms} error={error_text[:120]}"
+                f"AB_METRIC image_tool success=0 latency_ms={latency_ms} "
+                f"attempts={attempt_budget} model={self.gemini_vision_model} alias={vision_alias} "
+                f"error={(last_error or error_text)[:180]}"
             )
-            return f"Đã xảy ra lỗi khi xử lý hình ảnh bằng Gemini: {e}"
+            return f"Đã xảy ra lỗi khi xử lý hình ảnh bằng Gemini: {last_error or e}"
     
     def _dedupe_records(self, records: List[Dict[str, str]]) -> List[Dict[str, str]]:
         unique = []
