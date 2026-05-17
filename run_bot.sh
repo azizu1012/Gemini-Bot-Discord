@@ -85,7 +85,7 @@ echo ""
 echo "[INFO] Verifying core dependencies..."
 if ! "$VENV_PY" - <<'PY' >/dev/null 2>&1
 import importlib
-required = ("google.genai", "discord", "dotenv", "flask", "aiohttp")
+required = ("google.genai", "discord", "dotenv", "flask", "aiohttp", "cryptography")
 for mod in required:
     importlib.import_module(mod)
 PY

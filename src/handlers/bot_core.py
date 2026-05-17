@@ -662,9 +662,9 @@ class BotCore:
         # --- Donate Command ---
         DONATE_PLATFORMS = {
             "kofi": {
-                "file": "donate_kofi.jpg.enc",
+                "file": "donate_kofi.png.enc",
                 "display_name": "Ko-fi",
-                "original_filename": "donate_kofi.jpg",
+                "original_filename": "donate_kofi.png",
                 "message": "Cảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR Ko-fi:",
             },
             "paypal": {
