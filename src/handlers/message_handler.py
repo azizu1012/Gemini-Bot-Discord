@@ -623,6 +623,7 @@ class MessageHandler:
 
             privacy_context: Dict[str, Any] = {
                 "is_admin": is_admin,
+                "discord_display_name": (message.author.display_name or message.author.name or "").strip(),
                 "distinct_user_count": distinct_user_count,
                 "has_other_users": has_other_users,
                 "admin_cross_user_evidence": admin_cross_user_evidence,
@@ -890,6 +891,27 @@ class MessageHandler:
             remaining = len(text) - max_chars
             text = f"{text[:max_chars]}\n...[truncated {remaining} chars to fit context]"
         return f"<USER_INPUT>\n{text}\n</USER_INPUT>"
+
+    def _prepare_user_metadata_block(self, privacy_context: Dict[str, Any]) -> str:
+        display_name = str(privacy_context.get("discord_display_name") or "").strip()
+        if not display_name:
+            display_name = "Unknown"
+        display_name = re.sub(r"\s+", " ", display_name)
+        if len(display_name) > 80:
+            display_name = display_name[:80].rstrip()
+
+        system_role = "Admin" if bool(privacy_context.get("is_admin")) else "Standard User"
+        return (
+            "<USER_METADATA>\n"
+            f"Discord Display Name: {display_name}\n"
+            f"System Role: {system_role}\n"
+            "</USER_METADATA>"
+        )
+
+    def _prepare_user_context_block(self, user_input: str, privacy_context: Dict[str, Any], max_chars: int = 2200) -> str:
+        metadata_block = self._prepare_user_metadata_block(privacy_context)
+        user_input_block = self._prepare_user_input_block(user_input, max_chars=max_chars)
+        return f"{metadata_block}\n{user_input_block}"
 
     def _is_tool_result_sufficient(self, tool_results: str) -> bool:
         if not tool_results:
@@ -1310,13 +1332,13 @@ class MessageHandler:
                 if original_messages and original_messages[-1].get("role") == "user":
                     user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")
                 
-                user_input_block = self._prepare_user_input_block(user_input)
+                user_context_block = self._prepare_user_context_block(user_input, privacy_context)
 
                 # Format 3-block context for injection
                 three_block_context = f"""
 === CONTEXT FROM PRELIMINARY ANALYSIS ===
 [BLOCK 1 - USER REQUEST]
-{user_input_block}
+{user_context_block}
 
 [BLOCK 2 - REASONING OUTPUT]
 {reasoning_result}
@@ -1480,7 +1502,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                 
                 current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
-                user_input_block = self._prepare_user_input_block(user_input)
+                user_context_block = self._prepare_user_context_block(user_input, privacy_context)
                 admin_cross_user_evidence = str(privacy_context.get("admin_cross_user_evidence") or "")
                 extra_admin_context = f"\n\n{admin_cross_user_evidence}\n" if admin_cross_user_evidence else ""
                 system_with_context = (
@@ -1488,7 +1510,7 @@ Synthesize the above 3 blocks into a final response. Integrate naturally without
                     + self._build_identity_capability_instruction(privacy_context)
                     + extra_admin_context
                     + self._build_fallback_system_prompt(
-                        user_input_block,
+                        user_context_block,
                         reasoning_result,
                         tool_results,
                     )
