@@ -21,7 +21,19 @@ class DatabaseRepository:
             os.makedirs(db_dir, exist_ok=True)
         if backup_dir:
             os.makedirs(backup_dir, exist_ok=True)
-    
+
+    def _open_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=10)
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=FULL")
+            conn.execute("PRAGMA busy_timeout=2000")
+            conn.execute("PRAGMA wal_autocheckpoint=1000")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except sqlite3.DatabaseError as e:
+            self.logger.warning(f"Could not apply SQLite runtime PRAGMAs: {e}")
+        return conn
+
     async def init_db(self) -> None:
         """Initialize database tables."""
         await asyncio.to_thread(self._init_db_sync)
@@ -80,7 +92,7 @@ class DatabaseRepository:
             db_dir = os.path.dirname(self.db_path)
             if db_dir:
                 os.makedirs(db_dir, exist_ok=True)
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             self._create_tables(c)
             if not self._schema_is_fresh_compatible(c):
@@ -113,7 +125,7 @@ class DatabaseRepository:
                     os.remove(self.db_path)
                     self.logger.warning("Removed incompatible DB file.")
 
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             self._create_tables(c)
             conn.commit()
@@ -130,7 +142,7 @@ class DatabaseRepository:
         """Synchronous database backup."""
         if os.path.exists(self.db_path):
             try:
-                conn = sqlite3.connect(self.db_path, timeout=10)
+                conn = self._open_connection()
                 try:
                     conn.execute("SELECT 1 FROM sqlite_master WHERE type='table'")
                     shutil.copy2(self.db_path, self.backup_path)
@@ -151,7 +163,7 @@ class DatabaseRepository:
         """Synchronous database cleanup."""
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             old_date = (datetime.now() - timedelta(days=30)).isoformat()
             
@@ -175,7 +187,7 @@ class DatabaseRepository:
         for attempt in range(3):
             conn: Optional[sqlite3.Connection] = None
             try:
-                conn = sqlite3.connect(self.db_path, timeout=10)
+                conn = self._open_connection()
                 c = conn.cursor()
                 c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
                 table_exists = bool(c.fetchone())
@@ -185,7 +197,7 @@ class DatabaseRepository:
                     self.logger.warning(f"DB schema/table missing for '{table_name}', reinitializing fresh DB...")
                     conn.close()
                     await self.init_db()
-                    conn = sqlite3.connect(self.db_path, timeout=10)
+                    conn = self._open_connection()
                     c = conn.cursor()
                     c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
                     if not c.fetchone():
@@ -217,31 +229,49 @@ class DatabaseRepository:
         if isinstance(last_error, Exception):
             raise last_error
 
-        return sqlite3.connect(self.db_path, timeout=10)
+        return self._open_connection()
     
     async def log_message_db(self, user_id: str, role: str, content: str) -> None:
         """Log a message to the database."""
-        conn = None
-        try:
-            conn = await self._ensure_table_exists_and_get_conn("messages")
-            c = conn.cursor()
-            timestamp = datetime.now().isoformat()
-            c.execute(
-                "INSERT INTO messages (user_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
-                (user_id, role, content, timestamp))
-            conn.commit()
-        except sqlite3.DatabaseError as e:
-            self.logger.error(f"Database error while logging message: {str(e)}")
-            await self.init_db()
-        finally:
-            if conn:
-                conn.close()
+        last_error: Optional[Exception] = None
+
+        for attempt in range(3):
+            conn = None
+            try:
+                conn = await self._ensure_table_exists_and_get_conn("messages")
+                c = conn.cursor()
+                timestamp = datetime.now().isoformat()
+                c.execute(
+                    "INSERT INTO messages (user_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+                    (user_id, role, content, timestamp),
+                )
+                conn.commit()
+                return
+            except sqlite3.OperationalError as e:
+                last_error = e
+                if "database is locked" in str(e).lower() and attempt < 2:
+                    await asyncio.sleep(0.08 * (attempt + 1))
+                    continue
+                self.logger.error(f"Database operational error while logging message: {str(e)}")
+                break
+            except sqlite3.DatabaseError as e:
+                last_error = e
+                self.logger.error(f"Database error while logging message: {str(e)}")
+                if attempt == 0:
+                    await self.init_db()
+                break
+            finally:
+                if conn:
+                    conn.close()
+
+        if last_error:
+            self.logger.error(f"Failed to log message after retries: {last_error}")
     
     def _get_user_history_from_db_sync(self, user_id: str, limit: int = 10) -> List[Dict[str, str]]:
         conn = None
         history = []
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
 
@@ -272,7 +302,7 @@ class DatabaseRepository:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
             if not c.fetchone():
@@ -284,7 +314,90 @@ class DatabaseRepository:
             if conn:
                 conn.close()
         return history
-    
+
+    def _count_distinct_message_users_sync(self) -> int:
+        conn = None
+        try:
+            conn = self._open_connection()
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+            if not c.fetchone():
+                return 0
+            c.execute("SELECT COUNT(DISTINCT user_id) FROM messages")
+            row = c.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while counting distinct message users: {str(e)}")
+            return 0
+        finally:
+            if conn:
+                conn.close()
+
+    async def count_distinct_message_users_db(self) -> int:
+        return await asyncio.to_thread(self._count_distinct_message_users_sync)
+
+    def _has_other_users_history_sync(self, user_id: str) -> bool:
+        conn = None
+        try:
+            conn = self._open_connection()
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+            if not c.fetchone():
+                return False
+            c.execute("SELECT 1 FROM messages WHERE user_id != ? LIMIT 1", (user_id,))
+            return c.fetchone() is not None
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while checking other-user history: {str(e)}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    async def has_other_users_history_db(self, user_id: str) -> bool:
+        return await asyncio.to_thread(self._has_other_users_history_sync, user_id)
+
+    def _search_user_messages_sync(self, search_query: str, limit: int = 30, exclude_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        conn = None
+        rows_out: List[Dict[str, Any]] = []
+        query = (search_query or "").strip()
+        if not query:
+            return rows_out
+
+        try:
+            conn = self._open_connection()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='messages'")
+            if not c.fetchone():
+                return rows_out
+
+            safe_limit = max(1, min(limit, 100))
+            sql = (
+                "SELECT user_id, content, timestamp FROM messages "
+                "WHERE role = 'user' AND content LIKE ? COLLATE NOCASE"
+            )
+            params: List[Any] = [f"%{query}%"]
+
+            if exclude_user_id:
+                sql += " AND user_id != ?"
+                params.append(exclude_user_id)
+
+            sql += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(safe_limit)
+            c.execute(sql, tuple(params))
+            rows = c.fetchall()
+            rows_out = [dict(row) for row in rows]
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while searching user messages: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
+
+        return rows_out
+
+    async def search_user_messages_db(self, search_query: str, limit: int = 30, exclude_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        return await asyncio.to_thread(self._search_user_messages_sync, search_query, limit, exclude_user_id)
+
     async def add_user_note_db(
         self,
         user_id: str,
@@ -323,7 +436,7 @@ class DatabaseRepository:
     def _get_file_note_by_filename_sync(self, user_id: str, filename: str) -> Optional[Dict[str, Any]]:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
 
@@ -355,7 +468,7 @@ class DatabaseRepository:
     def _update_user_note_sync(self, note_id: str, content: str, metadata: dict) -> bool:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             metadata_str = json.dumps(metadata)
 
@@ -386,7 +499,7 @@ class DatabaseRepository:
         conn = None
         notes = []
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
 
@@ -438,7 +551,7 @@ class DatabaseRepository:
 
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='user_notes'")
             if not c.fetchone():
@@ -454,7 +567,7 @@ class DatabaseRepository:
     def _count_distinct_users_by_fact_hash_sync(self, fact_hash: str) -> int:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             c.execute(
                 """SELECT COUNT(DISTINCT user_id)
@@ -477,7 +590,7 @@ class DatabaseRepository:
     def _promote_fact_hash_to_global_sync(self, fact_hash: str) -> int:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             c.execute(
                 """UPDATE user_notes
@@ -500,7 +613,7 @@ class DatabaseRepository:
     def _get_global_notes_sync(self, limit: int = 20) -> List[Dict[str, Any]]:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             conn.row_factory = sqlite3.Row
             c = conn.cursor()
             safe_limit = max(1, min(limit, 100))
@@ -527,7 +640,7 @@ class DatabaseRepository:
     def _demote_global_note_by_id_sync(self, note_id: str) -> bool:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             c.execute(
                 """UPDATE user_notes
@@ -550,7 +663,7 @@ class DatabaseRepository:
     def _demote_global_fact_hash_sync(self, fact_hash: str) -> int:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
             c.execute(
                 """UPDATE user_notes
@@ -575,7 +688,7 @@ class DatabaseRepository:
         conn = None
         for attempt in range(3):
             try:
-                conn = sqlite3.connect(self.db_path, timeout=10)
+                conn = self._open_connection()
                 c = conn.cursor()
                 
                 c.execute("DELETE FROM messages WHERE user_id = ?", (user_id, ))
@@ -602,7 +715,7 @@ class DatabaseRepository:
     def _clear_all_data_sync(self) -> bool:
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn = self._open_connection()
             c = conn.cursor()
 
             c.execute("DELETE FROM messages")

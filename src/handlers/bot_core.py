@@ -673,13 +673,20 @@ class BotCore:
                 "original_filename": "donate_paypal.png",
                 "message": "Cảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR PayPal:",
             },
+            "anhtr_momo": {
+                "file": "donate_momo_anh_tr.png.enc",
+                "display_name": "Momo (Anh Tr)",
+                "original_filename": "donate_momo_anh_tr.png",
+                "message": "Cảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR Momo của Anh Tr:",
+            },
         }
 
-        @self.bot.tree.command(name="donate", description="Hiện mã QR ủng hộ (Ko-fi hoặc PayPal)")
+        @self.bot.tree.command(name="donate", description="Hiện mã QR ủng hộ (Ko-fi, PayPal hoặc Momo)")
         @app_commands.describe(platform="Chọn nền tảng ủng hộ (mặc định: Ko-fi)")
         @app_commands.choices(platform=[
             app_commands.Choice(name="Ko-fi (recommended)", value="kofi"),
             app_commands.Choice(name="PayPal", value="paypal"),
+            app_commands.Choice(name="Momo - Anh Tr", value="anhtr_momo"),
         ])
         async def donate_slash(interaction: discord.Interaction, platform: app_commands.Choice[str] = None):
             await interaction.response.defer()

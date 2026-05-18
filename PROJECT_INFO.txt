@@ -1,9 +1,9 @@
 ================================================================================
-CHAD GIBITI - PROJECT TECHNICAL INFO
+CHAD GIBITI - PROJECT TECHNICAL INFO (UPDATED)
 ================================================================================
 
 Mục tiêu tài liệu:
-- Tóm tắt kiến trúc và kỹ thuật theo trạng thái code hiện tại.
+- Tóm tắt kiến trúc/kỹ thuật theo trạng thái codebase hiện tại.
 - Làm tài liệu tham chiếu nhanh cho maintainers hoặc agent phân tích ngoài.
 
 
@@ -14,8 +14,9 @@ Mục tiêu tài liệu:
 Chad Gibiti được thiết kế để:
 - Trả lời hội thoại Discord theo ngữ cảnh.
 - Dùng tool-calling để lấy thông tin thời gian thực.
-- Duy trì memory dài hạn hữu dụng, không chỉ short-term.
+- Duy trì memory dài hạn hữu dụng theo hướng DB-first.
 - Bảo vệ ranh giới riêng tư giữa users trong môi trường multi-user.
+- Cho phép admin điều tra dữ liệu chéo user theo policy đã xác thực role.
 
 
 ================================================================================
@@ -30,19 +31,34 @@ Entry points:
 Luồng xử lý chính nằm ở:
 - src/handlers/message_handler.py
 
-Flow tóm tắt:
+Flow tóm tắt hiện tại:
 1. Nhận message (DM hoặc mention).
-2. Build context gần nhất từ DB.
-3. Chạy reasoning loop (có thể gọi tools).
-4. Chạy final synthesis.
-5. Ghi lịch sử user/assistant vào DB.
+2. Build context/history từ DB.
+3. Tính signal đa user từ DB (distinct user count + has other users).
+4. Nếu admin + query cross-user detail: build evidence block từ DB.
+5. Chạy reasoning loop (có thể gọi tools).
+6. Chạy final synthesis (và fallback) với cùng privacy context.
+7. Persist user/assistant message vào DB.
 
-Runtime notes:
-- Startup log hiển thị token preview (masked), model, số lượng Gemini keys, DB path.
-- Shutdown bởi process-manager restart được log rõ qua KeyboardInterrupt message.
 
 ================================================================================
-3) MEMORY ARCHITECTURE (DB-FIRST, HYBRID SCOPE)
+3) SECURITY & PRIVACY HARDENING (MỚI)
+================================================================================
+
+Đã triển khai:
+- Input sandbox qua block <USER_INPUT>...</USER_INPUT> cho final/fallback synthesis.
+- Prompt rules SECURITY & DATA SANDBOXING trong:
+  - src/instructions/azuris_system_prompt.txt
+  - src/instructions/fallback_system_prompt.txt
+- Role-aware contract runtime:
+  - Non-admin: không lộ danh tính/nội dung/metadata user khác.
+  - Admin: trả lời trung thực câu hỏi hạ tầng/cross-user dựa trên DB/context thực.
+
+Matcher intent admin cross-user detail đã được làm bền hơn với trường hợp text lỗi dấu/encoding.
+
+
+================================================================================
+4) MEMORY ARCHITECTURE
 ================================================================================
 
 Thành phần chính:
@@ -58,15 +74,15 @@ Mô hình scope:
 Policy:
 - Ưu tiên retrieval theo user trước.
 - Chỉ include global khi intent phù hợp.
-- Chặn note mang dấu hiệu lạm dụng như impersonation/harassment/dox-like content.
+- Chặn note mang dấu hiệu lạm dụng (impersonation/harassment/dox-like content).
 
-Auto-promotion:
-- Facts được normalize + hash.
-- Khi nhiều user khác nhau xác nhận cùng fact hash, hệ thống có thể promote lên global.
+Ghi chú vận hành hiện tại:
+- Luồng chính đang DB-only cho history/persistence.
+- JSON memory service vẫn tồn tại dạng utility legacy, không còn là hot path chính.
 
 
 ================================================================================
-4) DATABASE SNAPSHOT
+5) DATABASE SNAPSHOT + RESILIENCE SETTINGS
 ================================================================================
 
 Bảng chính:
@@ -75,15 +91,29 @@ Bảng chính:
              updated_at, is_active, note_type, fact_hash)
 
 Điểm kỹ thuật:
-- DB mới được bootstrap theo fresh schema đích ngay khi khởi tạo.
-- Schema cũ/không tương thích được detect và auto-rebuild để tránh lỗi runtime kéo dài.
-- Có ensure path cho cột/index cần thiết khi startup.
+- DB mới được bootstrap theo fresh schema khi khởi tạo.
+- Schema cũ/không tương thích được detect và auto-rebuild.
 - Có index phục vụ history retrieval và scoped note retrieval.
-- Có API cho list/demote global notes.
+
+SQLite connection PRAGMAs hiện tại:
+- PRAGMA journal_mode=WAL
+- PRAGMA synchronous=FULL
+- PRAGMA busy_timeout=2000
+- PRAGMA wal_autocheckpoint=1000
+- PRAGMA foreign_keys=ON
+
+Write robustness:
+- log_message_db có retry cho lỗi transient "database is locked".
+
+Cross-user APIs đã có:
+- count_distinct_message_users_db()
+- has_other_users_history_db(user_id)
+- search_user_messages_db(...)
+  (search nội dung theo COLLATE NOCASE)
 
 
 ================================================================================
-5) TOOLS & SEARCH
+6) TOOLS & SEARCH
 ================================================================================
 
 Tools hiện có:
@@ -97,13 +127,8 @@ Tools hiện có:
 Search strategy:
 - Primary: DuckDuckGo streams.
 - Fallback providers (khi có key và cần): SerpAPI, Tavily, Exa.
-
-Production stability layers (web_search):
-- Canonical cache key cho query tương đương nghĩa.
-- TTL tách riêng cho query thường và query nhạy thời gian.
-- Inflight dedup để request trùng key join cùng task.
-- Failed-query cooldown để tránh spam provider khi nguồn ngoài lỗi.
-- Deep-read retry ngắn + boilerplate filtering + empty-evidence cache.
+- Có cache-key normalization, TTL-by-context, inflight dedup,
+  failed-query cooldown, deep-read hardening.
 
 Runtime knobs liên quan stability:
 - REASONING_MAX_API_RETRIES
@@ -115,44 +140,31 @@ Runtime knobs liên quan stability:
 
 
 ================================================================================
-6) ADMIN & MODERATION FEATURES
+7) ADMIN & MODERATION FEATURES
 ================================================================================
 
 Slash commands đã có:
 - /global-notes
 - /global-note-demote
+- /donate
 
 Trải nghiệm quản trị:
-- Hỗ trợ chọn qua dropdown.
-- Có pagination để duyệt nhiều records dễ hơn.
-- Dùng để kiểm soát tri thức shared/global và xử lý note không phù hợp.
+- Hỗ trợ dropdown + pagination cho moderation flows.
+- Có cơ chế kiểm soát tri thức shared/global.
 
 
 ================================================================================
-7) KEY MODULE RESPONSIBILITIES
+8) RECENT CHANGES TO NOTE
 ================================================================================
 
-- src/handlers/bot_core.py:
-  Discord lifecycle, slash commands, admin interaction views.
-
-- src/handlers/message_handler.py:
-  Message pipeline orchestration, model call flow, tool loop integration.
-
-- src/tools/tools.py:
-  Tool declaration and dispatch.
-
-- src/managers/note_manager.py:
-  Memory classification and retrieval policy.
-
-- src/database/repository.py:
-  SQLite persistence, schema migration, retrieval/moderation queries.
-
-- src/services/memory_service.py:
-  Legacy JSON memory utilities (không còn là source chính runtime).
+- Đã bỏ dual-write DB+memory ở hot path để tránh lock contention không cần thiết.
+- Đã tối ưu SQLite cho durability khi cắt điện/VPS crash (WAL + FULL + timeout + checkpoint).
+- Đã thêm retry khi ghi DB bị lock tạm thời.
+- Đã xóa file test_google_grounding.py khỏi project root.
 
 
 ================================================================================
-8) WHEN TO STAY SQLITE VS MOVE POSTGRES
+9) WHEN TO STAY SQLITE VS MOVE POSTGRES
 ================================================================================
 
 SQLite là đủ khi:
@@ -163,7 +175,7 @@ SQLite là đủ khi:
 Nên cân nhắc PostgreSQL khi:
 - concurrency tăng rõ,
 - cần scale nhiều process/instance,
-- cần observability và transaction control nâng cao.
+- cần observability/transaction control cao hơn.
 
 Khuyến nghị migration:
 - Giữ interface repository ổn định.
@@ -171,12 +183,12 @@ Khuyến nghị migration:
 
 
 ================================================================================
-9) NEXT PRIORITIES
+10) NEXT PRIORITIES
 ================================================================================
 
-1. Tăng test coverage cho memory policy (scope, promote/demote, blocked cases).
-2. Thêm metrics theo stage (reasoning/tool/final/db latency) + cache-hit/fallback-call cho web_search.
-3. Thêm audit trail cho admin actions trên global memory.
+1. Thêm test coverage cho admin/non-admin policy regressions.
+2. Thêm metrics cho DB lock retry rate + stage latency.
+3. Thiết lập backup định kỳ + script verify restore.
 4. Tinh chỉnh ranking retrieval (importance + recency + relevance).
 
 ================================================================================
