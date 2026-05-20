@@ -11,7 +11,6 @@ from discord.ext import commands
 
 from src.core.config import logger, ADMIN_ID
 from src.database.repository import DatabaseRepository
-from src.services.memory_service import MemoryService
 from src.managers.cleanup_manager import CleanupManager
 from src.managers.premium_manager import PremiumManager
 from src.services.health_checker import get_health_checker
@@ -252,7 +251,6 @@ class BotCore:
         self.config = config
         self.logger = logger
         self.db_repo = DatabaseRepository()
-        self.memory_service = MemoryService()
         self.cleanup_mgr = CleanupManager()
         self.premium_mgr = PremiumManager()
         self.tools_mgr = ToolsManager()
@@ -360,7 +358,6 @@ class BotCore:
                 self.logger.error(f"Error syncing slash commands: {e}")
 
             await self.db_repo.init_db()
-            self.memory_service.init_json_memory()
 
             self.logger.info("Running DB cleanup...")
             await self.db_repo.cleanup_db()

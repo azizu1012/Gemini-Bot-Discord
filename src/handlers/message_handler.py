@@ -12,7 +12,6 @@ from src.core.config import logger, Config
 from src.core.api_router import get_api_router
 from src.core.api_config import AVAILABLE_MODELS, MODEL_PRIORITY
 from src.database.repository import DatabaseRepository
-from src.services.memory_service import MemoryService
 from src.services.file_parser import FileParserService
 from src.services.file_index_service import (
     FileIndexService,
@@ -80,7 +79,6 @@ class MessageHandler:
         self.logger = logger
         self.bot = None  # Will be set via handle_message()
         self.db_repo = DatabaseRepository()
-        self.memory_service = MemoryService()
         self.cache_mgr = CacheManager()
         self.note_mgr = NoteManager(self.db_repo)
 
@@ -661,7 +659,6 @@ class MessageHandler:
 
     async def _clear_user_history(self, message: discord.Message, user_id: str):
         try:
-            await self.memory_service.clear_user_data_memory(user_id)
             await self.db_repo.clear_user_data_db(user_id)
             await message.reply("✅ Đã xóa lịch sử chat!", mention_author=False)
         except Exception as e:
@@ -670,7 +667,6 @@ class MessageHandler:
 
     async def _clear_all_data(self, message: discord.Message, user_id: str):
         try:
-            await self.memory_service.clear_all_data_memory()
             await self.db_repo.clear_all_data_db()
 
             await message.reply("⚠️ **ALL DATA CLEARED!** Database reset complete.", mention_author=False)
