@@ -55,6 +55,31 @@ class DatabaseRepository:
                           note_type TEXT DEFAULT 'personal_preference',
                           fact_hash TEXT DEFAULT '')''')
 
+        
+        cursor.execute('''CREATE TABLE IF NOT EXISTS premium_users
+                         (user_id TEXT PRIMARY KEY,
+                          added_at TEXT)''')
+                          
+        cursor.execute('''CREATE TABLE IF NOT EXISTS usage_logs
+                         (log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          user_id TEXT,
+                          action_type TEXT,
+                          model_name TEXT,
+                          tokens_used INTEGER,
+                          metadata TEXT,
+                          timestamp TEXT DEFAULT CURRENT_TIMESTAMP)''')
+                          
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_usage_logs_user_action ON usage_logs (user_id, action_type)''')
+        
+        cursor.execute('''CREATE TABLE IF NOT EXISTS web_history
+                         (history_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          user_id TEXT,
+                          query TEXT,
+                          results TEXT,
+                          timestamp TEXT DEFAULT CURRENT_TIMESTAMP)''')
+                          
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_web_history_user ON web_history (user_id)''')
+
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_messages_user_ts ON messages (user_id, timestamp)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_id ON user_notes (user_id)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_created ON user_notes (user_id, created_at)''')
@@ -86,7 +111,7 @@ class DatabaseRepository:
         return expected.issubset(columns)
     
     def _init_db_sync(self) -> None:
-        """Synchronous database initialization."""
+        """Synchronous database initialization. Supports safe schema evolution."""
         conn = None
         try:
             db_dir = os.path.dirname(self.db_path)
@@ -94,11 +119,19 @@ class DatabaseRepository:
                 os.makedirs(db_dir, exist_ok=True)
             conn = self._open_connection()
             c = conn.cursor()
+            
+            # _create_tables uses CREATE TABLE IF NOT EXISTS
+            # This safely adds new tables (premium_users, usage_logs, web_history)
+            # without destroying existing tables (messages)
             self._create_tables(c)
+            
+            # ONLY rebuild if the user_notes table schema is fundamentally broken
+            # (which shouldn't happen unless migrating from very old versions)
             if not self._schema_is_fresh_compatible(c):
-                raise sqlite3.DatabaseError("Legacy/invalid schema detected")
+                raise sqlite3.DatabaseError("Legacy/invalid schema detected in user_notes")
+                
             conn.commit()
-            self.logger.info("DB initialized with fresh schema (messages + user_notes tables)")
+            self.logger.info("DB initialized safely. All schema tables present.")
         except sqlite3.DatabaseError as e:
             self.logger.error(f"Cannot initialize DB with current schema: {str(e)}. Rebuilding DB file.")
             if conn:
@@ -231,6 +264,101 @@ class DatabaseRepository:
 
         return self._open_connection()
     
+
+    def add_premium_user_sync(self, user_id: str) -> bool:
+        """Thêm user vào list premium, trả về True nếu thành công"""
+        try:
+            with self._open_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR IGNORE INTO premium_users (user_id, added_at) VALUES (?, datetime('now'))",
+                    (user_id,)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error add_premium_user: {e}")
+            return False
+
+    def remove_premium_user_sync(self, user_id: str) -> bool:
+        """Xóa user khỏi list premium"""
+        try:
+            with self._open_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM premium_users WHERE user_id = ?", (user_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error remove_premium_user: {e}")
+            return False
+
+    def log_usage_sync(self, user_id: str, action_type: str, model_name: str = "", tokens_used: int = 0, metadata: str = "") -> bool:
+        """Log API usage for a user"""
+        try:
+            with self._open_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO usage_logs (user_id, action_type, model_name, tokens_used, metadata) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, action_type, model_name, tokens_used, metadata)
+                )
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error log_usage: {e}")
+            return False
+
+    async def log_usage(self, user_id: str, action_type: str, model_name: str = "", tokens_used: int = 0, metadata: str = "") -> bool:
+        return await asyncio.to_thread(self.log_usage_sync, user_id, action_type, model_name, tokens_used, metadata)
+
+
+    def log_web_search_sync(self, user_id: str, query: str, results: str) -> bool:
+        """Lưu lịch sử tìm kiếm web vào cơ sở dữ liệu"""
+        try:
+            with self._open_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO web_history (user_id, query, results) VALUES (?, ?, ?)",
+                    (user_id, query, results)
+                )
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error log_web_search: {e}")
+            return False
+
+    async def log_web_search(self, user_id: str, query: str, results: str) -> bool:
+        return await asyncio.to_thread(self.log_web_search_sync, user_id, query, results)
+
+    def get_web_history_sync(self, user_id: str, limit: int = 5) -> list:
+        """Lấy lịch sử tìm kiếm web của user"""
+        try:
+            with self._open_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT query, results, timestamp FROM web_history WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, limit)
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error get_web_history: {e}")
+            return []
+
+    async def get_web_history(self, user_id: str, limit: int = 5) -> list:
+        return await asyncio.to_thread(self.get_web_history_sync, user_id, limit)
+
+    def is_premium_user_sync(self, user_id: str) -> bool:
+        """Check nếu user_id có trong premium_users"""
+        try:
+            with self._open_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1 FROM premium_users WHERE user_id = ?", (user_id,))
+                return cursor.fetchone() is not None
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error is_premium_user: {e}")
+            return False
+            
+
     async def log_message_db(self, user_id: str, role: str, content: str) -> None:
         """Log a message to the database."""
         last_error: Optional[Exception] = None

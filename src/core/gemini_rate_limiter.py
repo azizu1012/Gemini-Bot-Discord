@@ -35,9 +35,10 @@ class GeminiRateLimiter:
         base_tokens = (ascii_chars / 3.6) + (non_ascii_chars / 1.6)
         return max(1, int(base_tokens + 0.999999))
 
-    def estimate_request_tokens(self, prompt_text: str, max_output_tokens: int) -> int:
+    def estimate_request_tokens(self, prompt_text: str, max_output_tokens: int, image_count: int = 0) -> int:
         input_tokens = self.estimate_text_tokens(prompt_text)
-        total = (input_tokens + max_output_tokens + self.fixed_overhead) * self.safety_factor
+        image_overhead = image_count * 20
+        total = (input_tokens + max_output_tokens + self.fixed_overhead + image_overhead) * self.safety_factor
         return max(1, int(total + 0.999999))
 
     async def acquire_quota(self, reserved_tokens: int) -> bool:

@@ -54,9 +54,10 @@ class Config:
         self.DB_PATH = self._resolve_db_path()
         self.DB_BACKUP_PATH = self._resolve_db_backup_path()
         self.NOTE_PATH = self._resolve_runtime_path("NOTE_PATH", "data/notes.txt")
-        self.MEMORY_PATH = self._resolve_runtime_path("MEMORY_PATH", "data/short_term_memory.json")
         self.WEATHER_CACHE_PATH = self._resolve_runtime_path("WEATHER_CACHE_PATH", "data/weather_cache.json")
         self.FILE_STORAGE_PATH = self._resolve_runtime_path("FILE_STORAGE_PATH", "uploaded_files")
+        self.FILE_INDEX_DIR = self._resolve_runtime_path("FILE_INDEX_DIR", "data/file_indexes")
+        self.FILE_CHUNK_DIR = self._resolve_runtime_path("FILE_CHUNK_DIR", "data/file_chunks")
         self.QUOTA_STATE_PATH = self._resolve_runtime_path("ROUTER_QUOTA_STATE_FILE", "data/quota_state.json")
         self.LOG_PATH = self._resolve_runtime_path("BOT_LOG_PATH", "bot.log")
 
@@ -130,6 +131,10 @@ class Config:
             self.logger.info(f"✅ Đã thiết lập {len(self.GEMINI_API_KEYS)} Gemini API keys cho Smart Rotation.")
 
         # --- SEARCH API KEYS ---
+        # --- OPENAI / CUSTOM ENDPOINT ---
+        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+        self.OPENAI_CUSTOM_ENDPOINT = os.getenv("OPENAI_CUSTOM_ENDPOINT", "")
+
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
         self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
         self.EXA_API_KEY = os.getenv("EXA_API_KEY")
@@ -203,9 +208,10 @@ class Config:
         runtime_dirs = {
             Path(self.DB_PATH).parent,
             Path(self.DB_BACKUP_PATH).parent,
-            Path(self.MEMORY_PATH).parent,
             Path(self.WEATHER_CACHE_PATH).parent,
             Path(self.FILE_STORAGE_PATH),
+            Path(self.FILE_INDEX_DIR),
+            Path(self.FILE_CHUNK_DIR),
             Path(self.QUOTA_STATE_PATH).parent,
             Path(self.VOICE_LOCK_BASE_DIR),
             Path(self.LOG_PATH).parent,
@@ -219,8 +225,9 @@ class Config:
             "project_root": str(self.PROJECT_ROOT),
             "db_path": self.DB_PATH,
             "db_backup_path": self.DB_BACKUP_PATH,
-            "memory_path": self.MEMORY_PATH,
             "file_storage_path": self.FILE_STORAGE_PATH,
+            "file_index_dir": self.FILE_INDEX_DIR,
+            "file_chunk_dir": self.FILE_CHUNK_DIR,
             "weather_cache_path": self.WEATHER_CACHE_PATH,
             "quota_state_path": self.QUOTA_STATE_PATH,
             "voice_lock_base_dir": self.VOICE_LOCK_BASE_DIR,
@@ -286,9 +293,10 @@ CITY = config.CITY
 DB_PATH = config.DB_PATH
 DB_BACKUP_PATH = config.DB_BACKUP_PATH
 NOTE_PATH = config.NOTE_PATH
-MEMORY_PATH = config.MEMORY_PATH
 WEATHER_CACHE_PATH = config.WEATHER_CACHE_PATH
 FILE_STORAGE_PATH = config.FILE_STORAGE_PATH
+FILE_INDEX_DIR = config.FILE_INDEX_DIR
+FILE_CHUNK_DIR = config.FILE_CHUNK_DIR
 VOICE_LOCK_BASE_DIR = config.VOICE_LOCK_BASE_DIR
 VOICE_WHITELIST_FILE = config.VOICE_WHITELIST_FILE
 LOCKED_CHANNELS_FILE = config.LOCKED_CHANNELS_FILE

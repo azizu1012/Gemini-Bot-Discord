@@ -14,6 +14,7 @@ from src.database.repository import DatabaseRepository
 from src.services.memory_service import MemoryService
 from src.managers.cleanup_manager import CleanupManager
 from src.managers.premium_manager import PremiumManager
+from src.services.health_checker import get_health_checker
 from src.tools.tools import ToolsManager
 from src.voice.voice_lock import VoiceLockManager
 
@@ -507,7 +508,114 @@ class BotCore:
             self.confirmation_pending[user_id] = {'timestamp': datetime.now(), 'awaiting': True}
             await interaction.followup.send("Clear chat history? Reply **yes** or **y** in 60 seconds! 😳", ephemeral=True)
 
-        @self.bot.tree.command(name="premium", description="Manage premium user status (ADMIN ONLY)")
+
+        @self.bot.tree.command(name="health_check", description="Kiểm tra thủ công trạng thái custom API keys (ADMIN ONLY)")
+        @is_admin()
+        async def health_check_slash(interaction: discord.Interaction):
+            await interaction.response.defer(ephemeral=True)
+            import os
+            
+            if os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() != "true":
+                await interaction.followup.send("⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.", ephemeral=True)
+                return
+                
+            await interaction.followup.send("⏳ Đang ping kiểm tra các custom keys...", ephemeral=True)
+            
+            report = await self.health_checker.run_health_check_cycle()
+            if report:
+                await interaction.user.send(f"REPORT: {report}")
+                await interaction.followup.send("✅ Đã phát hiện thay đổi và gửi report vào inbox của bạn.", ephemeral=True)
+            else:
+                await interaction.followup.send("✅ Hoàn tất ping. Không có thay đổi trạng thái (chết/sống lại) nào được phát hiện từ lần check trước.", ephemeral=True)
+
+        @self.bot.tree.command(name="enable_custom_api", description="Bật/tắt custom endpoint OpenAI (ADMIN ONLY)")
+        @app_commands.describe(
+            state="Bật (true) hoặc Tắt (false)"
+        )
+        @is_admin()
+        async def enable_custom_api_slash(interaction: discord.Interaction, state: bool):
+            await interaction.response.defer(ephemeral=True)
+            import os
+            from src.core.api_router import get_api_router
+            
+            os.environ["ENABLE_CUSTOM_ENDPOINT"] = str(state).lower()
+            
+            # Re-init router pool
+            router = get_api_router()
+            from src.core.api_config import auto_detect_api_keys, create_model_pools, create_summary_pool
+            
+            all_keys, key_to_name = auto_detect_api_keys()
+            router.main_keys = all_keys['main']
+            router.summary_keys = all_keys['summary']
+            router.key_to_name = key_to_name
+            
+            router.model_pools = create_model_pools(router.main_keys, key_to_name)
+            router.summary_pool = create_summary_pool(router.summary_keys, key_to_name)
+            
+            status_text = "ĐÃ BẬT" if state else "ĐÃ TẮT"
+            await interaction.followup.send(f"✅ {status_text} Custom Endpoint (OpenAI) thành công! Đã refresh lại key pool.", ephemeral=True)
+
+        @self.bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
+        @app_commands.describe(
+            prompt="Mô tả ảnh bạn muốn tạo"
+        )
+        async def imagine_slash(interaction: discord.Interaction, prompt: str):
+            # Check Premium/Admin
+            user_id = str(interaction.user.id)
+            if not (self.premium_mgr.is_admin_user(user_id) or self.premium_mgr.is_premium_user(user_id)):
+                try:
+                    await interaction.response.defer(ephemeral=True)
+                    await interaction.followup.send("⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**! Gõ `/donate` để ủng hộ bot và liên hệ admin để cấp quyền.", ephemeral=True)
+                except Exception:
+                    pass
+                return
+
+            await interaction.response.defer()
+            import os
+            
+            # Check if enabled
+            if os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() != "true":
+                await interaction.followup.send("⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.", ephemeral=True)
+                return
+                
+            from src.core.api_router import get_api_router
+            from openai import AsyncOpenAI
+            
+            router = get_api_router()
+            
+            reservation = router._try_get_key_from_model("custom-pro-image")
+            if not reservation:
+                await interaction.followup.send("⚠️ Không tìm thấy key nào khả dụng cho custom-pro-image.", ephemeral=True)
+                return
+                
+            api_key = reservation['key']
+            endpoint = self.config.OPENAI_CUSTOM_ENDPOINT
+            
+            if not endpoint:
+                await interaction.followup.send("⚠️ Custom endpoint URL chưa được cấu hình.", ephemeral=True)
+                return
+                
+            try:
+                client = AsyncOpenAI(api_key=api_key, base_url=endpoint)
+                response = await client.images.generate(
+                    model="gemini-3.1-pro-image",
+                    prompt=prompt,
+                    n=1,
+                    size="1024x1024"
+                )
+                image_url = response.data[0].url
+                
+                embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", description=f"**Prompt:** {prompt}", color=discord.Color.blue())
+                embed.set_image(url=image_url)
+                embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
+                
+                await interaction.followup.send(embed=embed)
+                
+                # Commit usage
+                router.commit_key_usage(reservation)
+            except Exception as e:
+                self.logger.error(f"Error generating image: {e}")
+                await interaction.followup.send(f"❌ Lỗi khi tạo ảnh: {str(e)[:100]}", ephemeral=True)
         @app_commands.describe(
             user="User to check/add/remove",
             action="Action: 'check', 'add', or 'remove'"
@@ -645,7 +753,7 @@ class BotCore:
                     if guild_me is None or not channel.permissions_for(guild_me).send_messages:
                         await interaction.followup.send("Bot has no send permission! 😓", ephemeral=True)
                         return
-                    await channel.send(f"💌 From admin to {target_user.mention}: {cleaned_message}")
+                    await channel.send(f"{target_user.mention} {cleaned_message}")
                     await interaction.followup.send(f"Sent to {target_user.display_name} in {channel.mention}! ✨", ephemeral=True)
                 else:
                     decorated = f"━━━━━━━━━━━━━━━━━━━━━━\nMessage from admin:\n\n{cleaned_message}\n\n━━━━━━━━━━━━━━━━━━━━━━"
@@ -738,7 +846,7 @@ class BotCore:
 
             self.bot.loop.create_task(auto_delete())
 
-        _ = (reset_chat_slash, premium_slash, reset_all_slash,
+        _ = (reset_chat_slash, health_check_slash, enable_custom_api_slash, imagine_slash, premium_slash, reset_all_slash,
              global_notes_slash, global_note_demote_slash,
              message_to_slash, donate_slash)
 

@@ -71,7 +71,6 @@ def run_preflight_checks(config: Config, require_token: bool = False) -> Tuple[b
     try:
         _ensure_writable_file_path(config.DB_PATH)
         _ensure_writable_file_path(config.DB_BACKUP_PATH)
-        _ensure_writable_file_path(config.MEMORY_PATH)
         _ensure_writable_file_path(config.WEATHER_CACHE_PATH)
         _ensure_writable_file_path(config.QUOTA_STATE_PATH)
         _ensure_writable_file_path(config.LOCKED_CHANNELS_FILE)

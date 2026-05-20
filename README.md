@@ -53,15 +53,16 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-2. Cấu hình `.env` (tối thiểu `DISCORD_TOKEN`, `GEMINI_API_KEY_1...`).
+1. Cấu hình `.env` (tối thiểu `DISCORD_TOKEN`, `GEMINI_API_KEY_1...`).
+   Nếu dùng tính năng `/donate`, thêm `DONATE_ENCRYPTION_KEY` (Fernet key) — xem `.env.example`.
 
-3. Chạy preflight trước khi start:
+1. Chạy preflight trước khi start:
 
 ```bash
 python run_bot.py --preflight
 ```
 
-4. Start bằng ecosystem có `cwd` cố định:
+1. Start bằng ecosystem có `cwd` cố định:
 
 ```bash
 BOT_ENABLE_SERVER=1 pm2 start ecosystem.config.js --only azuris-bot --update-env
@@ -70,7 +71,7 @@ BOT_ENABLE_SERVER=0 pm2 start ecosystem.config.js --only azuris-bot --update-env
 pm2 save
 ```
 
-5. Verify sau deploy:
+1. Verify sau deploy:
 
 ```bash
 pm2 logs azuris-bot --lines 120
@@ -81,7 +82,7 @@ Checklist log cần thấy:
 - Không còn `unable to open database file`.
 - Không còn `Fallback lite error: [Errno 2]`.
 
-6. Nếu PM2 bị lỗi stale `pidusage`:
+1. Nếu PM2 bị lỗi stale `pidusage`:
 
 ```bash
 pm2 update
@@ -98,24 +99,58 @@ GEMINI_API_KEY_1=...
 
 Chi tiết biến môi trường: xem `.env.example`.
 
+## Donate QR (mã hóa ảnh)
+
+Ảnh QR donation được mã hóa Fernet tại `assets/encrypted/` (commit an toàn lên git).
+Ảnh gốc nằm ở `Donet-qr/` (gitignored, không push).
+
+- **Đổi ảnh QR**: thay file trong `Donet-qr/`, chạy `python scripts/encrypt_donate_qr.py`, commit lại `assets/encrypted/`.
+- **Deploy server mới**: đảm bảo `.env` có `DONATE_ENCRYPTION_KEY` (cùng key đã dùng để encrypt).
+- **Generate key mới**: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` — nhớ re-encrypt ảnh sau khi đổi key.
+
 ## Kiến trúc chính
 
 - `main.py`: entrypoint mỏng, ủy quyền chạy cho `run_bot.py`
 - `run_bot.py`: launcher chính, hỗ trợ mode bot-only hoặc bot + server
 - `run_bot.sh`: launcher Linux/PM2 (`--pm2`, `--pm2-fresh`, `--server`)
-- `src/handlers/message_handler.py`: orchestration pipeline xử lý mỗi message
+- `src/handlers/message_handler.py`: routing, context building, intent detection
+- `src/core/gemini_api_manager.py`: API key pool, throttle, client pool
+- `src/core/gemini_pipeline.py`: reasoning loop, final synthesis, fallback
 - `src/handlers/bot_core.py`: vòng đời bot, slash commands, admin interactions
+- `src/services/file_index_service.py`: LLM-powered file indexing pipeline
 - `src/tools/tools.py`: registry/dispatch tool calls cho model + search pipeline
 - `src/database/repository.py`: SQLite repository, fresh schema bootstrap, auto-rebuild khi schema cũ/lỗi
 - `src/managers/note_manager.py`: logic phân loại note, policy scope, promote global
+- `src/core/prompt_loader.py`: LRU-cached prompt loading từ `src/instructions/`
 
 ## Pipeline phản hồi
 
 1. Nhận message từ DM hoặc mention.
 2. Lấy context gần nhất từ DB.
-3. Chạy reasoning loop, gọi tool khi cần.
-4. Chạy final synthesis để tạo câu trả lời sạch.
-5. Log user/assistant messages về DB.
+3. Nếu có file đính kèm: chạy file indexing pipeline (chunk → LLM index → validation).
+4. Chạy reasoning loop, gọi tool khi cần.
+5. Chạy final synthesis để tạo câu trả lời sạch.
+6. Log user/assistant messages về DB.
+
+## Prompt configuration
+
+Tất cả prompt templates nằm trong `src/instructions/`. Chỉnh sửa nội dung prompt bằng cách edit file `.txt` tương ứng — không cần sửa code Python.
+
+Các file prompt chính:
+
+- `azuris_system_prompt.txt` — system prompt chính (Chad Gibiti identity)
+- `identity_capability_prompt.txt` — template identity + role contract + tool capabilities
+- `lite_reasoning_prompt.txt` — prompt cho tier-1 reasoning model
+- `fallback_system_prompt.txt` — prompt cho fallback synthesis
+- `three_block_context_prompt.txt` — template 3-block context
+- `file_index_reasoning_prompt.txt` — prompt cho file indexing reasoning
+- `file_index_validation_prompt.txt` — prompt cho file index validation
+
+Model alias có thể override qua env:
+
+- `REASONING_MODEL_ALIAS` — model cho reasoning loop (default: flash-lite)
+- `FINAL_MODEL_ALIAS` — model cho final synthesis (default: flash)
+- `FALLBACK_MODEL_ALIAS` — model cho fallback (default: same as reasoning)
 
 ## Search & cache runtime (production)
 
@@ -159,6 +194,7 @@ Core/admin:
 - `/message_to`
 - `/global-notes`
 - `/global-note-demote`
+- `/donate` — hiện QR ủng hộ (Ko-fi / PayPal), ảnh mã hóa Fernet, tự xóa sau 2 phút
 
 Voice room:
 
@@ -180,3 +216,9 @@ Voice room:
 - Tổng quan kỹ thuật: `PROJECT_INFO.txt`
 - Cấu trúc project: `Project_structure.txt`
 - Gói context gửi agent ngoài: `AGENT_HANDOFF_PROJECT_CONTEXT.md`
+
+## Custom API Health Checker
+Tính năng tự động kiểm tra sức khoẻ (health check) của OpenAI Custom Endpoint chạy ngầm. Tính năng này:
+1. Nằm trong thư mục `src/services/health_checker.py`.
+2. Có thể được trigger thủ công bằng slash command `/health_check` dành cho Admin.
+3. Khi keys chết (die), tự động sử dụng LLM để tóm tắt và gửi report cho Admin theo mốc timestamp.

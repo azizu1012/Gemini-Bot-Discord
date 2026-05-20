@@ -1,0 +1,18 @@
+=== auto_retrieval_limit_prompt ===
+[SYSTEM NOTE: The result from web search is very large and might exceed your input context limit or be too noisy. We are summarizing the main points and providing partial evidence to prevent truncation errors.]
+
+=== extra_retrieval_prompt ===
+[SYSTEM NOTE: First-pass search yielded limited results. We ran a fallback deep-search with secondary queries to provide more context. Prioritize synthesizing across all provided tool results to answer the user.]
+
+=== final_synthesis_prompt ===
+[SYSTEM NOTE: Please provide a final, well-structured response based on the above retrieved evidence.]
+
+=== partial_evidence_prompt ===
+[SYSTEM NOTE: Some sources were truncated due to length limits. A partial summary of evidence is provided below.]
+
+=== search_budget_prompt ===
+[SYSTEM NOTE: Due to system load, your search depth was limited to 1 query and 2 results. Do your best with the provided info.]
+
+=== three_block_context_prompt ===
+[SYSTEM INSTRUCTION]
+Below are the results of web searches and retrieved information. Please synthesize this evidence to provide a comprehensive answer.

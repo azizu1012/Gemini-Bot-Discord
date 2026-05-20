@@ -96,27 +96,33 @@ class APIRouter:
     def __init__(self, config: BotRouterConfig = None):
         if APIRouter._initialized:
             return
-        
+
         self.config = config or BotRouterConfig()
         self.quota_state_file = self.config.quota_state_file
-        
+
         # Ensure data directory exists
         os.makedirs(os.path.dirname(self.quota_state_file), exist_ok=True)
-        
+
         # Load API keys
         all_keys, key_to_name = auto_detect_api_keys()
         self.main_keys = all_keys['main']
         self.summary_keys = all_keys['summary']
         self.key_to_name = key_to_name
-        
+
         # Model pools
         self.model_pools: Dict[str, Dict] = create_model_pools(self.main_keys, key_to_name)
         self.summary_pool: Dict = create_summary_pool(self.summary_keys, key_to_name)
-        
+
         # Priority order for auto selection
         self.model_priority = [m for m in MODEL_PRIORITY if m in self.model_pools]
         self.active_models = list(self.model_priority)
-        self.current_model = self.model_priority[0] if self.model_priority else "gemini-flash-latest"
+        self.current_model = self.model_priority[0] if self.model_priority else "gemini-flash-35"
+
+        # Build priority groups for same-priority rotation
+        self._priority_groups: Dict[int, List[str]] = {}
+        for alias in self.model_priority:
+            prio = AVAILABLE_MODELS.get(alias, {}).get("priority", 99)
+            self._priority_groups.setdefault(prio, []).append(alias)
         
         # Locks
         self.model_pools_lock = threading.Lock()
@@ -188,7 +194,7 @@ class APIRouter:
         if not self.main_keys:
             print("⚠️ WARNING: No API keys found!")
 
-    async def acquire_gemini_quota(self, prompt_text: str, max_output_tokens: int, model_alias: Optional[str] = None) -> bool:
+    async def acquire_gemini_quota(self, prompt_text: str, max_output_tokens: int, model_alias: Optional[str] = None, image_count: int = 0) -> bool:
         """Acquire RPM/TPM/RPD quota for a model alias before Gemini request."""
         target_model = model_alias or self.get_preferred_model()
         limiter = self.rate_limiters.get(target_model)
@@ -197,7 +203,7 @@ class APIRouter:
         if limiter is None:
             return False
 
-        reserved_tokens = limiter.estimate_request_tokens(prompt_text, max_output_tokens)
+        reserved_tokens = limiter.estimate_request_tokens(prompt_text, max_output_tokens, image_count=image_count)
         return await limiter.acquire_quota(reserved_tokens)
 
     # ========================================================================
@@ -455,14 +461,25 @@ class APIRouter:
         return reservation['key'], reservation['model_alias']
 
     def get_next_key_reservation(self) -> Optional[Dict[str, str]]:
-        """Reserve a key/model candidate without consuming daily quota yet."""
-        for target_model in self.model_priority:
-            if target_model not in self.model_pools:
-                continue
+        """Reserve a key/model candidate without consuming daily quota yet.
 
-            result = self._try_get_key_from_model(target_model)
-            if result:
-                return result
+        Models within the same priority group are shuffled for load balancing.
+        """
+        seen_priorities: set = set()
+        for target_model in self.model_priority:
+            prio = AVAILABLE_MODELS.get(target_model, {}).get("priority", 99)
+            if prio in seen_priorities:
+                continue
+            seen_priorities.add(prio)
+
+            peers = list(self._priority_groups.get(prio, [target_model]))
+            random.shuffle(peers)
+            for peer in peers:
+                if peer not in self.model_pools:
+                    continue
+                result = self._try_get_key_from_model(peer)
+                if result:
+                    return result
 
         print("   ⚠️ Main pools exhausted. Trying Summary Pool...")
         result = self._get_key_from_summary()
@@ -473,11 +490,21 @@ class APIRouter:
         return None
 
     def get_next_key_for_model_reservation(self, model_alias: str) -> Optional[Dict[str, str]]:
-        """Reserve candidate for a specific model alias first, then summary fallback."""
+        """Reserve candidate for a specific model alias first, then rotation peers, then summary fallback."""
         if model_alias in self.model_pools:
             result = self._try_get_key_from_model(model_alias)
             if result:
                 return result
+
+            prio = AVAILABLE_MODELS.get(model_alias, {}).get("priority", 99)
+            peers = [p for p in self._priority_groups.get(prio, []) if p != model_alias]
+            if peers:
+                random.shuffle(peers)
+                for peer in peers:
+                    if peer in self.model_pools:
+                        result = self._try_get_key_from_model(peer)
+                        if result:
+                            return result
 
             with self.current_model_lock:
                 self.current_model = model_alias

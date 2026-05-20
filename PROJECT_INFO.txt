@@ -29,16 +29,19 @@ Entry points:
 - run_bot.sh (launcher Linux/Ubuntu + PM2 modes: --pm2, --pm2-fresh)
 
 Luồng xử lý chính nằm ở:
-- src/handlers/message_handler.py
+- src/handlers/message_handler.py (routing, context, intent detection)
+- src/core/gemini_api_manager.py (API key pool, throttle, client pool, error classification)
+- src/core/gemini_pipeline.py (reasoning loop, final synthesis, fallback)
 
 Flow tóm tắt hiện tại:
 1. Nhận message (DM hoặc mention).
 2. Build context/history từ DB.
 3. Tính signal đa user từ DB (distinct user count + has other users).
 4. Nếu admin + query cross-user detail: build evidence block từ DB.
-5. Chạy reasoning loop (có thể gọi tools).
-6. Chạy final synthesis (và fallback) với cùng privacy context.
-7. Persist user/assistant message vào DB.
+5. Nếu có file đính kèm: chạy file indexing pipeline (chunk → LLM index → Flash validation).
+6. Chạy reasoning loop (có thể gọi tools) qua GeminiPipeline + GeminiApiManager.
+7. Chạy final synthesis (và fallback) với cùng privacy context.
+8. Persist user/assistant message vào DB.
 
 
 ================================================================================
@@ -79,6 +82,48 @@ Policy:
 Ghi chú vận hành hiện tại:
 - Luồng chính đang DB-only cho history/persistence.
 - JSON memory service vẫn tồn tại dạng utility legacy, không còn là hot path chính.
+
+
+================================================================================
+5) FILE INDEXING PIPELINE
+================================================================================
+
+Module chính: src/services/file_index_service.py
+
+Flow:
+1. Upload file → download + chunk (via file_parser.py).
+2. Mỗi chunk → LLM reasoning model index (JSON format, map theo filename thực).
+3. Index được validate bằng Flash model trước khi cho chat tiếp.
+4. Index lưu JSON tại FILE_INDEX_DIR.
+
+Kỹ thuật:
+- INDEX_MAX_OUTPUT_TOKENS = 65000 (5× reasoning budget cho heavy files).
+- Dependency injection: FileIndexService nhận API callables từ GeminiApiManager.
+- Helper functions nằm ngoài class (build_index_base_name, write_index_json, read_index_json,
+  should_use_last_index, build_index_context).
+- Prompt templates nạp từ src/instructions/file_index_*.txt.
+
+
+================================================================================
+6) PROMPT MANAGEMENT
+================================================================================
+
+Module: src/core/prompt_loader.py
+
+- Tất cả prompt đã chuyển sang file .txt trong src/instructions/.
+- Mỗi prompt có LRU-cached loader function.
+- Python fallback constants nằm trong src/instructions/ (dùng khi file .txt không tồn tại hoặc rỗng).
+
+Các file prompt:
+- azuris_system_prompt.txt (main system)
+- identity_capability_prompt.txt (identity + role contract + tool capabilities template)
+- lite_reasoning_prompt.txt (tier-1 reasoning)
+- fallback_system_prompt.txt (fallback synthesis)
+- three_block_context_prompt.txt (3-block template)
+- search_budget_prompt.txt, extra_retrieval_prompt.txt
+- partial_evidence_prompt.txt, auto_retrieval_limit_prompt.txt
+- final_synthesis_prompt.txt
+- file_index_reasoning_prompt.txt, file_index_validation_prompt.txt
 
 
 ================================================================================
@@ -137,6 +182,8 @@ Runtime knobs liên quan stability:
 - FALLBACK_MAX_API_RETRIES
 - SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS
 - SEARCH_ALLOW_PARTIAL_ANSWER
+- REASONING_MODEL_ALIAS / FINAL_MODEL_ALIAS / FALLBACK_MODEL_ALIAS (model alias overrides)
+- FILE_INDEX_DIR / FILE_CHUNK_DIR (file indexing storage paths)
 
 
 ================================================================================
@@ -157,6 +204,16 @@ Trải nghiệm quản trị:
 8) RECENT CHANGES TO NOTE
 ================================================================================
 
+- message_handler.py đã tách thành 3 module:
+  - message_handler.py (routing, context building, intent detection)
+  - gemini_api_manager.py (API key management, throttle, client pool)
+  - gemini_pipeline.py (reasoning loop, final synthesis, fallback)
+- gemini_api_manager.py và gemini_pipeline.py đã chuyển từ src/handlers/ sang src/core/ (core infrastructure).
+- Identity/capability prompt đã trích xuất sang src/instructions/identity_capability_prompt.txt.
+- Python fallback constants (system_prompt.py, lite_sys_prompt.py, fallback_sys_prompt.py) nằm trong src/instructions/.
+- File indexing pipeline trích xuất sang src/services/file_index_service.py (dependency injection).
+- Tất cả hardcoded prompts đã chuyển sang src/instructions/*.txt với LRU-cached loaders.
+- File parser dùng filename thực thay vì Discord attachment ID.
 - Đã bỏ dual-write DB+memory ở hot path để tránh lock contention không cần thiết.
 - Đã tối ưu SQLite cho durability khi cắt điện/VPS crash (WAL + FULL + timeout + checkpoint).
 - Đã thêm retry khi ghi DB bị lock tạm thời.

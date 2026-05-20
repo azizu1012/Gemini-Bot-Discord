@@ -11,6 +11,12 @@ from typing import Dict, List, Any, Optional, Set
 import aiofiles
 import requests
 import sympy as sp
+from sympy.parsing.sympy_parser import (
+    parse_expr,
+    standard_transformations,
+    implicit_multiplication_application,
+    convert_xor,
+)
 from google import genai
 from google.genai import types as genai_types
 import serpapi
@@ -257,7 +263,6 @@ class ToolsManager:
         self.search_time_sensitive_cache_ttl_seconds = self._load_search_time_sensitive_cache_ttl_seconds()
         self.search_failed_query_cooldown_seconds = self._load_search_failed_query_cooldown_seconds()
         self.search_empty_evidence_cache_ttl_seconds = self._load_search_empty_evidence_cache_ttl_seconds()
-        self.gemini_vision_model = os.getenv("GEMINI_VISION_MODEL", MODEL_NAME or "gemini-3-flash-preview")
 
         if GEMINI_API_KEYS:
             self.logger.info(
@@ -267,21 +272,28 @@ class ToolsManager:
                 f"top_results_limit={self.search_top_results_limit} quality_sources={self.min_quality_sources}/{self.time_sensitive_min_quality_sources} "
                 f"deep_read_top_links={self.deep_read_top_links} semantic_cache={self.search_semantic_cache_enabled} "
                 f"general_ttl={self.search_general_cache_ttl_seconds}s "
-                f"time_ttl={self.search_time_sensitive_cache_ttl_seconds}s cooldown={self.search_failed_query_cooldown_seconds}s "
-                f"vision_model={self.gemini_vision_model}"
+                f"time_ttl={self.search_time_sensitive_cache_ttl_seconds}s cooldown={self.search_failed_query_cooldown_seconds}s"
             )
         else:
             self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
 
     def _resolve_router_model_alias_for_vision(self) -> str:
         """Map configured vision model_id to router alias for shared key/quota accounting."""
-        target_model_id = (self.gemini_vision_model or "").strip()
-        if target_model_id:
-            for alias, cfg in AVAILABLE_MODELS.items():
-                if str(cfg.get("model_id", "")).strip() == target_model_id:
-                    return alias
-        return self.api_router.get_preferred_model()
-    
+        # Use FINAL_MODEL_ALIAS (default gemini-flash-35) for vision tasks
+        # consistent with message_handler where Lite is for reasoning only.
+        final_alias = os.getenv("FINAL_MODEL_ALIAS", "gemini-flash-35").strip()
+
+        # If the final_alias is valid, ensure we can route to it or its peer
+        if final_alias in self.api_router.model_pools:
+            # We don't want to actually reserve the key here, we just want to verify
+            # if final_alias or its priority peer (like flash-30) is available.
+            # Using get_next_key_for_model_reservation handles checking priority fallback.
+            reservation = self.api_router.get_next_key_for_model_reservation(final_alias)
+            if reservation:
+                return reservation["model_alias"]
+
+        return final_alias
+
     def get_all_tools(self):
         """Return all tool definitions for Gemini."""
         return [
@@ -320,7 +332,10 @@ class ToolsManager:
             genai_types.Tool(function_declarations=[
                 genai_types.FunctionDeclaration(
                     name="calculate",
-                    description="Giải các bài toán số học hoặc biểu thức phức tạp, bao gồm các hàm lượng giác, logarit, và đại số.",
+                    description=(
+                        "Giải các bài toán số học hoặc biểu thức phức tạp (đại số, lượng giác, logarit). "
+                        "Hỗ trợ đạo hàm/tích phân/rút gọn bằng cú pháp SymPy (vd: diff(x**3*exp(sin(x)), x))."
+                    ),
                     parameters={
                         "type": "object",
                         "properties": {"equation": {"type": "string", "description": "Biểu thức toán học dưới dạng string, ví dụ: 'sin(pi/2) + 2*x'."}},
@@ -434,7 +449,7 @@ class ToolsManager:
         return f"{mode}|{payload}"
 
     def get_web_search_cache(self, query: str):
-        """Get cached web search result."""
+        """Get cached web search result. (Deprecated - Now uses SQLite DB for persistence but memory cache for fast responses)"""
         key = self._normalize_search_cache_key(query)
         if key in self.web_search_cache:
             cached_item = self.web_search_cache[key]
@@ -1003,13 +1018,64 @@ class ToolsManager:
     
     def run_calculator(self, equation_str: str):
         """Run mathematical calculation."""
-        cleaned_eq = equation_str.strip().lower().replace('x', '*').replace(',', '.')
+        raw_eq = (equation_str or "").strip()
+        if not raw_eq:
+            return json.dumps({
+                "equation": equation_str,
+                "result": "Lỗi biểu thức: Biểu thức rỗng.",
+                "success": False
+            }, ensure_ascii=False)
+
+        cleaned_eq = raw_eq.strip().lower().replace(',', '.')
+        cleaned_eq = cleaned_eq.replace('×', '*').replace('·', '*').replace('÷', '/')
+        cleaned_eq = cleaned_eq.replace('−', '-')
         if cleaned_eq.endswith('='):
-            cleaned_eq = cleaned_eq[:-1]
-        
+            cleaned_eq = cleaned_eq[:-1].strip()
+        if '=' in cleaned_eq:
+            cleaned_eq = cleaned_eq.split('=', 1)[1].strip()
+
+        transformations = standard_transformations + (
+            implicit_multiplication_application,
+            convert_xor,
+        )
+        local_dict = {
+            "sin": sp.sin,
+            "cos": sp.cos,
+            "tan": sp.tan,
+            "asin": sp.asin,
+            "acos": sp.acos,
+            "atan": sp.atan,
+            "sinh": sp.sinh,
+            "cosh": sp.cosh,
+            "tanh": sp.tanh,
+            "log": sp.log,
+            "ln": sp.log,
+            "exp": sp.exp,
+            "sqrt": sp.sqrt,
+            "pi": sp.pi,
+            "e": sp.E,
+            "diff": sp.diff,
+            "integrate": sp.integrate,
+            "limit": sp.limit,
+            "simplify": sp.simplify,
+        }
+
         try:
-            expr = sp.sympify(cleaned_eq, evaluate=False)
-            result = sp.N(expr)
+            expr = parse_expr(
+                cleaned_eq,
+                local_dict=local_dict,
+                transformations=transformations,
+                evaluate=True,
+            )
+
+            if hasattr(expr, "doit"):
+                expr = expr.doit()
+
+            if getattr(expr, "free_symbols", set()):
+                result = sp.simplify(expr)
+            else:
+                result = sp.N(expr)
+
             result_str = str(result)
             if result_str.endswith('.0'):
                 result_str = result_str[:-2]
@@ -1034,6 +1100,7 @@ class ToolsManager:
 
         start_ts = datetime.now().timestamp()
         vision_alias = self._resolve_router_model_alias_for_vision()
+        vision_model_id = self.api_router.get_model_id(vision_alias)
         attempt_budget = max(1, min(5, len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1))
         last_error = ""
         try:
@@ -1046,6 +1113,11 @@ class ToolsManager:
 
             mime_type = self._guess_mime_type(image_url)
             image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
+
+            # Require quota before calling API (using tpm limit)
+            quota_ok = await self.api_router.acquire_gemini_quota(question, 2000, model_alias=vision_alias, image_count=1)
+            if not quota_ok:
+                return "⚠️ Hệ thống đang quá tải (vượt giới hạn truy vấn ảnh), vui lòng thử lại sau vài giây."
 
             for attempt in range(1, attempt_budget + 1):
                 reservation = self.api_router.get_next_key_for_model_reservation(vision_alias)
@@ -1062,7 +1134,7 @@ class ToolsManager:
                     client = genai.Client(api_key=api_key)
                     response = await asyncio.to_thread(
                         client.models.generate_content,
-                        model=self.gemini_vision_model,
+                        model=vision_model_id,
                         contents=[image_part, question],
                     )
 
@@ -1076,7 +1148,7 @@ class ToolsManager:
                     latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
                     self.logger.info(
                         f"AB_METRIC image_tool success=1 latency_ms={latency_ms} bytes={len(image_bytes)} "
-                        f"model={self.gemini_vision_model} attempt={attempt}/{attempt_budget} key={key_alias} alias={vision_alias}"
+                        f"model={vision_model_id} attempt={attempt}/{attempt_budget} key={key_alias} alias={vision_alias}"
                     )
                     return final_result
                 except Exception as attempt_error:
@@ -1113,7 +1185,7 @@ class ToolsManager:
             latency_ms = int((datetime.now().timestamp() - start_ts) * 1000)
             self.logger.warning(
                 f"AB_METRIC image_tool success=0 latency_ms={latency_ms} "
-                f"attempts={attempt_budget} model={self.gemini_vision_model} alias={vision_alias} "
+                f"attempts={attempt_budget} model={vision_model_id} alias={vision_alias} "
                 f"error={(last_error or error_text)[:180]}"
             )
             return f"Đã xảy ra lỗi khi xử lý hình ảnh bằng Gemini: {last_error or e}"
@@ -1670,7 +1742,15 @@ class ToolsManager:
         try:
             if name == "web_search":
                 query = args.get("query", "")
-                return await self.run_search_apis(query, "general")
+                result = await self.run_search_apis(query, "general")
+                # Log into Database
+                try:
+                    from src.database.repository import DatabaseRepository
+                    db = DatabaseRepository()
+                    await db.log_web_search(user_id, query, str(result)[:2000]) # Trucate if too long
+                except Exception as e:
+                    self.logger.error(f"Error logging web search to DB: {e}")
+                return result
             
             elif name == "get_weather":
                 city = args.get("city", "Ho Chi Minh City")

@@ -13,26 +13,67 @@ from datetime import datetime, timedelta
 # Router sẽ tự động chọn model available theo priority
 # ============================================================================
 AVAILABLE_MODELS = {
-    "gemini-flash-latest": {
+    "gemini-flash-35": {
         "display": "Gemini Flash Latest",
         "priority": 1,
-        "model_id": os.getenv('GEMINI_FLASH_LATEST_MODEL', 'gemini-3-flash-preview'),
-        "rpm": int(os.getenv('GEMINI_FLASH_LATEST_RPM', '5')),
-        "tpm": int(os.getenv('GEMINI_FLASH_LATEST_TPM', '250000')),
-        "rpd": int(os.getenv('GEMINI_FLASH_LATEST_RPD', '20')),
+        "model_id": os.getenv('GEMINI_FLASH_35_MODEL', 'gemini-3.5-flash'),
+        "rpm": int(os.getenv('GEMINI_FLASH_35_RPM', '5')),
+        "tpm": int(os.getenv('GEMINI_FLASH_35_TPM', '250000')),
+        "rpd": int(os.getenv('GEMINI_FLASH_35_RPD', '20')),
     },
-    "gemini-flash-lite-latest": {
+    "gemini-flash-30": {
+        "display": "Gemini Flash 3.5 Latest",
+        "priority": 1,
+        "model_id": os.getenv('GEMINI_FLASH_30_MODEL', 'gemini-3-flash-preview'),
+        "rpm": int(os.getenv('GEMINI_FLASH_30_RPM', '5')),
+        "tpm": int(os.getenv('GEMINI_FLASH_30_TPM', '250000')),
+        "rpd": int(os.getenv('GEMINI_FLASH_30_RPD', '20')),
+    },
+    "gemini-flash-lite": {
         "display": "Gemini Flash Lite Latest",
         "priority": 2,
-        "model_id": os.getenv('GEMINI_FLASH_LITE_LATEST_MODEL', 'gemini-3-flash-preview'),
-        "rpm": int(os.getenv('GEMINI_FLASH_LITE_LATEST_RPM', '15')),
-        "tpm": int(os.getenv('GEMINI_FLASH_LITE_LATEST_TPM', '250000')),
-        "rpd": int(os.getenv('GEMINI_FLASH_LITE_LATEST_RPD', '500')),
+        "model_id": os.getenv('GEMINI_FLASH_LITE_MODEL', 'gemini-3.1-flash-lite'),
+        "rpm": int(os.getenv('GEMINI_FLASH_LITE_RPM', '15')),
+        "tpm": int(os.getenv('GEMINI_FLASH_LITE_TPM', '250000')),
+        "rpd": int(os.getenv('GEMINI_FLASH_LITE_RPD', '500')),
     },
+    # Custom Endpoint OpenAI Compatible Models
+    "custom-flash-high": {
+        "display": "Custom Flash High",
+        "priority": 0, # Highest priority so it gets picked first if available
+        "model_id": "gemini-3.5-flash-high",
+        "rpm": 60,
+        "tpm": 1000000,
+        "rpd": 5000,
+    },
+    "custom-flash-low": {
+        "display": "Custom Flash Low",
+        "priority": 0,
+        "model_id": "gemini-3.5-flash-low",
+        "rpm": 60,
+        "tpm": 1000000,
+        "rpd": 5000,
+    },
+    "custom-flash-lite": {
+        "display": "Custom Flash Lite",
+        "priority": 1, # Used for reasoning
+        "model_id": "gemini-3.1-flash-lite",
+        "rpm": 60,
+        "tpm": 1000000,
+        "rpd": 5000,
+    },
+    "custom-pro-image": {
+        "display": "Custom Pro Image",
+        "priority": 0,
+        "model_id": "gemini-3.1-pro-image",
+        "rpm": 10,
+        "tpm": 100000,
+        "rpd": 500,
+    }
 }
 
 # Priority list (sorted) - Router sẽ thử từ trên xuống
-MODEL_PRIORITY = ["gemini-flash-latest", "gemini-flash-lite-latest"]
+MODEL_PRIORITY = ["custom-flash-high", "custom-flash-low", "gemini-flash-35", "gemini-flash-30", "custom-flash-lite", "gemini-flash-lite"]
 
 
 # ============================================================================
@@ -110,6 +151,13 @@ def auto_detect_api_keys() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     for key_name, key_value in env_vars.items():
         if not key_value or not key_value.strip():
             continue
+            
+        # Add Custom OpenAI API Key to main keys so it goes into the router pool
+        custom_endpoint_enabled = os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() == "true"
+        if custom_endpoint_enabled and key_name.upper() == 'OPENAI_API_KEY' and env_vars.get('OPENAI_CUSTOM_ENDPOINT'):
+            main_keys.append((key_name, key_value))
+            key_to_name[key_value] = key_name
+            continue
         
         if key_name.upper().startswith('GEMINI_API_KEY_') and 'TOMTAT' not in key_name.upper():
             main_keys.append((key_name, key_value))
@@ -121,7 +169,11 @@ def auto_detect_api_keys() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     main_keys.sort(key=lambda x: x[0])
     summary_keys.sort(key=lambda x: x[0])
     
-    all_keys['main'] = [val for _, val in main_keys]
+    # Prepend OPENAI_API_KEY to ensure it gets highest priority if present
+    openai_keys = [val for name, val in main_keys if name == 'OPENAI_API_KEY']
+    other_keys = [val for name, val in main_keys if name != 'OPENAI_API_KEY']
+    
+    all_keys['main'] = openai_keys + other_keys
     all_keys['summary'] = [val for _, val in summary_keys]
     
     return all_keys, key_to_name

@@ -241,19 +241,50 @@ def relay():
             config = data.get("config", {})
             system_instruction = data.get("system_instruction", "")
             
-            client = genai.Client(api_key=api_key)
-            
-            response = client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config
-            )
-            
-            text = ""
-            if response.candidates:
-                candidate = response.candidates[0]
-                if candidate.content and candidate.content.parts:
-                    text = candidate.content.parts[0].text
+            # Support OpenAI Custom Endpoints in relay server if key starts with sk-
+            if api_key.startswith("sk-"):
+                from openai import OpenAI
+                # Assuming custom endpoint is passed in config or hardcoded here if needed
+                # For this template, we assume direct use of OpenAI library if it's an sk- key
+                base_url = "https://llmapi.huytechie.net/v1"
+                client = OpenAI(api_key=api_key, base_url=base_url)
+                
+                # Format conversion for OpenAI
+                openai_messages = []
+                if system_instruction:
+                    openai_messages.append({"role": "system", "content": system_instruction})
+                
+                for msg in contents:
+                    if isinstance(msg, dict):
+                        role = "assistant" if msg.get("role") == "model" else "user"
+                        parts = msg.get("parts", [])
+                        content_str = parts[0].get("text", "") if parts and isinstance(parts[0], dict) else str(parts)
+                        openai_messages.append({"role": role, "content": content_str})
+                    else:
+                        openai_messages.append({"role": "user", "content": str(msg)})
+                
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=openai_messages,
+                    temperature=config.get("temperature", 0.7),
+                    max_tokens=config.get("max_output_tokens", 2000),
+                )
+                text = response.choices[0].message.content
+                
+            else:
+                client = genai.Client(api_key=api_key)
+                
+                response = client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config
+                )
+                
+                text = ""
+                if response.candidates:
+                    candidate = response.candidates[0]
+                    if candidate.content and candidate.content.parts:
+                        text = candidate.content.parts[0].text
             
             return jsonify({
                 "success": True,

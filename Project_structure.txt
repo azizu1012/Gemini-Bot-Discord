@@ -22,10 +22,11 @@ Azuris_refactor_code_base/
     │   ├── api_proxy.py
     │   ├── api_router.py
     │   ├── config.py
+    │   ├── gemini_api_manager.py
+    │   ├── gemini_pipeline.py
     │   ├── gemini_rate_limiter.py
     │   ├── logger.py
-    │   ├── prompt_loader.py
-    │   └── system_prompt.py
+    │   └── prompt_loader.py
     ├── database/
     │   └── repository.py
     ├── handlers/
@@ -33,9 +34,21 @@ Azuris_refactor_code_base/
     │   ├── bot_server.py
     │   └── message_handler.py
     ├── instructions/
+    │   ├── system_prompt.py (Python fallback constant cho azuris_system_prompt.txt)
+    │   ├── lite_sys_prompt.py (Python fallback constant cho lite_reasoning_prompt.txt)
+    │   ├── fallback_sys_prompt.py (Python fallback constant cho fallback_system_prompt.txt)
     │   ├── azuris_system_prompt.txt (legacy filename, content is Chad Gibiti identity)
     │   ├── fallback_system_prompt.txt
-    │   └── lite_reasoning_prompt.txt
+    │   ├── identity_capability_prompt.txt
+    │   ├── lite_reasoning_prompt.txt
+    │   ├── three_block_context_prompt.txt
+    │   ├── search_budget_prompt.txt
+    │   ├── extra_retrieval_prompt.txt
+    │   ├── partial_evidence_prompt.txt
+    │   ├── auto_retrieval_limit_prompt.txt
+    │   ├── final_synthesis_prompt.txt
+    │   ├── file_index_reasoning_prompt.txt
+    │   └── file_index_validation_prompt.txt
     ├── managers/
     │   ├── cache_manager.py
     │   ├── cleanup_manager.py
@@ -43,6 +56,7 @@ Azuris_refactor_code_base/
     │   └── premium_manager.py
     ├── services/
     │   ├── file_parser.py
+    │   ├── file_index_service.py
     │   └── memory_service.py
     ├── tools/
     │   └── tools.py
@@ -77,7 +91,20 @@ Core runtime modules:
   Khởi tạo bot, đăng ký slash commands, quản lý admin interaction views.
 
 - src/handlers/message_handler.py:
-  Pipeline xử lý message, gọi model, gọi tools, ghép final response.
+  Routing message, build context, intent detection, file indexing orchestration, gọi pipeline.
+
+- src/core/gemini_api_manager.py:
+  API key pool rotation, quota management, cooldown, client pool, throttling, error classification.
+
+- src/core/gemini_pipeline.py:
+  Two-tier pipeline (reasoning loop → final synthesis → fallback), evidence evaluation, artifact cleaning.
+
+File indexing:
+- src/services/file_index_service.py:
+  LLM-powered file indexing (chunk → reasoning index → Flash validation). Helper functions ngoài class.
+
+- src/services/file_parser.py:
+  Download, chunk, text extraction cho file đính kèm Discord.
 
 Memory and persistence:
 - src/database/repository.py:
@@ -94,12 +121,15 @@ Tool layer:
   Khai báo tools, dispatch tool-calls, và lớp ổn định web_search (cache/dedup/cooldown/deep-read).
 
 Prompt and config:
-- src/core/system_prompt.py:
-  Hành vi assistant, quy tắc memory, output policy.
-  (Identity đã chuyển sang Chad Gibiti)
+- src/instructions/system_prompt.py, lite_sys_prompt.py, fallback_sys_prompt.py:
+  Python fallback constants cho prompt templates (dùng khi file .txt không tồn tại).
 
 - src/core/prompt_loader.py:
-  Nạp prompt templates dùng cho các tầng model.
+  LRU-cached loader cho tất cả prompt templates từ src/instructions/*.txt.
+  Có Python fallback constants khi file không tồn tại.
+
+- src/instructions/:
+  Tất cả prompt templates dùng cho pipeline (system, reasoning, fallback, identity, file index, etc.).
 
 ================================================================================
 NOTES
