@@ -482,18 +482,28 @@ class APIRouter:
     def get_next_key_reservation(self) -> Optional[Dict[str, str]]:
         """Reserve a key/model candidate without consuming daily quota yet.
 
-        Implements a 60/40 ratio between Priority 0 (Custom API) and Priority 1 (Gemini SDK).
-        Models within the same priority group are shuffled for load balancing.
+        Models within the active priority groups are shuffled for load balancing.
+        The active priority groups only contain custom endpoints if ENABLE_CUSTOM_ENDPOINT is true,
+        otherwise they only contain standard endpoints.
         """
-        priorities_to_check = sorted(list(self._priority_groups.keys()))
+        custom_enabled = os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() == "true"
 
-        # 60/40 split logic for priority 0 and 1
-        if 0 in priorities_to_check and 1 in priorities_to_check:
-            # 40% chance to prefer priority 1 over 0
-            if random.random() < 0.40:
-                idx0 = priorities_to_check.index(0)
-                idx1 = priorities_to_check.index(1)
-                priorities_to_check[idx0], priorities_to_check[idx1] = priorities_to_check[idx1], priorities_to_check[idx0]
+        # Filter available priorities based on custom toggle
+        valid_models = []
+        for prio, aliases in self._priority_groups.items():
+            for alias in aliases:
+                if custom_enabled and alias.startswith("custom-"):
+                    valid_models.append(alias)
+                elif not custom_enabled and not alias.startswith("custom-"):
+                    valid_models.append(alias)
+
+        # Group back into priorities
+        active_priorities_to_models = {}
+        for alias in valid_models:
+            prio = AVAILABLE_MODELS.get(alias, {}).get("priority", 99)
+            active_priorities_to_models.setdefault(prio, []).append(alias)
+
+        priorities_to_check = sorted(list(active_priorities_to_models.keys()))
 
         seen_priorities: set = set()
         for prio in priorities_to_check:
@@ -501,7 +511,7 @@ class APIRouter:
                 continue
             seen_priorities.add(prio)
 
-            peers = list(self._priority_groups.get(prio, []))
+            peers = list(active_priorities_to_models.get(prio, []))
             if not peers:
                 continue
             random.shuffle(peers)

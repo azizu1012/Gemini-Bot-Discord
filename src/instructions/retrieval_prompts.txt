@@ -15,4 +15,10 @@
 
 === three_block_context_prompt ===
 [SYSTEM INSTRUCTION]
-Below are the results of web searches and retrieved information. Please synthesize this evidence to provide a comprehensive answer.
+Below is the User's query and the results of our reasoning and retrieved information. Please synthesize this evidence to provide a comprehensive answer.
+
+[USER_CONTEXT_BLOCK]
+
+[REASONING_RESULT]
+
+[TOOL_RESULTS]

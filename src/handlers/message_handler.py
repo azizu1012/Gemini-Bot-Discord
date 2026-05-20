@@ -39,36 +39,42 @@ def _resolve_model_aliases() -> Tuple[str, str, str]:
     - gemini-flash-lite
     """
     priority = [alias for alias in MODEL_PRIORITY if alias in AVAILABLE_MODELS]
+
+    # Reload environment variable cache forcefully here because
+    # it gets mutated via the /enable_custom_api slash command
+    custom_enabled = os.environ.get("ENABLE_CUSTOM_ENDPOINT", "false").lower() == "true"
+
+    # Filter priority list based on custom endpoint toggle
+    if custom_enabled:
+        priority = [alias for alias in priority if alias.startswith("custom-")]
+        if not priority:
+            priority = ["custom-flash-high"] # Fail-safe fallback if config is broken
+    else:
+        priority = [alias for alias in priority if not alias.startswith("custom-")]
+        if not priority:
+            priority = ["gemini-flash-35"] # Fail-safe fallback
+
+    # We want final output to be a high capacity/quality model (priority 0 or 1 usually).
     final_default = priority[0] if priority else "gemini-flash-35"
-    reasoning_default = priority[1] if len(priority) > 1 else final_default
+
+    # We want reasoning to be a fast lite model (like custom-flash-lite or gemini-flash-lite).
+    # Since priority list is sorted by general quality, lite models are usually near the end.
+    lite_models = [alias for alias in priority if "lite" in alias.lower()]
+    reasoning_default = lite_models[0] if lite_models else (priority[1] if len(priority) > 1 else final_default)
+
     fallback_default = reasoning_default
 
-    final_alias = (os.getenv("FINAL_MODEL_ALIAS") or final_default).strip() or final_default
-    reasoning_alias = (os.getenv("REASONING_MODEL_ALIAS") or reasoning_default).strip() or reasoning_default
-    fallback_alias = (os.getenv("FALLBACK_MODEL_ALIAS") or reasoning_alias or fallback_default).strip() or fallback_default
-
-    for env_name, alias_value, default_value in (
-        ("FINAL_MODEL_ALIAS", final_alias, final_default),
-        ("REASONING_MODEL_ALIAS", reasoning_alias, reasoning_default),
-        ("FALLBACK_MODEL_ALIAS", fallback_alias, fallback_default),
-    ):
-        if alias_value not in AVAILABLE_MODELS:
-            logger.warning(
-                f"{env_name}='{alias_value}' is not a valid router alias. "
-                f"Falling back to '{default_value}'."
-            )
-            if env_name == "FINAL_MODEL_ALIAS":
-                final_alias = default_value
-            elif env_name == "REASONING_MODEL_ALIAS":
-                reasoning_alias = default_value
-            else:
-                fallback_alias = default_value
+    # We don't read FINAL_MODEL_ALIAS from env here if custom toggle enforces a specific prefix pool.
+    # We strictly enforce the aliases so that they don't leak across the custom/standard boundary.
+    final_alias = final_default
+    reasoning_alias = reasoning_default
+    fallback_alias = fallback_default
 
     return reasoning_alias, final_alias, fallback_alias
 
 
-REASONING_MODEL_ALIAS, FINAL_MODEL_ALIAS, FALLBACK_MODEL_ALIAS = _resolve_model_aliases()
-
+# We don't want global constants statically assigned at import time anymore,
+# because the custom endpoint toggle changes them at runtime.
 
 class MessageHandler:
     """Core message processing with Gemini API integration."""
@@ -121,21 +127,25 @@ class MessageHandler:
 
     @property
     def pipeline(self) -> GeminiPipeline:
-        if self._pipeline is None:
+        # Every time we grab pipeline, we resolve aliases dynamically
+        # so that when the custom api toggle flips, the pipeline uses the correct models.
+        reasoning_alias, final_alias, fallback_alias = _resolve_model_aliases()
+        if self._pipeline is None or self._pipeline.reasoning_model_alias != reasoning_alias:
             self._pipeline = GeminiPipeline(
                 config=self.config,
                 api_mgr=self.api_mgr,
                 tools_mgr=self.tools_mgr,
                 identity_builder=self._build_identity_capability_instruction,
-                reasoning_model_alias=REASONING_MODEL_ALIAS,
-                final_model_alias=FINAL_MODEL_ALIAS,
-                fallback_model_alias=FALLBACK_MODEL_ALIAS,
+                reasoning_model_alias=reasoning_alias,
+                final_model_alias=final_alias,
+                fallback_model_alias=fallback_alias,
             )
         return self._pipeline
 
     @property
     def file_index_svc(self) -> FileIndexService:
-        if self._file_index_svc is None:
+        reasoning_alias, final_alias, fallback_alias = _resolve_model_aliases()
+        if self._file_index_svc is None or self._file_index_svc._reasoning_alias != reasoning_alias:
             self._file_index_svc = FileIndexService(
                 config=self.config,
                 file_parser=self.file_parser,
@@ -145,8 +155,8 @@ class MessageHandler:
                 api_throttle_fn=self.api_mgr._throttle_api_request,
                 api_acquire_quota_fn=self.api_mgr._acquire_gemini_quota,
                 api_log_exception_fn=self.api_mgr._log_gemini_exception,
-                reasoning_model_alias=REASONING_MODEL_ALIAS,
-                final_model_alias=FINAL_MODEL_ALIAS,
+                reasoning_model_alias=reasoning_alias,
+                final_model_alias=final_alias,
             )
         return self._file_index_svc
 
@@ -210,41 +220,53 @@ class MessageHandler:
                     return
 
                 user_id = str(message.author.id)
-                is_admin = user_id in self.config.ADMIN_USER_IDS
-                is_premium = self.premium_mgr.is_premium_user(user_id)
 
-                is_dm = isinstance(message.channel, discord.DMChannel)
-                is_mentioned = self.bot.user in message.mentions
-
-                if not is_dm and not is_mentioned:
+                # Check for duplicate processing
+                if user_id in self.bot_core.processing_users:
+                    self.logger.warning(f"User {user_id} already processing, ignoring concurrent message: '{message.content}'")
                     return
 
-                if not is_admin and not is_premium:
-                    now = datetime.now()
-                    self.user_queue[user_id].append(now)
-                    while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
-                        self.user_queue[user_id].popleft()
+                self.bot_core.processing_users.add(user_id)
+                try:
+                    is_admin = user_id in self.config.ADMIN_USER_IDS
+                    is_premium = self.premium_mgr.is_premium_user(user_id)
 
-                    if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
-                        await message.add_reaction("⏳")
+                    is_dm = isinstance(message.channel, discord.DMChannel)
+                    is_mentioned = self.bot.user in message.mentions
+
+                    if not is_dm and not is_mentioned:
                         return
 
-                if user_id in self.bot_core.confirmation_pending and self.bot_core.confirmation_pending[user_id]['awaiting']:
-                    if message.content.lower() in ['yes', 'y']:
-                        await self._clear_user_history(message, user_id)
-                    self.bot_core.confirmation_pending[user_id]['awaiting'] = False
-                    return
+                    if not is_admin and not is_premium:
+                        now = datetime.now()
+                        self.user_queue[user_id].append(now)
+                        while self.user_queue[user_id] and self.user_queue[user_id][0] < now - timedelta(seconds=self.RATE_LIMIT_WINDOW):
+                            self.user_queue[user_id].popleft()
 
-                if user_id in self.bot_core.admin_confirmation_pending and self.bot_core.admin_confirmation_pending[user_id]['awaiting']:
-                    if message.content.upper() == 'YES RESET':
-                        await self._clear_all_data(message, user_id)
-                    self.bot_core.admin_confirmation_pending[user_id]['awaiting'] = False
-                    return
+                        if len(self.user_queue[user_id]) > self.RATE_LIMIT_THRESHOLD:
+                            await message.add_reaction("⏳")
+                            return
 
-                if is_dm:
-                    await self._handle_dm(message)
-                else:
-                    await self._handle_mention(message)
+                    if user_id in self.bot_core.confirmation_pending and self.bot_core.confirmation_pending[user_id]['awaiting']:
+                        if message.content.lower() in ['yes', 'y']:
+                            await self._clear_user_history(message, user_id)
+                        self.bot_core.confirmation_pending[user_id]['awaiting'] = False
+                        return
+
+                    if user_id in self.bot_core.admin_confirmation_pending and self.bot_core.admin_confirmation_pending[user_id]['awaiting']:
+                        if message.content.upper() == 'YES RESET':
+                            await self._clear_all_data(message, user_id)
+                        self.bot_core.admin_confirmation_pending[user_id]['awaiting'] = False
+                        return
+
+                    if is_dm:
+                        await self._handle_dm(message)
+                    else:
+                        await self._handle_mention(message)
+                finally:
+                    # Always clean up the processing set when done (or on error)
+                    if user_id in self.bot_core.processing_users:
+                        self.bot_core.processing_users.remove(user_id)
 
             except Exception as e:
                 self.logger.error(f"Error in handle_message: {e}")

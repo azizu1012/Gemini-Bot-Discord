@@ -84,11 +84,15 @@ class GeminiApiManager:
         permanently_exhaust: bool = False,
         reservation: Optional[Dict[str, str]] = None,
     ):
+        # 503 Unavailable is a transient Google server error, not a quota limit.
+        # We enforce a short delay, but do not exhaust/affect router quota for this key.
+        is_503 = reason == "unavailable"
+
         model = model_alias or self.api_router.get_current_model()
         pool = (reservation or {}).get("pool", "main")
         counter_key = (reservation or {}).get("counter_key")
 
-        if pool != "legacy":
+        if pool != "legacy" and not is_503:
             if permanently_exhaust:
                 self.api_router.mark_key_exhausted(key, model, pool=pool, counter_key=counter_key)
             else:
@@ -100,6 +104,8 @@ class GeminiApiManager:
 
         if reason == "invalid_key":
             self.logger.warning(f"🚫 API Key ...{key[-4:]} marked invalid and excluded for current quota cycle.")
+        elif is_503:
+            self.logger.warning(f"⚠️ API Key ...{key[-4:]} delayed for {duration}s due to Google Server 503 (Unavailable).")
         else:
             self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to rate limit/quota.")
 
@@ -323,11 +329,25 @@ class GeminiApiManager:
                 top_p=generation_config.get("top_p", 0.95),
             )
             
-            class MockResponse:
+            class CustomAPIWrapperPart:
                 def __init__(self, text):
                     self.text = text
-            
-            return MockResponse(response.choices[0].message.content)
+                    self.function_call = None
+
+            class CustomAPIWrapperContent:
+                def __init__(self, text):
+                    self.parts = [CustomAPIWrapperPart(text)]
+
+            class CustomAPIWrapperCandidate:
+                def __init__(self, text):
+                    self.content = CustomAPIWrapperContent(text)
+
+            class CustomAPIWrapperResponse:
+                def __init__(self, text):
+                    self.text = text
+                    self.candidates = [CustomAPIWrapperCandidate(text)]
+
+            return CustomAPIWrapperResponse(response.choices[0].message.content)
             
         else:
             return await asyncio.to_thread(
