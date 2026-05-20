@@ -5,7 +5,6 @@ Chad Gibiti là Discord bot dùng pipeline Gemini 2 tầng (reasoning/tool loop 
 ## Quick start
 
 ```bash
-cd Azuris_refactor_code_base
 pip install -r requirements.txt
 python main.py
 ```
@@ -28,8 +27,6 @@ Linux/Ubuntu launcher có hỗ trợ PM2:
 ```
 
 ## Runtime hardening (cross-platform)
-
-- Path runtime đã được chuẩn hóa theo `PROJECT_ROOT` tuyệt đối, không còn phụ thuộc `cwd`.
 - Runtime folders/file sẽ tự tạo trước khi dùng (`data/`, `uploaded_files/`, `logs/`, quota state, voice lock files...).
 - Startup banner luôn in:
   - Python executable
@@ -45,8 +42,8 @@ Linux/Ubuntu launcher có hỗ trợ PM2:
 1. Clone đúng repo và cài venv:
 
 ```bash
-git clone https://github.com/azizu1012/Gemini-Bot-Discord.git Azuris_bot
-cd Azuris_bot
+git clone https://github.com/azizu1012/Gemini-Bot-Discord.git chat-bot
+cd chat-bot
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -65,16 +62,16 @@ python run_bot.py --preflight
 1. Start bằng ecosystem có `cwd` cố định:
 
 ```bash
-BOT_ENABLE_SERVER=1 pm2 start ecosystem.config.js --only azuris-bot --update-env
+BOT_ENABLE_SERVER=1 pm2 start ecosystem.config.js --only chat-bot --update-env
 # hoặc bot-only:
-BOT_ENABLE_SERVER=0 pm2 start ecosystem.config.js --only azuris-bot --update-env
+BOT_ENABLE_SERVER=0 pm2 start ecosystem.config.js --only chat-bot --update-env
 pm2 save
 ```
 
 1. Verify sau deploy:
 
 ```bash
-pm2 logs azuris-bot --lines 120
+pm2 logs chat-bot --lines 120
 ```
 
 Checklist log cần thấy:
@@ -86,7 +83,7 @@ Checklist log cần thấy:
 
 ```bash
 pm2 update
-pm2 restart azuris-bot
+pm2 restart chat-bot
 pm2 save
 ```
 
@@ -215,7 +212,6 @@ Voice room:
 
 - Tổng quan kỹ thuật: `PROJECT_INFO.txt`
 - Cấu trúc project: `Project_structure.txt`
-- Gói context gửi agent ngoài: `AGENT_HANDOFF_PROJECT_CONTEXT.md`
 
 ## Custom API Health Checker
 Tính năng tự động kiểm tra sức khoẻ (health check) của OpenAI Custom Endpoint chạy ngầm. Tính năng này:
