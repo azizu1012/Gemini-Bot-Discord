@@ -13,6 +13,9 @@ KEY_PACKAGES = [
     "python-dotenv",
     "Flask",
     "aiohttp",
+    "openai",
+    "requests",
+    "pypdf",
 ]
 
 

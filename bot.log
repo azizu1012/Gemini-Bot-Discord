@@ -1,0 +1,112 @@
+2026-05-17 15:45:00,476 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-17 15:45:02,792 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-17 15:46:46,628 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-17 15:46:48,254 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-17 15:48:41,823 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-17 15:48:43,066 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-17 15:49:59,047 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-17 15:50:00,501 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-18 01:39:55,638 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 01:40:02,452 [INFO] Configuration loaded
+2026-05-18 01:40:02,452 [INFO] ======================================================================
+2026-05-18 01:40:02,452 [INFO] AZURIS STARTUP CONTEXT
+2026-05-18 01:40:02,452 [INFO] ======================================================================
+2026-05-18 01:40:02,452 [INFO] Python executable: D:\AI_Projects\Discord-bot\.venv\Scripts\python.exe
+2026-05-18 01:40:02,453 [INFO] Current working directory: D:\AI_Projects\Discord-bot
+2026-05-18 01:40:02,453 [INFO] Project root: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base
+2026-05-18 01:40:02,453 [INFO] Runtime path [project_root]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base
+2026-05-18 01:40:02,453 [INFO] Runtime path [db_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\bot_database.db
+2026-05-18 01:40:02,453 [INFO] Runtime path [db_backup_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\bot_database.db.backup
+2026-05-18 01:40:02,453 [INFO] Runtime path [memory_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\short_term_memory.json
+2026-05-18 01:40:02,454 [INFO] Runtime path [file_storage_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\uploaded_files
+2026-05-18 01:40:02,454 [INFO] Runtime path [weather_cache_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\weather_cache.json
+2026-05-18 01:40:02,454 [INFO] Runtime path [quota_state_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\quota_state.json
+2026-05-18 01:40:02,454 [INFO] Runtime path [voice_lock_base_dir]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\voice_lock
+2026-05-18 01:40:02,454 [INFO] Runtime path [log_path]: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\bot.log
+2026-05-18 01:40:02,454 [INFO] ======================================================================
+2026-05-18 01:40:02,477 [INFO] Dependency [google-genai] = 2.2.0
+2026-05-18 01:40:02,478 [INFO] Dependency [discord.py] = 2.6.4
+2026-05-18 01:40:02,479 [INFO] Dependency [python-dotenv] = 1.2.1
+2026-05-18 01:40:02,479 [INFO] Dependency [Flask] = 3.1.2
+2026-05-18 01:40:02,480 [INFO] Dependency [aiohttp] = 3.13.2
+2026-05-18 01:40:02,480 [INFO] Preflight checks passed.
+2026-05-18 01:40:02,480 [INFO] Token preview: MTQx...9XFc
+2026-05-18 01:40:02,480 [INFO] Model: gemini-2.5-flash
+2026-05-18 01:40:02,481 [INFO] Gemini API keys available: 104
+2026-05-18 01:40:02,481 [INFO] Database path: D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\bot_database.db
+2026-05-18 01:40:02,488 [INFO] Search/image tools ready: provider=duckduckgo streams=2 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-2.5-flash
+2026-05-18 01:40:02,497 [INFO] BotCore initialized
+2026-05-18 01:40:02,498 [INFO] Search/image tools ready: provider=duckduckgo streams=2 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-2.5-flash
+2026-05-18 01:40:02,498 [INFO] MessageHandler initialized
+2026-05-18 01:40:02,498 [INFO] Starting Chad Gibiti Discord bot
+2026-05-18 01:40:07,875 [INFO] Synced 15 slash commands!
+2026-05-18 01:40:07,888 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-18 01:40:07,889 [INFO] Running DB cleanup...
+2026-05-18 01:40:07,890 [INFO] DB cleaned: Old messages deleted (User notes kept).
+2026-05-18 01:40:07,890 [INFO] Running local file cleanup...
+2026-05-18 01:40:07,891 [INFO] Free space: 108055 MB. No cleanup needed.
+2026-05-18 01:40:07,896 [INFO] DB backed up to D:\AI_Projects\Discord-bot\Azuris_refactor_code_base\data\bot_database.db.backup
+2026-05-18 01:40:07,896 [INFO] Chad Gibiti#1975 is online!
+2026-05-18 22:46:14,503 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:46:18,594 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:46:18,596 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-18 22:46:18,606 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2026-05-18 22:46:18,631 [INFO] Final output for user u_bob (gemini-3-flash-preview, attempt 1/3)
+2026-05-18 22:46:25,676 [INFO] Final output for user u_bob (gemini-3-flash-preview, attempt 1/3)
+2026-05-18 22:46:30,194 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2026-05-18 22:47:30,814 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:47:33,619 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:47:33,628 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-18 22:47:33,633 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2026-05-18 22:47:33,654 [INFO] Final output for user u_bob (gemini-3-flash-preview, attempt 1/3)
+2026-05-18 22:47:41,204 [INFO] Final output for user u_bob (gemini-3-flash-preview, attempt 1/3)
+2026-05-18 22:47:46,185 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2026-05-18 22:48:08,191 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:48:11,134 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:48:11,143 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-18 22:49:03,489 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:49:06,649 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:49:06,651 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-18 22:49:08,952 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:49:11,953 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 22:49:11,954 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s vision_model=gemini-3-flash-preview
+2026-05-18 22:49:11,960 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2026-05-18 22:49:11,981 [INFO] Final output for user u_bob (gemini-3-flash-preview, attempt 1/3)
+2026-05-18 22:49:20,401 [INFO] Final output for user u_bob (gemini-3-flash-preview, attempt 1/3)
+2026-05-18 22:49:25,922 [INFO] ADMIN: Cleared all data (messages + notes tables).
+2026-05-18 23:17:22,971 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 23:17:25,972 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-18 23:18:31,385 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 23:18:34,694 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-18 23:26:17,325 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 23:26:22,167 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-18 23:29:46,466 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 23:31:20,341 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 23:31:24,168 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-18 23:50:35,771 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-18 23:50:39,210 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-20 10:40:22,982 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 10:40:51,292 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 14:19:17,736 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 14:22:06,849 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 15:40:44,460 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 15:41:41,429 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 15:45:38,314 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 15:45:55,729 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 15:45:59,693 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s
+2026-05-20 15:45:59,698 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s
+2026-05-20 15:46:31,552 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 15:46:35,417 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s
+2026-05-20 15:46:35,422 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s
+2026-05-20 15:51:22,656 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 21:55:45,029 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 21:56:35,380 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 21:56:52,220 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 21:57:14,747 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 22:13:21,444 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 22:14:01,582 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 22:14:32,118 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 22:14:34,639 [INFO] DB initialized with fresh schema (messages + user_notes tables)
+2026-05-20 22:14:54,018 [INFO] ✅ Đã thiết lập 104 Gemini API keys cho Smart Rotation.
+2026-05-20 22:14:56,857 [INFO] Search/image tools ready: provider=duckduckgo streams=1 fallback_limit=2 batch=3 web_mode=grounded grounded_links=3 top_results_limit=5 quality_sources=1/2 deep_read_top_links=2 semantic_cache=True general_ttl=21600s time_ttl=1800s cooldown=15s
+2026-05-20 22:14:56,857 [INFO] TOOL CALLED: web_search | Args: {'query': 'test query search'} | User: test_user_123

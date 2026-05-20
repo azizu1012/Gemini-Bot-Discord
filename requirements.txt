@@ -17,3 +17,5 @@ serpapi
 sympy
 tavily-python
 cryptography
+
+openai
