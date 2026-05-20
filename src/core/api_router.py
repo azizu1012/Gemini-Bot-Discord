@@ -47,21 +47,40 @@ def create_model_pools(main_keys: List[str], key_to_name: Dict[str, str]) -> Dic
     """Khởi tạo MODEL_POOLS cho từng model"""
     pools = {}
     for model in AVAILABLE_MODELS:
+        is_custom_model = model.startswith('custom-')
+
+        model_specific_keys = []
+        for key in main_keys:
+            key_name = key_to_name.get(key, "")
+            is_openai_key = key_name == 'OPENAI_API_KEY' or key.startswith('sk-')
+
+            if is_custom_model and is_openai_key:
+                model_specific_keys.append(key)
+            elif not is_custom_model and not is_openai_key:
+                model_specific_keys.append(key)
+
         pools[model] = {
-            'key_pool': initialize_key_pool(main_keys, daily_quota=get_model_daily_quota(model)),
+            'key_pool': initialize_key_pool(model_specific_keys, daily_quota=get_model_daily_quota(model)),
             'key_to_name': key_to_name,
             'quota_counters': {},
             'quota_reset_time': get_quota_reset_time(),
             'key_cooldowns': {},
-            'is_exhausted': False
+            'is_exhausted': len(model_specific_keys) == 0
         }
     return pools
 
 
 def create_summary_pool(summary_keys: List[str], key_to_name: Dict[str, str]) -> Dict:
     """Khởi tạo SUMMARY_POOL cho fallback"""
+    gemini_keys = []
+    for key in summary_keys:
+        key_name = key_to_name.get(key, "")
+        is_openai_key = key_name == 'OPENAI_API_KEY' or key.startswith('sk-')
+        if not is_openai_key:
+            gemini_keys.append(key)
+
     return {
-        'key_pool': initialize_key_pool(summary_keys),
+        'key_pool': initialize_key_pool(gemini_keys),
         'key_to_name': key_to_name,
         'quota_counters': {},
         'quota_reset_time': get_quota_reset_time(),
@@ -463,16 +482,28 @@ class APIRouter:
     def get_next_key_reservation(self) -> Optional[Dict[str, str]]:
         """Reserve a key/model candidate without consuming daily quota yet.
 
+        Implements a 60/40 ratio between Priority 0 (Custom API) and Priority 1 (Gemini SDK).
         Models within the same priority group are shuffled for load balancing.
         """
+        priorities_to_check = sorted(list(self._priority_groups.keys()))
+
+        # 60/40 split logic for priority 0 and 1
+        if 0 in priorities_to_check and 1 in priorities_to_check:
+            # 40% chance to prefer priority 1 over 0
+            if random.random() < 0.40:
+                idx0 = priorities_to_check.index(0)
+                idx1 = priorities_to_check.index(1)
+                priorities_to_check[idx0], priorities_to_check[idx1] = priorities_to_check[idx1], priorities_to_check[idx0]
+
         seen_priorities: set = set()
-        for target_model in self.model_priority:
-            prio = AVAILABLE_MODELS.get(target_model, {}).get("priority", 99)
+        for prio in priorities_to_check:
             if prio in seen_priorities:
                 continue
             seen_priorities.add(prio)
 
-            peers = list(self._priority_groups.get(prio, [target_model]))
+            peers = list(self._priority_groups.get(prio, []))
+            if not peers:
+                continue
             random.shuffle(peers)
             for peer in peers:
                 if peer not in self.model_pools:
@@ -512,7 +543,10 @@ class APIRouter:
             result = self._get_key_from_summary()
             if result:
                 return result
-            return None
+
+            # If the specific model and its peers are completely exhausted,
+            # fall back to the global logic rather than returning None
+            return self.get_next_key_reservation()
 
         return self.get_next_key_reservation()
 

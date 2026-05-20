@@ -539,8 +539,9 @@ class BotCore:
             
             # Re-init router pool
             router = get_api_router()
-            from src.core.api_config import auto_detect_api_keys, create_model_pools, create_summary_pool
-            
+            from src.core.api_config import auto_detect_api_keys
+            from src.core.api_router import create_model_pools, create_summary_pool
+
             all_keys, key_to_name = auto_detect_api_keys()
             router.main_keys = all_keys['main']
             router.summary_keys = all_keys['summary']

@@ -62,6 +62,11 @@ class GeminiApiManager:
             chosen_key = random.choice(best_candidates)
             self.key_status[chosen_key]['usage'] += 1
             fallback_alias = preferred_model_alias or self.api_router.get_preferred_model()
+
+            # Prevent custom models from being used with standard Gemini keys during legacy fallback
+            if fallback_alias and fallback_alias.startswith('custom-'):
+                fallback_alias = "gemini-flash-35"
+
             legacy_reservation = {
                 "key": chosen_key,
                 "model_alias": fallback_alias,
