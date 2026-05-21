@@ -616,7 +616,31 @@ class DatabaseRepository:
     async def update_user_note_db(self, note_id: str, content: str, metadata: dict) -> bool:
         """Update a user note."""
         return await asyncio.to_thread(self._update_user_note_sync, note_id, content, metadata)
-    
+
+    def _delete_user_note_sync(self, note_id: str, user_id: str) -> bool:
+        conn = None
+        try:
+            conn = self._open_connection()
+            c = conn.cursor()
+
+            c.execute("DELETE FROM user_notes WHERE note_id = ? AND user_id = ?", (note_id, user_id))
+            if c.rowcount == 0:
+                self.logger.warning(f"Note {note_id} not found or does not belong to user {user_id}")
+                return False
+
+            conn.commit()
+            return True
+        except sqlite3.DatabaseError as e:
+            self.logger.error(f"Database error while deleting note {note_id}: {str(e)}")
+            return False
+        finally:
+            if conn:
+                conn.close()
+
+    async def delete_user_note_db(self, note_id: str, user_id: str) -> bool:
+        """Delete a user note by note_id, checking user ownership."""
+        return await asyncio.to_thread(self._delete_user_note_sync, note_id, user_id)
+
     def _get_user_notes_sync(
         self,
         user_id: str,

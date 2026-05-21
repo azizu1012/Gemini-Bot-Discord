@@ -57,7 +57,8 @@ Azuris_refactor_code_base/
     ├── services/
     │   ├── file_parser.py
     │   ├── file_index_service.py
-    │   └── memory_service.py
+    │   ├── memory_service.py
+    │   └── health_checker.py
     ├── tools/
     │   └── tools.py
     └── voice/
@@ -91,13 +92,13 @@ Core runtime modules:
   Khởi tạo bot, đăng ký slash commands, quản lý admin interaction views.
 
 - src/handlers/message_handler.py:
-  Routing message, build context, intent detection, file indexing orchestration, gọi pipeline.
+  Routing message, build context, intent detection, file indexing orchestration, gọi pipeline. Chống duplicate spam via `processing_users` lock.
 
 - src/core/gemini_api_manager.py:
-  API key pool rotation, quota management, cooldown, client pool, throttling, error classification.
+  API key pool rotation, quota management, cooldown, client pool, throttling, error classification. Bao gồm CustomAPIWrapperResponse cho tương thích endpoint OpenAI.
 
 - src/core/gemini_pipeline.py:
-  Two-tier pipeline (reasoning loop → final synthesis → fallback), evidence evaluation, artifact cleaning.
+  Two-tier pipeline (reasoning loop → final synthesis → fallback), evidence evaluation, artifact cleaning. Mọi truy cập vào response.candidates sử dụng wrapper an toàn.
 
 File indexing:
 - src/services/file_index_service.py:
@@ -137,3 +138,7 @@ NOTES
 
 - Không sửa code trong src chỉ để thay docs, trừ khi chủ động làm feature/fix.
 - Khi cập nhật tính năng mới, đồng bộ lại README + PROJECT_INFO + handoff doc.
+
+
+Note: `gemini_api_manager.py` implements complete interface parity with `google-genai` SDK response structures, supporting parallel tool calls and batched responses.
+Note: `bot_core.py` seamlessly integrates `HealthCheckerService` for monitoring API states.

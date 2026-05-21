@@ -218,6 +218,9 @@ Trải nghiệm quản trị:
 - Đã tối ưu SQLite cho durability khi cắt điện/VPS crash (WAL + FULL + timeout + checkpoint).
 - Đã thêm retry khi ghi DB bị lock tạm thời.
 - Đã xóa file test_google_grounding.py khỏi project root.
+- ĐÃ THÊM: Hỗ trợ Custom OpenAI-compatible endpoints thông qua CustomAPIWrapperResponse và cờ ENABLE_CUSTOM_ENDPOINT. Tự động redirect traffic hoàn toàn khi toggle được bật.
+- ĐÃ SỬA: Loại bỏ cơ chế chia tỷ lệ 60/40 giữa custom/gemini API ở api_router. Sử dụng strict isolation 100% (hoặc A, hoặc B).
+- ĐÃ SỬA: Cải thiện cơ chế khoá processing_users trong message_handler để chống duplicate messages (2 request song song trong 1 phút). Dùng set và try/finally release lock.
 
 
 ================================================================================
@@ -249,3 +252,9 @@ Khuyến nghị migration:
 4. Tinh chỉnh ranking retrieval (importance + recency + relevance).
 
 ================================================================================
+
+
+## Custom API Wrapper Capabilities
+- Perfect Emulation of Google GenAI SDK: The OpenAI wrapper correctly formats `CustomAPIWrapperResponse` so that multiple parallel `tool_calls` are mapped into a native list of `candidates[0].content.parts`, ensuring tools work without any modification.
+- Parallel Tool Execution: The `gemini_pipeline.py` architecture has been upgraded to scan through all response parts simultaneously and execute all tools in parallel or sequentially within a single turn, before returning the batched `function_response` block to the model.
+- Health Check Monitoring: Supports fully automated background pinging for custom APIs via `HealthCheckerService`, with an LLM generating analysis summaries when an API endpoint changes state (alive/dead).

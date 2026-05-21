@@ -254,6 +254,7 @@ class BotCore:
         self.cleanup_mgr = CleanupManager()
         self.premium_mgr = PremiumManager()
         self.tools_mgr = ToolsManager()
+        self.health_checker = get_health_checker()
 
         self.mention_history: Dict[str, list] = {}
         self.confirmation_pending: Dict[str, Dict[str, Any]] = {}
@@ -365,6 +366,16 @@ class BotCore:
             await self.cleanup_mgr.cleanup_local_files()
 
             await self.db_repo.backup_db()
+            
+            # Start background health checker if it exists
+            if hasattr(self, 'health_checker'):
+                try:
+                    admin_user = await self.bot.fetch_user(int(ADMIN_ID)) if ADMIN_ID else None
+                    self.health_checker.start_background_check(admin_user)
+                    self.logger.info("Health Checker background task started.")
+                except Exception as e:
+                    self.logger.error(f"Failed to start health checker: {e}")
+                    
             self.logger.info(f'{self.bot.user} is online!')
 
             if self.voice_lock_manager and not self._voice_enforce_task:

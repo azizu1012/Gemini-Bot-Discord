@@ -379,6 +379,22 @@ class ToolsManager:
             ]),
             genai_types.Tool(function_declarations=[
                 genai_types.FunctionDeclaration(
+                    name="delete_note",
+                    description=(
+                        "Xóa một ghi chú/thông tin cụ thể đã lưu trữ của người dùng dựa vào note_id. "
+                        "Thường sử dụng kết hợp sau khi gọi retrieve_notes để lấy chính xác note_id cần xóa."
+                    ),
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "note_id": {"type": "string", "description": "ID của note cần xóa (UUID)."}
+                        },
+                        "required": ["note_id"]
+                    }
+                )
+            ]),
+            genai_types.Tool(function_declarations=[
+                genai_types.FunctionDeclaration(
                     name="image_recognition",
                     description=(
                         "Nhận diện đối tượng, người nổi tiếng, nhân vật game/anime, đếm vật thể, và trích xuất văn bản (OCR) từ một hình ảnh. "
@@ -1777,7 +1793,16 @@ class ToolsManager:
                     self.logger.error("retrieve_notes called but NoteManager is not configured")
                     return "Lỗi hệ thống: memory manager chưa sẵn sàng."
                 return await self.note_mgr.retrieve_notes_from_db(user_id, query)
-            
+
+            elif name == "delete_note":
+                note_id = (args.get("note_id") or "").strip()
+                if not note_id:
+                    return "Lỗi: 'note_id' không được rỗng."
+                if not self.note_mgr:
+                    self.logger.error("delete_note called but NoteManager is not configured")
+                    return "Lỗi hệ thống: memory manager chưa sẵn sàng."
+                return await self.note_mgr.delete_note_from_db(user_id, note_id)
+
             elif name == "image_recognition":
                 image_url = args.get("image_url")
                 question = args.get("question")

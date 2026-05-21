@@ -114,7 +114,7 @@ _ARTIFACT_PATTERNS = [
     (re.compile(r'<tool_code>.*?</tool_code>', re.IGNORECASE | re.DOTALL), ''),
     (re.compile(r'<tool_result>.*?</tool_result>', re.IGNORECASE | re.DOTALL), ''),
     (re.compile(
-        r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes).*?```',
+        r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note).*?```',
         re.IGNORECASE | re.DOTALL,
     ), ''),
 ]
@@ -244,52 +244,54 @@ class GeminiPipeline:
                     if not (candidate and candidate.content and candidate.content.parts):
                         break
 
-                    part = candidate.content.parts[0]
+                    has_function_calls = False
+                    model_parts = []
+                    function_response_parts = []
 
-                    if part.function_call and part.function_call.name:
-                        fc = part.function_call
-                        tool_name = (fc.name or "").lower()
-                        args = dict(fc.args) if fc.args else {}
-                        self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
+                    for part in candidate.content.parts:
+                        if part.function_call and part.function_call.name:
+                            has_function_calls = True
+                            fc = part.function_call
+                            tool_name = (fc.name or "").lower()
+                            args = dict(fc.args) if fc.args else {}
+                            self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
+                            model_parts.append(part)
 
-                        if tool_name == "web_search" and web_search_calls >= 1:
-                            budget_msg = get_search_budget_prompt()
-                            reasoning_messages.append({"role": "model", "parts": [part]})
-                            reasoning_messages.append({
-                                "role": "function",
-                                "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}],
-                            })
-                            continue
+                            if tool_name == "web_search" and web_search_calls >= 1:
+                                budget_msg = get_search_budget_prompt()
+                                function_response_parts.append({"function_response": {"name": "web_search", "response": {"content": budget_msg}}})
+                                continue
 
-                        tool_res = await self.tools_mgr.call_tool(fc, user_id)
-                        if tool_name == "web_search":
-                            web_search_calls += 1
-                            intent_query = (args.get("query") or "").strip()
-                            tool_results_list.append(f"[{fc.name}|intent={intent_query}] {tool_res}")
-                        else:
-                            tool_results_list.append(f"[{fc.name}] {tool_res}")
+                            tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                            if tool_name == "web_search":
+                                web_search_calls += 1
+                                intent_query = (args.get("query") or "").strip()
+                                tool_results_list.append(f"[{fc.name}|intent={intent_query}] {tool_res}")
+                            else:
+                                tool_results_list.append(f"[{fc.name}] {tool_res}")
 
-                        # LƯU Ý: Với OpenAI format (hoặc khi ta pass dict/text thay vì object thực),
-                        # GenAI SDK đôi khi crash nếu ta pass thẳng wrapper `part`.
-                        # Ta sẽ lưu `part` dưới dạng text để API manager có thể serialize nếu cần
-                        # hoặc API Manager tự convert sang format đúng khi gửi đi
-                        reasoning_messages.append({"role": "model", "parts": [part]})
-                        reasoning_messages.append({
-                            "role": "function",
-                            "parts": [{"function_response": {"name": fc.name, "response": {"content": str(tool_res)}}}]
-                        })
+                            function_response_parts.append({"function_response": {"name": fc.name, "response": {"content": str(tool_res)}}})
+                        
+                        elif part.text and has_function_calls:
+                            # We can also append text parts from the model to the model_parts if they exist alongside function calls
+                            model_parts.append(part)
+
+                    if has_function_calls:
+                        reasoning_messages.append({"role": "model", "parts": model_parts})
+                        reasoning_messages.append({"role": "function", "parts": function_response_parts})
                         continue
-
-                    elif part.text:
+                    
+                    part = candidate.content.parts[0]
+                    if part.text:
                         text = part.text.strip()
 
                         tool_code_match = re.search(r'<tool_code>(.*?)</tool_code>', text, re.IGNORECASE | re.DOTALL)
                         tool_matches = []
                         if tool_code_match:
                             tool_code_content = tool_code_match.group(1)
-                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes)\s*\(\s*([^)]+)\)', tool_code_content, re.IGNORECASE)
+                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note)\s*\(\s*([^)]+)\)', tool_code_content, re.IGNORECASE)
                         elif text.strip().upper().startswith("TOOL_CALL:"):
-                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes)\s*\(\s*([^)]+)\)', text, re.IGNORECASE)
+                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note)\s*\(\s*([^)]+)\)', text, re.IGNORECASE)
 
                         if tool_matches:
                             executed_tool = False

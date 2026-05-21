@@ -242,3 +242,17 @@ class NoteManager:
         except Exception as e:
             self.logger.error(f"Exception in retrieve_notes_from_db: {e}")
             return f"Exception when retrieving notes: {e}"
+
+    async def delete_note_from_db(self, user_id: str, note_id: str) -> str:
+        """Delete a specific note from the database."""
+        try:
+            success = await self.db_repo.delete_user_note_db(note_id, user_id)
+            if success:
+                self.logger.info(f"Note {note_id} deleted for user {user_id}")
+                return "Đã xóa note thành công."
+            else:
+                self.logger.warning(f"Failed to delete note {note_id} for user {user_id}")
+                return "Không thể xóa note. Có thể note_id không đúng hoặc bạn không có quyền xóa note này."
+        except Exception as e:
+            self.logger.error(f"Exception in delete_note_from_db: {e}")
+            return f"Exception when deleting note: {e}"

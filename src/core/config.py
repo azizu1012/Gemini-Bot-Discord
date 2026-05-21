@@ -16,11 +16,11 @@ def _load_runtime_env(project_root: Path) -> None:
     project_env_path = project_root / ".env"
 
     if project_env_path.exists():
-        load_dotenv(dotenv_path=project_env_path)
+        load_dotenv(dotenv_path=project_env_path, override=True)
     elif root_env_path.exists():
-        load_dotenv(dotenv_path=root_env_path)
+        load_dotenv(dotenv_path=root_env_path, override=True)
     else:
-        load_dotenv()
+        load_dotenv(override=True)
 
 
 class Config:

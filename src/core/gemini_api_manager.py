@@ -169,9 +169,14 @@ class GeminiApiManager:
             if api_key.startswith("sk-") and self.config.OPENAI_CUSTOM_ENDPOINT:
                 # Use custom endpoint for OpenAI
                 from openai import AsyncOpenAI
+
+                endpoint = self.config.OPENAI_CUSTOM_ENDPOINT.rstrip("/")
+                if not endpoint.endswith("/v1") and not endpoint.endswith("v1"):
+                    endpoint = f"{endpoint}/v1"
+
                 client = AsyncOpenAI(
                     api_key=api_key,
-                    base_url=self.config.OPENAI_CUSTOM_ENDPOINT + "v1" if not self.config.OPENAI_CUSTOM_ENDPOINT.endswith("v1") else self.config.OPENAI_CUSTOM_ENDPOINT
+                    base_url=endpoint
                 )
                 self._gemini_clients[api_key] = client
                 return client
@@ -370,38 +375,55 @@ class GeminiApiManager:
                     self.args = args
 
             class CustomAPIWrapperPart:
-                def __init__(self, text, function_call=None):
+                def __init__(self, text=None, function_call=None):
                     self.text = text
                     self.function_call = function_call
 
             class CustomAPIWrapperContent:
-                def __init__(self, text, function_call=None):
-                    self.parts = [CustomAPIWrapperPart(text, function_call)]
+                def __init__(self, parts):
+                    self.parts = parts
 
             class CustomAPIWrapperCandidate:
-                def __init__(self, text, function_call=None):
-                    self.content = CustomAPIWrapperContent(text, function_call)
+                def __init__(self, parts):
+                    self.content = CustomAPIWrapperContent(parts)
 
             class CustomAPIWrapperResponse:
-                def __init__(self, text, function_call=None):
-                    self.text = text
-                    self.candidates = [CustomAPIWrapperCandidate(text, function_call)]
+                def __init__(self, parts):
+                    self.candidates = [CustomAPIWrapperCandidate(parts)]
+                    
+                @property
+                def text(self):
+                    if not self.candidates or not self.candidates[0].content.parts:
+                        return ""
+                    text_parts = [
+                        part.text for part in self.candidates[0].content.parts 
+                        if getattr(part, 'text', None) is not None
+                    ]
+                    return "".join(text_parts)
 
             msg = response.choices[0].message
-            function_call = None
+            parts = []
+
+            if msg.content:
+                parts.append(CustomAPIWrapperPart(text=msg.content))
 
             import json
             if hasattr(msg, "tool_calls") and msg.tool_calls:
-                tc = msg.tool_calls[0]
-                if tc.type == "function":
-                    args_dict = {}
-                    try:
-                        args_dict = json.loads(tc.function.arguments)
-                    except Exception:
-                        pass
-                    function_call = CustomFunctionCall(tc.function.name, args_dict)
+                for tc in msg.tool_calls:
+                    if tc.type == "function":
+                        args_dict = {}
+                        try:
+                            args_dict = json.loads(tc.function.arguments)
+                        except Exception as e:
+                            self.logger.error(f"OpenAI Wrapper: Failed to parse JSON args for tool {tc.function.name}: {e}")
+                        
+                        func_call = CustomFunctionCall(tc.function.name, args_dict)
+                        parts.append(CustomAPIWrapperPart(function_call=func_call))
+            
+            if not parts:
+                parts.append(CustomAPIWrapperPart(text=""))
 
-            return CustomAPIWrapperResponse(msg.content, function_call)
+            return CustomAPIWrapperResponse(parts=parts)
             
         else:
             return await asyncio.to_thread(
