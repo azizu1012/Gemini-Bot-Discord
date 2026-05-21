@@ -1,3 +1,9 @@
+class TextParsedFunctionCall:
+    def __init__(self, name, args, id=None):
+        self.name = name
+        self.args = args
+        self.id = id
+
 import asyncio
 import re
 from datetime import datetime
@@ -213,7 +219,6 @@ class GeminiPipeline:
                 )
 
                 while iteration < self.config.REASONING_MAX_LOOPS:
-                    iteration += 1
                     quota_ok = await self.api_mgr._acquire_gemini_quota(
                         reasoning_messages,
                         generation_config["max_output_tokens"],
@@ -239,6 +244,9 @@ class GeminiPipeline:
                         tools=tools,
                     )
                     self.api_mgr._commit_selected_key(key_reservation)
+                    
+                    # Successfully completed a reasoning step loop without network error
+                    iteration += 1
 
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
@@ -263,12 +271,18 @@ class GeminiPipeline:
                                 raw_args = args.get("_raw_arguments", "")
                                 tool_res = "System Error: Failed to parse tool arguments as valid JSON. Error: {} Raw input was: {} Please fix your JSON formatting and try again.".format(error_msg, raw_args)
                                 tool_results_list.append(f"[{fc.name}|error=json_parse_failed]")
-                                function_response_parts.append({"function_response": {"name": fc.name, "response": {"content": tool_res}}})
+                                func_res = {"name": fc.name, "response": {"content": str(tool_res)}}
+                                if getattr(fc, 'id', None):
+                                    func_res['id'] = fc.id
+                                function_response_parts.append({"function_response": func_res})
                                 continue
 
                             if tool_name == "web_search" and web_search_calls >= 1:
                                 budget_msg = get_search_budget_prompt()
-                                function_response_parts.append({"function_response": {"name": "web_search", "response": {"content": budget_msg}}})
+                                func_res = {"name": "web_search", "response": {"content": budget_msg}}
+                                if getattr(fc, 'id', None):
+                                    func_res['id'] = fc.id
+                                function_response_parts.append({"function_response": func_res})
                                 continue
 
                             tool_res = await self.tools_mgr.call_tool(fc, user_id)
@@ -279,7 +293,10 @@ class GeminiPipeline:
                             else:
                                 tool_results_list.append(f"[{fc.name}] {tool_res}")
 
-                            function_response_parts.append({"function_response": {"name": fc.name, "response": {"content": str(tool_res)}}})
+                            func_res = {"name": fc.name, "response": {"content": str(tool_res)}}
+                            if getattr(fc, 'id', None):
+                                func_res['id'] = fc.id
+                            function_response_parts.append({"function_response": func_res})
                         
                         elif part.text and has_function_calls:
                             # We can also append text parts from the model to the model_parts if they exist alongside function calls
@@ -328,12 +345,7 @@ class GeminiPipeline:
                                     executed_tool = True
                                     break
 
-                                class FakeFunctionCall:
-                                    def __init__(self, name, args):
-                                        self.name = name
-                                        self.args = args
-
-                                fc = FakeFunctionCall(tool_name_l, args_dict)
+                                fc = TextParsedFunctionCall(tool_name_l, args_dict)
                                 tool_res = await self.tools_mgr.call_tool(fc, user_id)
                                 if tool_name_l == "web_search":
                                     web_search_calls += 1

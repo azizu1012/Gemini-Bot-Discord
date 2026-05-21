@@ -10,6 +10,39 @@ from google import genai
 from src.core.config import logger
 from src.core.api_router import get_api_router
 
+class CustomFunctionCall:
+    def __init__(self, name, args, id=None):
+        self.name = name
+        self.args = args
+        self.id = id
+
+class CustomAPIWrapperPart:
+    def __init__(self, text=None, function_call=None):
+        self.text = text
+        self.function_call = function_call
+
+class CustomAPIWrapperContent:
+    def __init__(self, parts):
+        self.parts = parts
+
+class CustomAPIWrapperCandidate:
+    def __init__(self, parts):
+        self.content = CustomAPIWrapperContent(parts)
+
+class CustomAPIWrapperResponse:
+    def __init__(self, parts):
+        self.candidates = [CustomAPIWrapperCandidate(parts)]
+        
+    @property
+    def text(self):
+        if not self.candidates or not self.candidates[0].content.parts:
+            return ""
+        text_parts = [
+            part.text for part in self.candidates[0].content.parts 
+            if getattr(part, 'text', None) is not None
+        ]
+        return "".join(text_parts)
+
 
 class GeminiApiManager:
     """API key management, throttling, client pool, and error detection for Gemini."""
@@ -313,8 +346,32 @@ class GeminiApiManager:
 
             for msg in messages:
                 if isinstance(msg, dict):
-                    role = "assistant" if msg.get("role") == "model" else "user"
+                    gemini_role = msg.get("role")
+                    if gemini_role == "model":
+                        role = "assistant"
+                    elif gemini_role == "function":
+                        role = "tool"
+                    else:
+                        role = "user"
+                        
                     parts = msg.get("parts", [])
+                    
+                    if role == "tool":
+                        # Map function_response parts to OpenAI tool responses
+                        for part in parts:
+                            if isinstance(part, dict) and "function_response" in part:
+                                func_res = part["function_response"]
+                                tool_msg = {
+                                    "role": "tool",
+                                    "name": func_res.get("name", ""),
+                                    "content": str(func_res.get("response", {}).get("content", ""))
+                                }
+                                if "id" in func_res:
+                                    tool_msg["tool_call_id"] = func_res["id"]
+                                openai_messages.append(tool_msg)
+                        continue # Tool parts handled
+                        
+                    # Standard user/assistant message mapping
                     if parts and isinstance(parts[0], dict) and "text" in parts[0]:
                         content = parts[0]["text"]
                     elif parts and isinstance(parts[0], str):
@@ -369,38 +426,6 @@ class GeminiApiManager:
 
             response = await client.chat.completions.create(**create_kwargs)
             
-            class CustomFunctionCall:
-                def __init__(self, name, args):
-                    self.name = name
-                    self.args = args
-
-            class CustomAPIWrapperPart:
-                def __init__(self, text=None, function_call=None):
-                    self.text = text
-                    self.function_call = function_call
-
-            class CustomAPIWrapperContent:
-                def __init__(self, parts):
-                    self.parts = parts
-
-            class CustomAPIWrapperCandidate:
-                def __init__(self, parts):
-                    self.content = CustomAPIWrapperContent(parts)
-
-            class CustomAPIWrapperResponse:
-                def __init__(self, parts):
-                    self.candidates = [CustomAPIWrapperCandidate(parts)]
-                    
-                @property
-                def text(self):
-                    if not self.candidates or not self.candidates[0].content.parts:
-                        return ""
-                    text_parts = [
-                        part.text for part in self.candidates[0].content.parts 
-                        if getattr(part, 'text', None) is not None
-                    ]
-                    return "".join(text_parts)
-
             msg = response.choices[0].message
             parts = []
 
@@ -421,7 +446,7 @@ class GeminiApiManager:
                                 "_raw_arguments": getattr(tc.function, 'arguments', '')
                             }
                         
-                        func_call = CustomFunctionCall(tc.function.name, args_dict)
+                        func_call = CustomFunctionCall(tc.function.name, args_dict, id=getattr(tc, 'id', None))
                         parts.append(CustomAPIWrapperPart(function_call=func_call))
             
             if not parts:
