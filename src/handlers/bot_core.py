@@ -563,57 +563,103 @@ class BotCore:
             if not (self.premium_mgr.is_admin_user(user_id) or self.premium_mgr.is_premium_user(user_id)):
                 try:
                     await interaction.response.defer(ephemeral=True)
-                    await interaction.followup.send("⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**! Gõ `/donate` để ủng hộ bot và liên hệ admin để cấp quyền.", ephemeral=True)
+
+                    from pathlib import Path
+                    import io
+                    import asyncio
+
+                    encrypted_path = Path(self.config.PROJECT_ROOT) / "assets" / "encrypted" / "donate_momo_anh_tr.png.enc"
+                    key = self.config.DONATE_ENCRYPTION_KEY
+
+                    if not encrypted_path.exists() or not key:
+                        await interaction.followup.send("⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**! Vui lòng liên hệ admin để cấp quyền.", ephemeral=True)
+                        return
+
+                    try:
+                        from cryptography.fernet import Fernet
+                        fernet = Fernet(key.encode())
+                        encrypted_data = encrypted_path.read_bytes()
+                        decrypted_data = fernet.decrypt(encrypted_data)
+
+                        file_obj = discord.File(
+                            fp=io.BytesIO(decrypted_data),
+                            filename="donate_momo_anh_tr.png",
+                        )
+
+                        msg = await interaction.followup.send(
+                            content="⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**!\nCảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR Momo của Anh Tr, hãy donate và liên hệ admin để cấp quyền nhé:\n_Tin nhắn này sẽ tự xóa sau 2 phút._",
+                            file=file_obj,
+                            ephemeral=True
+                        )
+
+                        async def auto_delete():
+                            await asyncio.sleep(120)
+                            try:
+                                await msg.delete()
+                            except (discord.NotFound, discord.Forbidden):
+                                pass
+
+                        self.bot.loop.create_task(auto_delete())
+
+                    except Exception as e:
+                        self.logger.error(f"Error sending Momo QR in imagine_slash: {e}")
+                        await interaction.followup.send("⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**! Vui lòng liên hệ admin để cấp quyền.", ephemeral=True)
                 except Exception:
                     pass
                 return
 
             await interaction.response.defer()
+            await interaction.followup.send("⏳ Đang tạo ảnh... Bot sẽ ping bạn khi hoàn thành!")
+
             import os
-            
+
             # Check if enabled
             if os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() != "true":
-                await interaction.followup.send("⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.", ephemeral=True)
+                await interaction.channel.send(f"<@{user_id}> ⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.")
                 return
-                
+
             from src.core.api_router import get_api_router
             from openai import AsyncOpenAI
-            
+
             router = get_api_router()
-            
+
             reservation = router._try_get_key_from_model("custom-pro-image")
             if not reservation:
-                await interaction.followup.send("⚠️ Không tìm thấy key nào khả dụng cho custom-pro-image.", ephemeral=True)
+                await interaction.channel.send(f"<@{user_id}> ⚠️ Không tìm thấy key nào khả dụng cho custom-pro-image.")
                 return
-                
+
             api_key = reservation['key']
             endpoint = self.config.OPENAI_CUSTOM_ENDPOINT
-            
+
             if not endpoint:
-                await interaction.followup.send("⚠️ Custom endpoint URL chưa được cấu hình.", ephemeral=True)
+                await interaction.channel.send(f"<@{user_id}> ⚠️ Custom endpoint URL chưa được cấu hình.")
                 return
-                
-            try:
-                client = AsyncOpenAI(api_key=api_key, base_url=endpoint)
-                response = await client.images.generate(
-                    model="gemini-3.1-pro-image",
-                    prompt=prompt,
-                    n=1,
-                    size="1024x1024"
-                )
-                image_url = response.data[0].url
-                
-                embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", description=f"**Prompt:** {prompt}", color=discord.Color.blue())
-                embed.set_image(url=image_url)
-                embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
-                
-                await interaction.followup.send(embed=embed)
-                
-                # Commit usage
-                router.commit_key_usage(reservation)
-            except Exception as e:
-                self.logger.error(f"Error generating image: {e}")
-                await interaction.followup.send(f"❌ Lỗi khi tạo ảnh: {str(e)[:100]}", ephemeral=True)
+
+            import asyncio
+            async def generate_image_background(api_key: str, endpoint: str, prompt: str, user_id: str, reservation: dict):
+                try:
+                    client = AsyncOpenAI(api_key=api_key, base_url=endpoint, timeout=600.0)
+                    response = await client.images.generate(
+                        model="gemini-3.1-pro-image",
+                        prompt=prompt,
+                        n=1,
+                        size="1024x1024"
+                    )
+                    image_url = response.data[0].url
+
+                    embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", description=f"**Prompt:** {prompt}", color=discord.Color.blue())
+                    embed.set_image(url=image_url)
+                    embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
+
+                    await interaction.channel.send(content=f"<@{user_id}>", embed=embed)
+
+                    # Commit usage
+                    router.commit_key_usage(reservation)
+                except Exception as e:
+                    self.logger.error(f"Error generating image: {e}")
+                    await interaction.channel.send(f"<@{user_id}> ❌ Lỗi khi tạo ảnh: {str(e)[:100]}")
+
+            asyncio.create_task(generate_image_background(api_key, endpoint, prompt, user_id, reservation))
         @app_commands.describe(
             user="User to check/add/remove",
             action="Action: 'check', 'add', or 'remove'"
