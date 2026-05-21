@@ -257,6 +257,15 @@ class GeminiPipeline:
                             self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
                             model_parts.append(part)
 
+                            # Intercept JSON parsing errors from the wrapper
+                            if "_parsing_error" in args:
+                                error_msg = args["_parsing_error"]
+                                raw_args = args.get("_raw_arguments", "")
+                                tool_res = "System Error: Failed to parse tool arguments as valid JSON. Error: {} Raw input was: {} Please fix your JSON formatting and try again.".format(error_msg, raw_args)
+                                tool_results_list.append(f"[{fc.name}|error=json_parse_failed]")
+                                function_response_parts.append({"function_response": {"name": fc.name, "response": {"content": tool_res}}})
+                                continue
+
                             if tool_name == "web_search" and web_search_calls >= 1:
                                 budget_msg = get_search_budget_prompt()
                                 function_response_parts.append({"function_response": {"name": "web_search", "response": {"content": budget_msg}}})

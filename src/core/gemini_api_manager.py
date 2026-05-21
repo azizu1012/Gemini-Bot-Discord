@@ -416,6 +416,10 @@ class GeminiApiManager:
                             args_dict = json.loads(tc.function.arguments)
                         except Exception as e:
                             self.logger.error(f"OpenAI Wrapper: Failed to parse JSON args for tool {tc.function.name}: {e}")
+                            args_dict = {
+                                "_parsing_error": str(e),
+                                "_raw_arguments": getattr(tc.function, 'arguments', '')
+                            }
                         
                         func_call = CustomFunctionCall(tc.function.name, args_dict)
                         parts.append(CustomAPIWrapperPart(function_call=func_call))
