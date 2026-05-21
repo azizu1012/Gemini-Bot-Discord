@@ -301,11 +301,11 @@ class GeminiApiManager:
             request_config["tools"] = tools
 
         client = self._get_or_create_gemini_client(api_key)
-        
+
         if type(client).__name__ == "AsyncOpenAI":
             # Map Gemini format to OpenAI format
             openai_messages = [{"role": "system", "content": system_instruction}]
-            
+
             for msg in messages:
                 if isinstance(msg, dict):
                     role = "assistant" if msg.get("role") == "model" else "user"
@@ -319,35 +319,89 @@ class GeminiApiManager:
                     openai_messages.append({"role": role, "content": content})
                 else:
                     openai_messages.append({"role": "user", "content": str(msg)})
-            
+
+            # Map Gemini tools to OpenAI tools
+            openai_tools = None
+            if tools:
+                openai_tools = []
+                for t in tools:
+                    for decl in getattr(t, "function_declarations", []):
+                        def map_schema(schema):
+                            if not schema: return {}
+                            res = {"type": getattr(schema, "type", "object").lower()}
+                            if res["type"] == "type_unspecified" or not res["type"]: res["type"] = "object"
+                            if hasattr(schema, "type") and hasattr(schema.type, "name"):
+                                res["type"] = schema.type.name.lower()
+                                if res["type"] in ["double", "number"]: res["type"] = "number"
+                            if hasattr(schema, "description") and schema.description: res["description"] = schema.description
+                            if hasattr(schema, "properties") and schema.properties:
+                                res["properties"] = {k: map_schema(v) for k, v in schema.properties.items()}
+                            if hasattr(schema, "required") and schema.required: res["required"] = schema.required
+                            if hasattr(schema, "items") and schema.items: res["items"] = map_schema(schema.items)
+                            if hasattr(schema, "enum") and schema.enum: res["enum"] = schema.enum
+                            return res
+
+                        tool = {
+                            "type": "function",
+                            "function": {
+                                "name": decl.name,
+                                "description": getattr(decl, "description", ""),
+                                "parameters": map_schema(getattr(decl, "parameters", None))
+                            }
+                        }
+                        openai_tools.append(tool)
+
             # Make OpenAI call natively async
-            response = await client.chat.completions.create(
-                model=model_name,
-                messages=openai_messages,
-                temperature=generation_config.get("temperature", 0.7),
-                max_tokens=generation_config.get("max_output_tokens", 2000),
-                top_p=generation_config.get("top_p", 0.95),
-            )
+            create_kwargs = {
+                "model": model_name,
+                "messages": openai_messages,
+                "temperature": generation_config.get("temperature", 0.7),
+                "max_tokens": generation_config.get("max_output_tokens", 2000),
+                "top_p": generation_config.get("top_p", 0.95),
+            }
+            if openai_tools:
+                create_kwargs["tools"] = openai_tools
+
+            response = await client.chat.completions.create(**create_kwargs)
             
+            class CustomFunctionCall:
+                def __init__(self, name, args):
+                    self.name = name
+                    self.args = args
+
             class CustomAPIWrapperPart:
-                def __init__(self, text):
+                def __init__(self, text, function_call=None):
                     self.text = text
-                    self.function_call = None
+                    self.function_call = function_call
 
             class CustomAPIWrapperContent:
-                def __init__(self, text):
-                    self.parts = [CustomAPIWrapperPart(text)]
+                def __init__(self, text, function_call=None):
+                    self.parts = [CustomAPIWrapperPart(text, function_call)]
 
             class CustomAPIWrapperCandidate:
-                def __init__(self, text):
-                    self.content = CustomAPIWrapperContent(text)
+                def __init__(self, text, function_call=None):
+                    self.content = CustomAPIWrapperContent(text, function_call)
 
             class CustomAPIWrapperResponse:
-                def __init__(self, text):
+                def __init__(self, text, function_call=None):
                     self.text = text
-                    self.candidates = [CustomAPIWrapperCandidate(text)]
+                    self.candidates = [CustomAPIWrapperCandidate(text, function_call)]
 
-            return CustomAPIWrapperResponse(response.choices[0].message.content)
+            msg = response.choices[0].message
+            function_call = None
+
+            import json
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                tc = msg.tool_calls[0]
+                if tc.type == "function":
+                    args_dict = {}
+                    try:
+                        args_dict = json.loads(tc.function.arguments)
+                    except Exception:
+                        pass
+                    function_call = CustomFunctionCall(tc.function.name, args_dict)
+
+            return CustomAPIWrapperResponse(msg.content, function_call)
             
         else:
             return await asyncio.to_thread(

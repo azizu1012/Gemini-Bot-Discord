@@ -56,6 +56,8 @@ class NoteManager:
             "cấu hình máy",
             "tên tôi",
             "my name",
+            "tôi là",
+            "tên mình là",
         ]
 
         if any(marker in lowered for marker in personal_markers):

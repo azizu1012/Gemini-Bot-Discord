@@ -269,6 +269,10 @@ class GeminiPipeline:
                         else:
                             tool_results_list.append(f"[{fc.name}] {tool_res}")
 
+                        # LƯU Ý: Với OpenAI format (hoặc khi ta pass dict/text thay vì object thực),
+                        # GenAI SDK đôi khi crash nếu ta pass thẳng wrapper `part`.
+                        # Ta sẽ lưu `part` dưới dạng text để API manager có thể serialize nếu cần
+                        # hoặc API Manager tự convert sang format đúng khi gửi đi
                         reasoning_messages.append({"role": "model", "parts": [part]})
                         reasoning_messages.append({
                             "role": "function",
