@@ -566,11 +566,35 @@ class BotCore:
 
         @self.bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
         @app_commands.describe(
-            prompt="Mô tả ảnh bạn muốn tạo"
+            action="Chọn hành động: Tạo ảnh mới hoặc Xem lịch sử",
+            prompt="Mô tả ảnh bạn muốn tạo (chỉ bắt buộc khi Tạo ảnh mới)"
         )
-        async def imagine_slash(interaction: discord.Interaction, prompt: str):
-            # Check Premium/Admin
+        @app_commands.choices(action=[
+            app_commands.Choice(name="Tạo ảnh mới", value="create"),
+            app_commands.Choice(name="Lịch sử ảnh", value="history")
+        ])
+        async def imagine_slash(interaction: discord.Interaction, action: app_commands.Choice[str], prompt: Optional[str] = None):
             user_id = str(interaction.user.id)
+
+            if action.value == "history":
+                await interaction.response.defer(ephemeral=True)
+                history = await self.db_repo.get_generated_images(user_id, limit=25)
+                if not history:
+                    await interaction.followup.send("Bạn chưa tạo ảnh nào hoặc không có lịch sử.", ephemeral=True)
+                    return
+
+                view = ImageHistoryView(history)
+                await interaction.followup.send("Vui lòng chọn một prompt từ danh sách bên dưới để xem lại ảnh:", view=view, ephemeral=True)
+                return
+
+            # Action: "create"
+            if not prompt:
+                await interaction.response.send_message("⚠️ Bạn cần nhập `prompt` để tạo ảnh mới!", ephemeral=True)
+                return
+
+            self.logger.info(f"User {user_id} requested /imagine to create image with prompt: {prompt}")
+
+            # Check Premium/Admin
             if not (self.premium_mgr.is_admin_user(user_id) or self.premium_mgr.is_premium_user(user_id)):
                 try:
                     await interaction.response.defer(ephemeral=True)
@@ -645,75 +669,169 @@ class BotCore:
             if not endpoint:
                 await interaction.channel.send(f"<@{user_id}> ⚠️ Custom endpoint URL chưa được cấu hình.")
                 return
+                
+            # Đảm bảo endpoint có hậu tố /v1 để tránh lỗi 404 Not Found từ OpenAI SDK
+            endpoint = endpoint.rstrip("/")
+            if not endpoint.endswith("/v1") and not endpoint.endswith("v1"):
+                endpoint = f"{endpoint}/v1"
 
             import asyncio
             async def generate_image_background(api_key: str, endpoint: str, prompt: str, user_id: str, reservation: dict):
                 try:
-                    client = AsyncOpenAI(api_key=api_key, base_url=endpoint, timeout=600.0)
-                    response = await client.images.generate(
-                        model="gemini-3.1-pro-image",
-                        prompt=prompt,
-                        n=1,
-                        size="1024x1024"
-                    )
-                    image_url = response.data[0].url
+                    self.logger.info(f"Đang gửi request tạo ảnh cho user {user_id} tới custom API")
+                    # Chỉnh sửa: Proxy hiện tại trả về ảnh thông qua model `gemini-3.1-pro-image` (hoặc `gemini-3.1-flash-image`)
+                    # Nhưng nó lại gửi qua route /chat/completions thay vì /images/generations
+                    # Và nó nhét raw base64 data hoặc url vào trong `choices[0].message.images[0].image_url.url` thay vì text content.
+                    import httpx
+                    import io
+                    import base64
 
-                    embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", description=f"**Prompt:** {prompt}", color=discord.Color.blue())
-                    embed.set_image(url=image_url)
-                    embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
+                    url = f"{endpoint}/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    }
+                    data = {
+                        "model": "gemini-3.1-pro-image",
+                        "messages": [{"role": "user", "content": prompt}]
+                    }
 
-                    await interaction.channel.send(content=f"<@{user_id}>", embed=embed)
+                    async with httpx.AsyncClient(verify=False, timeout=300.0) as client:
+                        response = await client.post(url, headers=headers, json=data)
 
-                    # Commit usage
-                    router.commit_key_usage(reservation)
+                        if response.status_code == 200:
+                            json_res = response.json()
+                            message = json_res.get("choices", [{}])[0].get("message", {})
+
+                            image_url = None
+                            raw_base64 = None
+
+                            # 1. Thử lấy từ mảng images (đặc thù của xtek proxy)
+                            if "images" in message and len(message["images"]) > 0:
+                                img_obj = message["images"][0].get("image_url", {})
+                                image_url = img_obj.get("url")
+
+                            # 2. Thử bóc từ markdown nếu proxy nhét URL thẳng vào content
+                            if not image_url and message.get("content"):
+                                import re
+                                match = re.search(r'!\[.*?\]\((https?://[^\)]+)\)', message["content"])
+                                if match:
+                                    image_url = match.group(1)
+
+                            if not image_url:
+                                self.logger.error(f"Thất bại khi tạo ảnh cho user {user_id}: Không thể trích xuất ảnh từ phản hồi API: {message}")
+                                await interaction.channel.send(f"<@{user_id}> ❌ Không thể trích xuất ảnh từ phản hồi của API.")
+                                return
+
+                            # Nếu ảnh là base64 thì decode và gửi file
+                            final_db_url = image_url
+                            if image_url.startswith("data:image"):
+                                header, encoded = image_url.split(",", 1)
+                                image_bytes = base64.b64decode(encoded)
+                                file = discord.File(io.BytesIO(image_bytes), filename="generated_image.png")
+
+                                embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", color=discord.Color.blue())
+                                embed.set_image(url="attachment://generated_image.png")
+                                embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
+                                sent_msg = await interaction.channel.send(content=f"<@{user_id}>", embed=embed, file=file)
+                                if sent_msg.embeds and sent_msg.embeds[0].image:
+                                    final_db_url = sent_msg.embeds[0].image.url
+                            else:
+                                embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", color=discord.Color.blue())
+                                embed.set_image(url=image_url)
+                                embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
+                                sent_msg = await interaction.channel.send(content=f"<@{user_id}>", embed=embed)
+                                if sent_msg.embeds and sent_msg.embeds[0].image:
+                                    final_db_url = sent_msg.embeds[0].image.url
+
+                            # Lưu vào database
+                            save_success = await self.db_repo.save_generated_image(user_id, prompt, final_db_url)
+                            if save_success:
+                                self.logger.info(f"Đã tạo và lưu thành công ảnh cho user {user_id} vào database")
+                            else:
+                                self.logger.warning(f"Tạo ảnh thành công cho user {user_id} nhưng LỖI khi lưu vào database")
+
+                            # Commit usage
+                            router.commit_key_usage(reservation)
+                        else:
+                            self.logger.error(f"Lỗi tạo ảnh từ server API cho user {user_id}: Mã lỗi {response.status_code} - {response.text}")
+                            await interaction.channel.send(f"<@{user_id}> ❌ Lỗi từ server API: {response.status_code}")
+                            
                 except Exception as e:
-                    self.logger.error(f"Error generating image: {e}")
+                    self.logger.error(f"Thất bại khi tạo ảnh cho user {user_id}: Lỗi ngoại lệ - {e}")
                     await interaction.channel.send(f"<@{user_id}> ❌ Lỗi khi tạo ảnh: {str(e)[:100]}")
 
             asyncio.create_task(generate_image_background(api_key, endpoint, prompt, user_id, reservation))
+        @self.bot.tree.command(name="premium", description="Tính năng Premium")
         @app_commands.describe(
-            user="User to check/add/remove",
-            action="Action: 'check', 'add', or 'remove'"
+            action="Chọn hành động",
+            user="Người dùng (chỉ dành cho add/check)"
         )
         @app_commands.choices(action=[
-            app_commands.Choice(name="Check", value="check"),
-            app_commands.Choice(name="Add", value="add"),
-            app_commands.Choice(name="Remove", value="remove"),
+            app_commands.Choice(name="Check (Kiểm tra Premium)", value="check"),
+            app_commands.Choice(name="Buy (Mua Premium)", value="buy"),
+            app_commands.Choice(name="Add (Thêm Premium - Admin)", value="add"),
         ])
-        @is_admin()
-        async def premium_slash(interaction: discord.Interaction, user: discord.User, action: app_commands.Choice[str]):
+        async def premium_slash(interaction: discord.Interaction, action: app_commands.Choice[str], user: Optional[discord.User] = None):
             try:
                 await interaction.response.defer(ephemeral=True)
             except discord.errors.NotFound:
                 self.logger.error("Interaction not found for premium command.")
-                try:
-                    await interaction.user.send("Error processing premium command.")
-                except discord.Forbidden:
-                    pass
                 return
 
             requester_id = str(interaction.user.id)
-            target_user_id = str(user.id)
+            target_user_id = str(user.id) if user else requester_id
+            
+            is_admin = self.premium_mgr.is_admin_user(requester_id)
 
-            if action.value == "check" and requester_id == target_user_id:
-                await interaction.followup.send("You are the admin! 🥰", ephemeral=True)
-                return
-
-            if action.value == "check":
-                if self.premium_mgr.is_premium_user(target_user_id):
-                    await interaction.followup.send(f"{user.display_name} is Premium ✨", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"{user.display_name} is not Premium 😔", ephemeral=True)
-            elif action.value == "add":
+            if action.value == "add":
+                if not is_admin:
+                    await interaction.followup.send("❌ Bạn không có quyền sử dụng lệnh này!", ephemeral=True)
+                    return
+                if not user:
+                    await interaction.followup.send("❌ Vui lòng chọn người dùng cần thêm vào danh sách Premium!", ephemeral=True)
+                    return
+                    
                 if self.premium_mgr.add_premium_user(target_user_id):
-                    await interaction.followup.send(f"Added {user.display_name} to Premium 🎉", ephemeral=True)
+                    await interaction.followup.send(f"🎉 Đã thêm **{user.display_name}** vào danh sách Premium thành công!", ephemeral=True)
                 else:
-                    await interaction.followup.send(f"{user.display_name} already Premium", ephemeral=True)
-            elif action.value == "remove":
-                if self.premium_mgr.remove_premium_user(target_user_id):
-                    await interaction.followup.send(f"Removed {user.display_name} from Premium 💔", ephemeral=True)
+                    await interaction.followup.send(f"⚠️ **{user.display_name}** đã là Premium từ trước.", ephemeral=True)
+                    
+            elif action.value == "check":
+                if self.premium_mgr.is_admin_user(target_user_id):
+                    await interaction.followup.send(f"👑 {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} là **Admin** của bot!", ephemeral=True)
+                    return
+                
+                if self.premium_mgr.is_premium_user(target_user_id):
+                    await interaction.followup.send(f"✨ {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} đang sử dụng bản **Premium**!", ephemeral=True)
                 else:
-                    await interaction.followup.send(f"{user.display_name} not in Premium list", ephemeral=True)
+                    await interaction.followup.send(f"😔 {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} **chưa có Premium**. Dùng `/premium action:Buy` để nâng cấp nhé!", ephemeral=True)
+                    
+            elif action.value == "buy":
+                if self.premium_mgr.is_premium_user(requester_id) or is_admin:
+                    await interaction.followup.send("✨ Bạn đã có quyền Premium/Admin rồi nhé! Không cần mua thêm đâu 🥰", ephemeral=True)
+                    return
+                    
+                info = DONATE_PLATFORMS.get("anhtr_momo")
+                encrypted_path = Path(self.config.PROJECT_ROOT) / "assets" / "encrypted" / info["file"]
+                
+                if not encrypted_path.exists():
+                    await interaction.followup.send("Mã QR hiện không khả dụng. Vui lòng liên hệ Admin.", ephemeral=True)
+                    return
+                    
+                key = self.config.DONATE_ENCRYPTION_KEY
+                try:
+                    from cryptography.fernet import Fernet
+                    import io
+                    fernet = Fernet(key.encode())
+                    decrypted_data = fernet.decrypt(encrypted_path.read_bytes())
+                    file_obj = discord.File(fp=io.BytesIO(decrypted_data), filename=info["original_filename"])
+                    
+                    msg = "✨ **Nâng cấp lên Premium** ✨\n\nVới bản Premium, bạn sẽ được:\n- 🔓 **Mở khóa không giới hạn** số tin nhắn chat (miễn phí chỉ 50 tin nhắn/ngày).\n- 🎨 **Sử dụng lệnh `/imagine`** tạo ảnh AI chất lượng cao.\n- 💬 **Sử dụng tính năng chat DM** riêng tư với bot.\n\nĐể mua Premium, vui lòng quét mã QR Momo của Anh Tr bên dưới để donate. Sau khi donate, hãy liên hệ Admin kèm theo ảnh chụp màn hình giao dịch để được kích hoạt ngay nhé!"
+                    await interaction.followup.send(content=msg, file=file_obj, ephemeral=True)
+                except Exception as e:
+                    self.logger.error(f"Error decrypting Momo QR for buy premium: {e}")
+                    await interaction.followup.send("Không thể tải mã QR lúc này. Vui lòng liên hệ Admin.", ephemeral=True)
 
         @self.bot.tree.command(name="reset-all", description="Clear all DB (ADMIN ONLY)")
         @is_admin()
@@ -1215,3 +1333,37 @@ class BotCore:
         """Start the bot."""
         async with self.bot:
             await self.bot.start(token)
+import discord
+from typing import List, Dict
+
+class ImageHistorySelect(discord.ui.Select):
+    def __init__(self, history: List[Dict]):
+        self.history = history
+        options = []
+        for i, record in enumerate(history):
+            # Truncate prompt if it's too long for a select option label (max 100 chars)
+            label = record['prompt'][:97] + "..." if len(record['prompt']) > 100 else record['prompt']
+            options.append(discord.SelectOption(
+                label=label,
+                description=f"Ảnh #{i+1}",
+                value=str(i)
+            ))
+        super().__init__(placeholder="Chọn một prompt từ lịch sử...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        idx = int(self.values[0])
+        record = self.history[idx]
+        
+        embed = discord.Embed(
+            title=f"Lịch sử ảnh",
+            description=f"**Prompt:** {record['prompt']}",
+            color=discord.Color.green()
+        )
+        embed.set_image(url=record['image_url'])
+        
+        await interaction.response.edit_message(content=None, embed=embed, view=self.view)
+
+class ImageHistoryView(discord.ui.View):
+    def __init__(self, history: List[Dict]):
+        super().__init__(timeout=300)
+        self.add_item(ImageHistorySelect(history))

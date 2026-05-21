@@ -77,8 +77,16 @@ class DatabaseRepository:
                           query TEXT,
                           results TEXT,
                           timestamp TEXT DEFAULT CURRENT_TIMESTAMP)''')
-                          
+
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_web_history_user ON web_history (user_id)''')
+
+        cursor.execute('''CREATE TABLE IF NOT EXISTS generated_images
+                         (image_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          user_id TEXT,
+                          prompt TEXT,
+                          image_url TEXT,
+                          timestamp TEXT DEFAULT CURRENT_TIMESTAMP)''')
+        cursor.execute('''CREATE INDEX IF NOT EXISTS idx_generated_images_user ON generated_images (user_id)''')
 
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_messages_user_ts ON messages (user_id, timestamp)''')
         cursor.execute('''CREATE INDEX IF NOT EXISTS idx_user_notes_user_id ON user_notes (user_id)''')
@@ -347,6 +355,42 @@ class DatabaseRepository:
     async def get_web_history(self, user_id: str, limit: int = 5) -> list:
         return await asyncio.to_thread(self.get_web_history_sync, user_id, limit)
 
+    def save_generated_image_sync(self, user_id: str, prompt: str, image_url: str) -> bool:
+        """Lưu URL ảnh đã tạo vào cơ sở dữ liệu"""
+        try:
+            with self._open_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO generated_images (user_id, prompt, image_url) VALUES (?, ?, ?)",
+                    (user_id, prompt, image_url)
+                )
+                conn.commit()
+                return True
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error save_generated_image: {e}")
+            return False
+
+    async def save_generated_image(self, user_id: str, prompt: str, image_url: str) -> bool:
+        return await asyncio.to_thread(self.save_generated_image_sync, user_id, prompt, image_url)
+
+    def get_generated_images_sync(self, user_id: str, limit: int = 5) -> list:
+        """Lấy lịch sử ảnh đã tạo của user"""
+        try:
+            with self._open_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT prompt, image_url, timestamp FROM generated_images WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (user_id, limit)
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            self.logger.error(f"DB Error get_generated_images: {e}")
+            return []
+
+    async def get_generated_images(self, user_id: str, limit: int = 5) -> list:
+        return await asyncio.to_thread(self.get_generated_images_sync, user_id, limit)
+
     def is_premium_user_sync(self, user_id: str) -> bool:
         """Check nếu user_id có trong premium_users"""
         try:
@@ -358,6 +402,24 @@ class DatabaseRepository:
             self.logger.error(f"DB Error is_premium_user: {e}")
             return False
             
+
+
+    def _count_user_messages_today_sync(self, user_id: str) -> int:
+        try:
+            with self._open_connection() as conn:
+                c = conn.cursor()
+                today = datetime.now().strftime("%Y-%m-%d")
+                c.execute(
+                    "SELECT COUNT(*) FROM messages WHERE user_id = ? AND role = 'user' AND timestamp LIKE ?",
+                    (user_id, f"{today}%")
+                )
+                return c.fetchone()[0]
+        except Exception as e:
+            self.logger.error(f"Error counting daily messages for user {user_id}: {e}")
+            return 0
+
+    async def count_user_messages_today_db(self, user_id: str) -> int:
+        return await asyncio.to_thread(self._count_user_messages_today_sync, user_id)
 
     async def log_message_db(self, user_id: str, role: str, content: str) -> None:
         """Log a message to the database."""

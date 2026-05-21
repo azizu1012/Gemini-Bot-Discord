@@ -201,6 +201,7 @@ class GeminiApiManager:
             # Check if this is an OpenAI API Key
             if api_key.startswith("sk-") and self.config.OPENAI_CUSTOM_ENDPOINT:
                 # Use custom endpoint for OpenAI
+                self.logger.info(f"🔄 Chuyển sang sử dụng custom API (OpenAI endpoint) với key: ...{api_key[-4:]}")
                 from openai import AsyncOpenAI
 
                 endpoint = self.config.OPENAI_CUSTOM_ENDPOINT.rstrip("/")

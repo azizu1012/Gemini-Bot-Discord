@@ -247,6 +247,16 @@ class MessageHandler:
                             await message.add_reaction("⏳")
                             return
 
+                        daily_msg_count = await self.db_repo.count_user_messages_today_db(user_id)
+                        DAILY_LIMIT = 50
+                        
+                        if daily_msg_count >= DAILY_LIMIT:
+                            await message.reply(
+                                "Bạn đã sử dụng hết giới hạn tin nhắn hôm nay (50/50). Hãy nâng cấp Premium bằng lệnh `/premium buy` để tiếp tục dùng không giới hạn nhé! 🛑", 
+                                mention_author=False
+                            )
+                            return
+
                     if user_id in self.bot_core.confirmation_pending and self.bot_core.confirmation_pending[user_id]['awaiting']:
                         if message.content.lower() in ['yes', 'y']:
                             await self._clear_user_history(message, user_id)

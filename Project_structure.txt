@@ -117,6 +117,9 @@ Memory and persistence:
 - src/services/memory_service.py:
   Legacy JSON memory utility path.
 
+- src/assets/:
+  Chứa ảnh QR code donate Momo (đã được mã hóa fernet) và các asset nhạy cảm khác.
+
 Tool layer:
 - src/tools/tools.py:
   Khai báo tools, dispatch tool-calls, và lớp ổn định web_search (cache/dedup/cooldown/deep-read).

@@ -78,6 +78,7 @@ pm2 logs azuris-bot --lines 120
 ```
 
 Checklist log cần thấy:
+
 - Startup banner in đúng `Project root` và resolved paths.
 - Không còn `unable to open database file`.
 - Không còn `Fallback lite error: [Errno 2]`.
@@ -219,6 +220,7 @@ Voice room:
 
 ## Custom API Health Checker
 Tính năng tự động kiểm tra sức khoẻ (health check) của OpenAI Custom Endpoint chạy ngầm. Tính năng này:
+
 1. Nằm trong thư mục `src/services/health_checker.py`.
 2. Có thể được trigger thủ công bằng slash command `/health_check` dành cho Admin.
 3. Khi keys chết (die), tự động sử dụng LLM để tóm tắt và gửi report cho Admin theo mốc timestamp.
