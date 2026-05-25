@@ -1,89 +1,59 @@
-AZURIS NON-COMMERCIAL LICENSE AGREEMENT (ANCL)
-Version 2.0 - Enterprise Edition
-
-COPYRIGHT (c) 2025 azizu1012. ALL RIGHTS RESERVED.
-
-IMPORTANT - READ CAREFULLY: This End-User License Agreement ("Agreement") is a legal agreement between you (either an individual or a single entity) and azizu1012 ("Licensor") for the Azuris Discord Bot software product, which includes computer software and may include associated media, printed materials, and "online" or electronic documentation ("Software").
-
-BY INSTALLING, COPYING, OR OTHERWISE USING THE SOFTWARE, YOU AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE TO THE TERMS OF THIS AGREEMENT, DO NOT INSTALL OR USE THE SOFTWARE.
+📄 AZURIS SOURCE-AVAILABLE & NON-COMMERCIAL LICENSE (ASNCL)
+Version 3.0 - Production Edition
+COPYRIGHT (c) 2026 azizu1012. ALL RIGHTS RESERVED.
 
 ARTICLE 1. DEFINITIONS
-1.1. "Software" means the proprietary source code, object code, scripts, configuration files, and documentation provided by the Licensor under the name "Azuris Discord Bot".
-1.2. "Commercial Use" means any use of the Software for the purpose of direct or indirect financial gain, including but not limited to:
-     (a) Offering the Software as a service (SaaS) to third parties for a fee;
-     (b) Using the Software to support a business, enterprise, or commercial operation;
-     (c) Bundling the Software with other products or services that are sold or licensed for a fee;
-     (d) Soliciting donations, sponsorships, or "maintenance fees" specifically tied to the distribution or operation of this Software.
-1.3. "Non-Commercial Use" means personal, educational, or internal research use that does not involve Commercial Use.
-1.4. "Derivative Works" means any work based upon the Software, such as a revision, modification, translation, abridgment, condensation, or any other form in which the Software may be recast, transformed, or adapted.
+1.1. "Software": Refers to the proprietary source code, scripts, system architectures, prompt instructions (src/instructions/), configuration templates, and local runtime orchestration layers (.sh/.ps1) under the project name "Azuris" or "Chad Gibiti".
 
-ARTICLE 2. GRANT OF LICENSE
-2.1. License Grant. Subject to the terms and conditions of this Agreement, Licensor hereby grants to you a revocable, non-exclusive, non-transferable, non-sublicensable, worldwide license to install, execute, and modify the Software solely for your own Non-Commercial Use.
-2.2. Source Code. You may modify the source code of the Software for your own personal needs. However, any distribution of such modified source code (Derivative Works) must clearly state that it is a modification of the original Software and must remain subject to the terms of this Agreement.
+1.2. "Licensor": The original creator and sole intellectual property owner, azizu1012.
 
-ARTICLE 3. RESTRICTIONS ON USE
-3.1. No Commercial Use. You may not use the Software, in whole or in part, for any Commercial Purpose without a separate, written Commercial License Agreement executed by the Licensor.
-3.2. No Re-branding. You may not remove, alter, or obscure any copyright notices, proprietary legends, trademark warnings, or author attributions (e.g., references to "Chad Gibiti" or "azizu1012") contained in the Software.
-3.3. No Sub-licensing. You may not rent, lease, lend, sell, redistribute, or sublicense the Software.
-3.4. Reverse Engineering. You may not reverse engineer, decompile, or disassemble any binary portions of the Software, except and only to the extent that such activity is expressly permitted by applicable law notwithstanding this limitation.
+1.3. "Commercial Use": Any execution, deployment, or modification of the Software aimed at direct or indirect financial leverage or commercial operations. This explicitly covers:
 
-ARTICLE 4. INTELLECTUAL PROPERTY RIGHTS
-4.1. Ownership. All title, ownership rights, and intellectual property rights in and to the Software (including but not limited to any images, photographs, animations, video, audio, music, text, and "applets" incorporated into the Software) are owned by the Licensor.
-4.2. Reservation of Rights. The Software is protected by copyright laws and international copyright treaties. All rights not expressly granted are reserved by the Licensor.
+Offering the Software as a paid service, sub-hosting, or automated SaaS platform.
 
-ARTICLE 5. THIRD-PARTY COMPONENTS
-5.1. The Software may include third-party software components (e.g., Python libraries listed in requirements.txt). These components are subject to their respective license agreements. This Agreement does not modify or alter your rights and obligations under those third-party licenses.
+Using the Software within institutional commercial workflows or business environments.
 
-ARTICLE 6. INDEMNIFICATION
-6.1. You agree to indemnify, hold harmless, and defend the Licensor from and against any and all claims, lawsuits, and proceedings (collectively "Claims"), and all expenses, costs (including attorney's fees), judgments, damages, and other liabilities resulting from such Claims, that arise or result from your use or misuse of the Software, or your violation of this Agreement.
+Locking any component, feature, or access code of the Software behind digital paywalls, transactional requirements, or compulsory subscription fees.
 
-ARTICLE 7. TERMINATION
-7.1. This Agreement is effective until terminated. Your rights under this Agreement will terminate automatically without notice from the Licensor if you fail to comply with any term(s) of this Agreement.
-7.2. Upon termination of the Agreement, you shall cease all use of the Software and destroy all copies, full or partial, of the Software.
+1.4. "Authorized Donation": Non-compulsory, voluntary financial contributions processed strictly through the Licensor’s encrypted endpoints (e.g., the built-in /donate architecture). Any external redirection of donations by third-party licensees constitutes a material breach of this Agreement.
 
-ARTICLE 8. DISCLAIMER OF WARRANTY
-THE SOFTWARE IS PROVIDED "AS IS" AND "WITH ALL FAULTS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE SOFTWARE IS WITH YOU. SHOULD THE SOFTWARE PROVE DEFECTIVE, YOU ASSUME THE ENTIRE COST OF ALL NECESSARY SERVICING OR REPAIR.
+1.5. "Dynamic Identity": The technical capability of the Software to dynamically pull and replace core string tokens (e.g., modifying "Chad Gibiti" to runtime bot names via Discord API).
 
-ARTICLE 9. LIMITATION OF LIABILITY
-IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY SPECIAL, INCIDENTAL, INDIRECT, OR CONSEQUENTIAL DAMAGES WHATSOEVER (INCLUDING, WITHOUT LIMITATION, DAMAGES FOR LOSS OF BUSINESS PROFITS, BUSINESS INTERRUPTION, LOSS OF BUSINESS INFORMATION, OR ANY OTHER PECUNIARY LOSS) ARISING OUT OF THE USE OF OR INABILITY TO USE THE SOFTWARE, EVEN IF THE LICENSOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+ARTICLE 2. LICENSE GRANT & SOURCE-AVAILABLE CONDITIONS
+2.1. Non-Commercial Evaluation Grant: Subject to compliance with this Agreement, Licensor grants the End-User a non-exclusive, non-transferable, revocable worldwide license to download, view, modify, and execute the Software strictly for personal, educational, non-profit, and local testing purposes.
 
-ARTICLE 10. GENERAL PROVISIONS
-10.1. Severability. If any provision of this Agreement is held to be void, invalid, unenforceable, or illegal, the other provisions shall continue in full force and effect.
-10.2. Entire Agreement. This Agreement constitutes the entire agreement between you and the Licensor concerning the Software and supersedes all prior agreements or understandings.
+2.2. Modification Boundaries: You are permitted to modify the source code to suit local performance metrics. However, any public exposure, distribution, or fork of these Derivative Works must remain 100% open, open-source under this identical ASNCL v3.0 license, and must retain all original attribution credits.
 
-------------------------------------------------------------------------------------------------
-(BẢN TÓM TẮT TIẾNG VIỆT - MANG TÍNH THAM KHẢO)
+ARTICLE 3. STRICT INTELLECTUAL PROPERTY & INFRASTRUCTURE RESTRICTIONS
+3.1. Absolute Commercial Prohibition: Any deployment violating Section 1.3 without a custom, signed Commercial License directly from the Licensor is legally void and constitutes an actionable copyright infringement.
 
-THỎA THUẬN CẤP PHÉP NGƯỜI DÙNG CUỐI AZURIS (ANCL)
-Phiên bản 2.0 - Doanh Nghiệp
+3.2. Source Attribution Preservation vs. Runtime Dynamic Identity:
 
-BẢN QUYỀN (c) 2025 azizu1012. BẢO LƯU MỌI QUYỀN.
+Licensees must preserve all hardcoded copyright headers, authorship references, and metadata comments within the source files intact.
 
-1. QUYỀN SỞ HỮU
-   Phần mềm này (bao gồm mã nguồn, tài liệu, và các tài nguyên đi kèm) là tài sản trí tuệ độc quyền của 
-   azizu1012. Bạn không được tự nhận là tác giả của phần mềm này dưới mọi hình thức.
+Licensees are allowed to utilize the Software's Dynamic Identity feature to rename the client profile on target platforms. However, removing or misrepresenting the base structural identity within software documentation or code structures is strictly prohibited.
 
-2. PHẠM VI SỬ DỤNG (PHI THƯƠNG MẠI)
-   Bạn được cấp quyền miễn phí để tải về, cài đặt, sửa đổi và sử dụng phần mềm này CHỈ CHO MỤC ĐÍCH 
-   CÁ NHÂN, HỌC TẬP HOẶC NGHIÊN CỨU. Mọi hành vi sử dụng nhằm mục đích sinh lợi nhuận đều bị cấm.
+3.3. API Token & Quota Liability Disclaimer: The Software utilizes advanced dynamic API key pools and custom endpoints. End-Users bear full legal, financial, and operational responsibility for any API consumption, resource exhaustion (HTTP 429), or financial liability incurred through keys loaded into the database pool. The Licensor is 100% exempt from upstream billing charges.
 
-3. NGHIÊM CẤM THƯƠNG MẠI HÓA
-   Trừ khi có văn bản thỏa thuận riêng, bạn KHÔNG ĐƯỢC PHÉP:
-   - Bán, cho thuê, hoặc cấp phép lại phần mềm.
-   - Sử dụng phần mềm để cung cấp dịch vụ có thu phí (SaaS, cài đặt thuê).
-   - Tích hợp phần mềm vào một sản phẩm thương mại.
-   - Nhận quyên góp (donate) gắn liền trực tiếp với việc phân phối bản sao của phần mềm này.
+3.4. Local Infrastructure Separation: The Software deploys isolated local database engine runtimes (PostgreSQL, Apache Kafka KRaft) under the project sub-directory. Licensees acknowledge that execution occurs entirely at their own system risk.
 
-4. BẢO VỆ THƯƠNG HIỆU VÀ TÁC GIẢ
-   Bạn phải giữ nguyên mọi thông báo bản quyền và tên tác giả ("Chad Gibiti" hoặc "azizu1012") trong 
-   mọi bản sao hoặc bản sửa đổi. Không được phép đổi tên bot và phát hành lại như một sản phẩm mới 
-   (Re-branding) để trục lợi.
+ARTICLE 4. INDEMNIFICATION & WARRANTY LIMITATIONS
+4.1. Warranties: THE SOFTWARE IS DISPATCHED "AS IS", WITH ZERO WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. THE LICENSOR DOES NOT GUARANTEE SYSTEM UP-TIME, UPSTREAM TELEMETRY STABILITY (DISCORD/GEMINI APIS), OR ERROR-FREE RUNTIME LOOP EXECUTION.
 
-5. MIỄN TRỪ TRÁCH NHIỆM (AS-IS)
-   Phần mềm được cung cấp "NGUYÊN TRẠNG". Tác giả không chịu trách nhiệm cho bất kỳ thiệt hại nào 
-   (mất dữ liệu, hỏng phần cứng, lỗ hổng bảo mật, v.v.) phát sinh trong quá trình sử dụng. Bạn chấp nhận 
-   mọi rủi ro khi sử dụng phần mềm.
+4.2. Liability Cap: UNDER NO LEGAL THEORY SHALL THE LICENSOR BE LIABLE FOR DATA CORRUPTION WITHIN POSTGRESQL FLUXES, KAFKA PARTITION DROPS, HARDWARE DEGRADATION DUE TO INTENSE COMPUTATION, OR ANY CONSEQUENTIAL DAMAGES STEMMING FROM INCOMPATIBLE DEPLOYMENT ENVIRONMENT CONFIGURATIONS.
 
-6. CHẤM DỨT THỎA THUẬN
-   Giấy phép này sẽ tự động mất hiệu lực nếu bạn vi phạm bất kỳ điều khoản nào ở trên. Khi đó, bạn buộc 
-   phải gỡ bỏ và tiêu hủy mọi bản sao của phần mềm đang lưu trữ.
+⚖️ BẢN TÓM TẮT ĐIỀU KHOẢN PHÁP LÝ (EXECUTIVE SUMMARY - MAINTAINER USE ONLY)
+1. QUYỀN SỞ HỮU GỐC & CREDIT TĨNH
+Mã nguồn, cấu trúc kiến trúc phân tán hướng sự kiện, hệ thống prompts và toàn bộ công cụ tự cấp phát hạ tầng local là tài sản trí tuệ tối cao của nhà phát triển azizu1012.
+
+Người dùng được phép dùng tính năng đổi tên Bot động (Dynamic Identity) để hiển thị cấu hình riêng trên Discord. Nhưng tất cả tệp mã nguồn gốc, header file và phần mô tả bản quyền hệ thống BẮT BUỘC phải giữ nguyên tên tác giả, cấm hành vi chiếm đoạt re-brand.
+
+2. BIÊN GIỚI PHI THƯƠNG MẠI CHẶT CHẼ
+Nghiêm cấm tuyệt đối việc sử dụng Azuris Bot để kinh doanh, mở dịch vụ SaaS thu phí, hoặc đóng gói bán kèm sản phẩm thương mại thương hiệu khác.
+
+Cơ chế Quyên góp (Donation): Chỉ duy nhất cổng Quyên góp gốc do Tác giả cấu hình sẵn (như slash command /donate mã hóa cứng) mới được coi là hợp lệ. Người dùng phái sinh (Licensees) nghiêm cấm việc sửa đổi cổng nạp tiền hoặc thu lợi nhuận gián tiếp dựa trên mã nguồn này dưới mọi hình thức.
+
+3. MIỄN TRỪ TRÁCH NHIỆM TIỀN BẠC & PHẦN CỨNG (AS-IS)
+Trách nhiệm API Key: Người chạy bot tự chịu trách nhiệm chi trả và bảo mật cho toàn bộ bể API Keys (Gemini, OpenAI Custom Endpoints) nạp vào hệ thống. Tác giả hoàn toàn miễn trừ trách nhiệm nếu người dùng cấu hình lỗi làm rò rỉ hoặc bị nhà cung cấp vả hóa đơn cước phí.
+
+An toàn hạ tầng: Hệ thống khởi chạy các tiến trình nặng ngầm (Postgres, Kafka Broker JVM). Tác giả không chịu bất kỳ trách nhiệm nào về việc xung đột cổng mạng, nghẽn I/O ổ cứng, tràn VRAM sập hệ thống, hoặc hao tổn phần cứng máy chủ phát sinh trong quá trình vận hành thực tế.
