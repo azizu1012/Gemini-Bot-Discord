@@ -12,6 +12,7 @@ from .api_config import (
     GEMINI_LIMITER_MAX_OUTPUT_TOKENS,
     GEMINI_LIMITER_FIXED_OVERHEAD,
     GEMINI_LIMITER_SAFETY_FACTOR,
+    initialize_key_pool,
 )
 from .api_proxy import APIProxy
 from .gemini_rate_limiter import GeminiRateLimiter
@@ -231,3 +232,14 @@ def get_api_router() -> APIRouter:
     if _router_instance is None:
         _router_instance = APIRouter()
     return _router_instance
+
+
+def create_model_pools(keys: List[str], key_to_name: Dict[str, str]) -> List[Dict[str, str]]:
+    pool = initialize_key_pool(keys)
+    for item in pool:
+        item["key_name"] = key_to_name.get(item["key"], "")
+    return pool
+
+
+def create_summary_pool(keys: List[str], key_to_name: Dict[str, str]) -> List[Dict[str, str]]:
+    return create_model_pools(keys, key_to_name)
