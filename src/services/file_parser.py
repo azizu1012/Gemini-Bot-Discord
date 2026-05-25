@@ -141,7 +141,7 @@ class FileParserService:
             self.logger.error(f"Error extracting text from '{filename}': {e}")
             return {"filename": filename, "content": f"[LỖI: Không thể trích xuất văn bản từ file '{filename}'. Lỗi: {e}]"}
 
-    async def prepare_file_for_indexing(self, attachment: discord.Attachment, chunk_dir: str, base_name: str = "") -> Dict[str, Any]:
+    async def prepare_file_for_indexing(self, attachment: discord.Attachment, base_name: str = "") -> Dict[str, Any]:
         """Download and chunk a file for indexing."""
         filename = attachment.filename
         safe_filename = base_name or self._safe_filename(filename)
@@ -152,7 +152,7 @@ class FileParserService:
             return {"filename": filename, "error": download_error}
 
         file_extension = os.path.splitext(filename)[1].lower()
-        os.makedirs(chunk_dir, exist_ok=True)
+        chunk_dir = "" # chunk_dir is no longer used, we store chunks in memory for postgres insertion
 
         try:
             chunk_manifest, security_report, truncated = self._build_chunk_manifest(

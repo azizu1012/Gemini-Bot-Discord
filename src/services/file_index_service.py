@@ -12,35 +12,10 @@ from src.core.prompt_loader import (
     get_file_index_validation_prompt,
 )
 from src.services.file_parser import FileParserService
+from src.database.repository import DatabaseRepository
 
 
-# ---------------------------------------------------------------------------
-# Pure / helper functions (outside class so edits won't break the class)
-# ---------------------------------------------------------------------------
-
-def build_index_base_name(filename: str, user_id: str) -> str:
-    safe_name = re.sub(r"[^a-zA-Z0-9._-]+", "_", filename).strip("._")
-    if not safe_name:
-        safe_name = "file"
-    if len(safe_name) > 80:
-        safe_name = safe_name[:80].rstrip("._")
-    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    return f"{safe_name}__{user_id}__{timestamp}"
-
-
-def write_index_json(index_path: str, data: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(index_path), exist_ok=True)
-    with open(index_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-def read_index_json(index_path: str) -> Optional[Dict[str, Any]]:
-    try:
-        with open(index_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to read index file {index_path}: {e}")
-        return None
+__all__ = ["build_index_context", "FileIndexService", "should_use_last_index"]
 
 
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -82,84 +57,64 @@ def should_use_last_index(content: str) -> bool:
     return any(trigger in normalized for trigger in triggers)
 
 
-def select_chunks_for_query(
-    index_data: Dict[str, Any],
-    query: str,
-    chunk_limit: int,
-) -> List[Dict[str, Any]]:
-    chunks = index_data.get("chunks", [])
-    if not chunks:
-        return []
-    normalized_query = normalize_intent_text(query)
-    tokens = [t for t in normalized_query.split() if len(t) >= 2]
-
-    scored: List[Tuple[int, Dict[str, Any]]] = []
-    for entry in chunks:
-        haystack = " ".join([
-            str(entry.get("title", "")),
-            str(entry.get("summary", "")),
-            " ".join(entry.get("keywords", []) or []),
-        ]).lower()
-        score = sum(1 for t in tokens if t in haystack)
-        scored.append((score, entry))
-
-    scored.sort(key=lambda item: (item[0], str(item[1].get("chunk_id"))), reverse=True)
-    top = [entry for s, entry in scored if s > 0][:chunk_limit]
-    if not top:
-        top = [entry for _, entry in scored[:chunk_limit]]
-    return top
-
-
-def build_index_context(
-    index_data: Dict[str, Any],
-    validation: Dict[str, Any],
+async def build_index_context(
+    document_id: str,
     query: str,
     *,
+    db_repo: DatabaseRepository,
     file_parser: FileParserService,
     chunk_limit: int = 3,
     chunk_preview_chars: int = 3800,
 ) -> str:
-    selected = select_chunks_for_query(index_data, query, chunk_limit)
-    overview_lines = []
-    for idx, entry in enumerate(index_data.get("chunks", [])[:12], start=1):
-        title = str(entry.get("title") or "")
-        summary = str(entry.get("summary") or "")
-        overview_lines.append(f"{idx}. {title} - {summary}")
+    selected = await db_repo.search_similar_chunks(query, limit=chunk_limit)
+    selected = [c for c in selected if c.get("document_id") == document_id] if document_id else selected
+
+    if not selected:
+        try:
+            await db_repo.init_db()
+            async with db_repo.pool.acquire() as conn:  # type: ignore[union-attr]
+                rows = await conn.fetch(
+                    "SELECT chunk_id, document_id, content, chunk_summary, keywords, metadata FROM rag_chunks WHERE document_id = $1 LIMIT $2",
+                    document_id,
+                    chunk_limit,
+                )
+                selected = [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"Error fetching fallback chunks for doc {document_id}: {e}")
 
     chunk_blocks = []
     for entry in selected:
         chunk_id = entry.get("chunk_id")
-        chunk_path = entry.get("chunk_path")
-        source = entry.get("source", {})
-        chunk_text = file_parser.read_chunk_text(chunk_path, max_chars=chunk_preview_chars)
-        if not chunk_text:
-            continue
-        chunk_blocks.append(
-            f"[CHUNK {chunk_id} | source={json.dumps(source, ensure_ascii=False)}]\n{chunk_text}"
-        )
+        content = entry.get("content", "")
+        if not content and entry.get("metadata"):
+            try:
+                meta = json.loads(entry.get("metadata", "{}"))
+                chunk_path = meta.get("chunk_path")
+                if chunk_path:
+                    content = file_parser.read_chunk_text(chunk_path, max_chars=chunk_preview_chars)
+            except Exception:
+                pass
 
-    validation_status = str(validation.get("status", "warn"))
-    validation_reason = str(validation.get("reason", ""))
-    validation_note = f"validation={validation_status} reason={validation_reason}".strip()
-    if validation_note:
-        validation_note = f"[INDEX VALIDATION] {validation_note}"
+        if content:
+            if len(content) > chunk_preview_chars:
+                content = content[:chunk_preview_chars] + "..."
+            chunk_blocks.append(f"[CHUNK {chunk_id}]\n{content}")
+
+    overview_lines = []
+    for idx, entry in enumerate(selected[:12], start=1):
+        summary = str(entry.get("chunk_summary") or "")
+        overview_lines.append(f"{idx}. Chunk {entry.get('chunk_id')} - {summary}")
 
     overview_text = "\n".join(overview_lines) if overview_lines else "(no index entries)"
     chunks_text = "\n\n".join(chunk_blocks) if chunk_blocks else "(no relevant chunks selected)"
 
     return (
         f"\n[FILE INDEX]\n"
-        f"file={index_data.get('file_name')} chunks={index_data.get('chunk_count')} truncated={index_data.get('truncated')}\n"
-        f"{validation_note}\n"
-        f"[SECURITY REPORT]\n{index_data.get('security_report', '')}\n"
+        f"document_id={document_id} chunks_found={len(selected)}\n"
         f"[INDEX OVERVIEW]\n{overview_text}\n"
         f"[SELECTED CHUNKS]\n{chunks_text}\n"
     )
 
-
-# ---------------------------------------------------------------------------
-# FileIndexService class - orchestration only, deps injected
-# ---------------------------------------------------------------------------
 
 class FileIndexService:
     INDEX_MAX_OUTPUT_TOKENS = 65000
@@ -171,6 +126,7 @@ class FileIndexService:
         self,
         *,
         config: Config,
+        db_repo: DatabaseRepository,
         file_parser: FileParserService,
         api_generate_fn,
         api_get_key_fn,
@@ -182,10 +138,9 @@ class FileIndexService:
         final_model_alias: str,
     ):
         self.config = config
+        self.db_repo = db_repo
         self.file_parser = file_parser
         self.logger = logger
-        self.file_index_dir = config.FILE_INDEX_DIR
-        self.file_chunk_dir = config.FILE_CHUNK_DIR
         self.latest_index_by_user: Dict[str, Dict[str, str]] = {}
 
         self._generate = api_generate_fn
@@ -197,31 +152,15 @@ class FileIndexService:
         self._reasoning_alias = reasoning_model_alias
         self._final_alias = final_model_alias
 
-    # -- pointer helpers --
-
-    def set_latest_index(self, user_id: str, index_path: str, filename: str) -> None:
+    def set_latest_index(self, user_id: str, document_id: str, filename: str) -> None:
         self.latest_index_by_user[user_id] = {
-            "index_path": index_path,
+            "document_id": document_id,
             "filename": filename,
             "updated_at": datetime.now().isoformat(),
         }
-        pointer_path = os.path.join(self.file_index_dir, f"last_index_{user_id}.json")
-        try:
-            write_index_json(pointer_path, self.latest_index_by_user[user_id])
-        except Exception as e:
-            self.logger.error(f"Failed to write last index pointer: {e}")
 
     def get_latest_index_for_user(self, user_id: str) -> Optional[Dict[str, Any]]:
-        cached = self.latest_index_by_user.get(user_id)
-        if cached:
-            return cached
-        pointer_path = os.path.join(self.file_index_dir, f"last_index_{user_id}.json")
-        pointer = read_index_json(pointer_path)
-        if pointer:
-            self.latest_index_by_user[user_id] = pointer
-        return pointer
-
-    # -- core indexing pipeline --
+        return self.latest_index_by_user.get(user_id)
 
     async def index_chunk_with_reasoning(
         self,
@@ -262,7 +201,7 @@ class FileIndexService:
         if not quota_ok:
             return {}
 
-        api_key, model_name, used_model_alias, key_reservation = self._get_best_api_key(self._reasoning_alias)
+        api_key, model_name, used_model_alias, key_reservation = await self._get_best_api_key(self._reasoning_alias)
         if not api_key or not model_name:
             return {}
 
@@ -301,12 +240,14 @@ class FileIndexService:
         self,
         *,
         file_meta: Dict[str, Any],
-        index_path: str,
+        document_id: str,
         user_id: str,
     ) -> Dict[str, Any]:
         filename = file_meta.get("filename") or "file"
         chunk_manifest = file_meta.get("chunk_manifest", [])
         security_report = file_meta.get("security_report", "")
+
+        await self.db_repo.init_db()
 
         index_entries: List[Dict[str, Any]] = []
         for chunk in chunk_manifest:
@@ -317,7 +258,8 @@ class FileIndexService:
                 continue
 
             chunk_text = self.file_parser.read_chunk_text(
-                chunk_path, max_chars=self.INDEX_CHUNK_PREVIEW_CHARS * 2,
+                chunk_path,
+                max_chars=self.INDEX_CHUNK_PREVIEW_CHARS * 2,
             )
             if not chunk_text:
                 continue
@@ -345,7 +287,46 @@ class FileIndexService:
             entry["source"] = chunk_source
             index_entries.append(entry)
 
-        index_data = {
+            try:
+                async with self.db_repo.pool.acquire() as conn:  # type: ignore[union-attr]
+                    summary = entry.get("summary", "")
+                    keywords = entry.get("keywords", [])
+                    if not isinstance(keywords, list):
+                        keywords = []
+
+                    metadata = json.dumps(
+                        {
+                            "chunk_path": chunk_path,
+                            "source": chunk_source,
+                            "title": entry.get("title", ""),
+                            "risk_flags": entry.get("risk_flags", []),
+                            "notes": entry.get("notes", ""),
+                        },
+                        ensure_ascii=False,
+                    )
+
+                    await conn.execute(
+                        """
+                        INSERT INTO rag_chunks (chunk_id, document_id, content, chunk_summary, keywords, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (chunk_id) DO UPDATE
+                        SET content = EXCLUDED.content,
+                            chunk_summary = EXCLUDED.chunk_summary,
+                            keywords = EXCLUDED.keywords,
+                            metadata = EXCLUDED.metadata
+                        """,
+                        chunk_id,
+                        document_id,
+                        chunk_text,
+                        summary,
+                        keywords,
+                        metadata,
+                    )
+            except Exception as e:
+                self.logger.error(f"Failed to insert chunk {chunk_id} into db: {e}")
+
+        return {
+            "document_id": document_id,
             "file_name": filename,
             "file_extension": file_meta.get("file_extension"),
             "user_id": user_id,
@@ -355,12 +336,8 @@ class FileIndexService:
             "truncated": bool(file_meta.get("truncated")),
             "chunks": index_entries,
         }
-        write_index_json(index_path, index_data)
-        return index_data
 
-    async def validate_file_index(
-        self, index_data: Dict[str, Any], user_id: str,
-    ) -> Dict[str, Any]:
+    async def validate_file_index(self, index_data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
         current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
         time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
         system_instruction = time_context + get_file_index_validation_prompt()
@@ -395,7 +372,7 @@ class FileIndexService:
         if not quota_ok:
             return {"status": "warn", "reason": "quota blocked", "risk_flags": []}
 
-        api_key, model_name, used_model_alias, key_reservation = self._get_best_api_key(self._final_alias)
+        api_key, model_name, used_model_alias, key_reservation = await self._get_best_api_key(self._final_alias)
         if not api_key or not model_name:
             return {"status": "warn", "reason": "no api key", "risk_flags": []}
 
