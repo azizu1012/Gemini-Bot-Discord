@@ -1,7 +1,8 @@
-const path = require("path");
+﻿const path = require("path");
 
 const projectRoot = __dirname;
-const enableServer = String(process.env.BOT_ENABLE_SERVER || "").trim() === "1";
+const defaultInterpreter = process.platform === "win32" ? "python" : "python3";
+const interpreter = String(process.env.AZURIS_PYTHON || process.env.PYTHON || defaultInterpreter).trim();
 
 module.exports = {
   apps: [
@@ -9,8 +10,8 @@ module.exports = {
       name: "azuris-bot",
       cwd: projectRoot,
       script: path.join(projectRoot, "run_bot.py"),
-      args: enableServer ? ["--server"] : [],
-      interpreter: path.join(projectRoot, "venv", "bin", "python3"),
+      args: [],
+      interpreter,
       watch: false,
       max_memory_restart: "1G",
       autorestart: true,
@@ -20,7 +21,6 @@ module.exports = {
       time: true,
       env: {
         NODE_ENV: "production",
-        BOT_ENABLE_SERVER: enableServer ? "1" : "0",
       },
     },
   ],

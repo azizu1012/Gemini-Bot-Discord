@@ -1,4 +1,5 @@
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
 from typing import Dict, Optional
@@ -50,19 +51,18 @@ class Config:
         self.PROJECT_ROOT = _detect_project_root()
         _load_runtime_env(self.PROJECT_ROOT)
 
+        # --- DATABASE & KAFKA ---
+        self.DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/azuris")
+        self.KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+
         # --- FILE PATHS (ABSOLUTE & CWD-INDEPENDENT) ---
-        self.DB_PATH = self._resolve_db_path()
-        self.DB_BACKUP_PATH = self._resolve_db_backup_path()
         self.NOTE_PATH = self._resolve_runtime_path("NOTE_PATH", "data/notes.txt")
         self.WEATHER_CACHE_PATH = self._resolve_runtime_path("WEATHER_CACHE_PATH", "data/weather_cache.json")
         self.FILE_STORAGE_PATH = self._resolve_runtime_path("FILE_STORAGE_PATH", "uploaded_files")
-        self.FILE_INDEX_DIR = self._resolve_runtime_path("FILE_INDEX_DIR", "data/file_indexes")
         self.FILE_CHUNK_DIR = self._resolve_runtime_path("FILE_CHUNK_DIR", "data/file_chunks")
-        self.QUOTA_STATE_PATH = self._resolve_runtime_path("ROUTER_QUOTA_STATE_FILE", "data/quota_state.json")
         self.LOG_PATH = self._resolve_runtime_path("BOT_LOG_PATH", "bot.log")
 
         # Keep router config aligned with absolute runtime path.
-        os.environ["ROUTER_QUOTA_STATE_FILE"] = self.QUOTA_STATE_PATH
 
         # --- VOICE ROOM OWNER LOCK ---
         self.VOICE_LOCK_BASE_DIR = self._resolve_runtime_path("VOICE_LOCK_BASE_DIR", "data/voice_lock")
@@ -152,7 +152,12 @@ class Config:
         self.PREMIUM_RATE_LIMIT = "20/60"
         self.DEFAULT_DM_LIMIT = 5
         self.PREMIUM_DM_LIMIT = 15
-        self.ADMIN_USER_IDS = [self.ADMIN_ID] if self.ADMIN_ID else []
+
+        self.ADMIN_ID_RAW = os.getenv("ADMIN_IDS", os.getenv("ADMIN_ID", ""))
+        self.ADMIN_USER_IDS = [i.strip() for i in self.ADMIN_ID_RAW.split(",") if i.strip()] if self.ADMIN_ID_RAW else []
+
+        self.MODERATOR_ID_RAW = os.getenv("MODERATOR_IDS", "")
+        self.MODERATOR_USER_IDS = [i.strip() for i in self.MODERATOR_ID_RAW.split(",") if i.strip()] if self.MODERATOR_ID_RAW else []
 
         # --- PRODUCTION STABILITY TUNING ---
         self.REASONING_MAX_API_RETRIES = self._get_int("REASONING_MAX_API_RETRIES", 3, min_value=1, max_value=6)
@@ -180,39 +185,13 @@ class Config:
             target = self.PROJECT_ROOT / target
         return str(target.resolve())
 
-    def _resolve_db_path(self) -> str:
-        raw_db = (os.getenv("DB_PATH") or "").strip()
-        if raw_db:
-            return self._resolve_runtime_path("DB_PATH", "data/bot_database.db")
 
-        data_dir = self.PROJECT_ROOT / "data"
-        preferred = data_dir / "bot_database.db"
-        legacy = data_dir / "chat_history.db"
-
-        if preferred.exists():
-            return str(preferred.resolve())
-        if legacy.exists():
-            return str(legacy.resolve())
-        return str(preferred.resolve())
-
-    def _resolve_db_backup_path(self) -> str:
-        raw_backup = (os.getenv("DB_BACKUP_PATH") or "").strip()
-        if raw_backup:
-            return self._resolve_runtime_path("DB_BACKUP_PATH", "data/bot_database.db.backup")
-
-        db_path = Path(self.DB_PATH)
-        default_backup = db_path.with_suffix(db_path.suffix + ".backup")
-        return str(default_backup.resolve())
 
     def _ensure_runtime_directories(self) -> None:
         runtime_dirs = {
-            Path(self.DB_PATH).parent,
-            Path(self.DB_BACKUP_PATH).parent,
             Path(self.WEATHER_CACHE_PATH).parent,
             Path(self.FILE_STORAGE_PATH),
-            Path(self.FILE_INDEX_DIR),
             Path(self.FILE_CHUNK_DIR),
-            Path(self.QUOTA_STATE_PATH).parent,
             Path(self.VOICE_LOCK_BASE_DIR),
             Path(self.LOG_PATH).parent,
         }
@@ -223,13 +202,9 @@ class Config:
     def get_runtime_paths(self) -> Dict[str, str]:
         return {
             "project_root": str(self.PROJECT_ROOT),
-            "db_path": self.DB_PATH,
-            "db_backup_path": self.DB_BACKUP_PATH,
             "file_storage_path": self.FILE_STORAGE_PATH,
-            "file_index_dir": self.FILE_INDEX_DIR,
             "file_chunk_dir": self.FILE_CHUNK_DIR,
             "weather_cache_path": self.WEATHER_CACHE_PATH,
-            "quota_state_path": self.QUOTA_STATE_PATH,
             "voice_lock_base_dir": self.VOICE_LOCK_BASE_DIR,
             "log_path": self.LOG_PATH,
         }
@@ -244,7 +219,12 @@ class Config:
 
         formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-        file_handler = logging.FileHandler(self.LOG_PATH, encoding="utf-8")
+        file_handler = RotatingFileHandler(
+            self.LOG_PATH,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8"
+        )
         file_handler.setFormatter(formatter)
 
         stream_handler = logging.StreamHandler()
@@ -290,12 +270,9 @@ TAVILY_API_KEY = config.TAVILY_API_KEY
 EXA_API_KEY = config.EXA_API_KEY
 WEATHER_API_KEY = config.WEATHER_API_KEY
 CITY = config.CITY
-DB_PATH = config.DB_PATH
-DB_BACKUP_PATH = config.DB_BACKUP_PATH
 NOTE_PATH = config.NOTE_PATH
 WEATHER_CACHE_PATH = config.WEATHER_CACHE_PATH
 FILE_STORAGE_PATH = config.FILE_STORAGE_PATH
-FILE_INDEX_DIR = config.FILE_INDEX_DIR
 FILE_CHUNK_DIR = config.FILE_CHUNK_DIR
 VOICE_LOCK_BASE_DIR = config.VOICE_LOCK_BASE_DIR
 VOICE_WHITELIST_FILE = config.VOICE_WHITELIST_FILE
@@ -308,6 +285,7 @@ PREMIUM_RATE_LIMIT = config.PREMIUM_RATE_LIMIT
 DEFAULT_DM_LIMIT = config.DEFAULT_DM_LIMIT
 PREMIUM_DM_LIMIT = config.PREMIUM_DM_LIMIT
 ADMIN_USER_IDS = config.ADMIN_USER_IDS
+MODERATOR_USER_IDS = config.MODERATOR_USER_IDS
 REASONING_MAX_API_RETRIES = config.REASONING_MAX_API_RETRIES
 REASONING_MAX_LOOPS = config.REASONING_MAX_LOOPS
 FINAL_MAX_API_RETRIES = config.FINAL_MAX_API_RETRIES
@@ -316,5 +294,15 @@ SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = config.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS
 SEARCH_ALLOW_PARTIAL_ANSWER = config.SEARCH_ALLOW_PARTIAL_ANSWER
 PROJECT_ROOT = str(config.PROJECT_ROOT)
 LOG_PATH = config.LOG_PATH
-QUOTA_STATE_PATH = config.QUOTA_STATE_PATH
 DONATE_ENCRYPTION_KEY = config.DONATE_ENCRYPTION_KEY
+
+
+# Global DB pool
+_db_pool = None
+
+def get_db_pool():
+    return _db_pool
+    
+def set_db_pool(pool):
+    global _db_pool
+    _db_pool = pool

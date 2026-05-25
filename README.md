@@ -1,6 +1,6 @@
 # Chad Gibiti Discord Bot
 
-Chad Gibiti là Discord bot dùng pipeline Gemini 2 tầng (reasoning/tool loop + final synthesis), có memory dài hạn qua SQLite, shared knowledge có kiểm soát, và lớp ổn định runtime cho production (cache, retry budget, PM2 fresh mode).
+Chad Gibiti là Discord bot dùng pipeline Gemini 2 tầng (reasoning/tool loop + final synthesis), được xây dựng trên kiến trúc Enterprise Distributed Architecture với PostgreSQL, Kafka, và có memory dài hạn chia sẻ qua DB, cùng với lớp ổn định runtime cho production.
 
 ## Quick start
 
@@ -27,10 +27,27 @@ Linux/Ubuntu launcher có hỗ trợ PM2:
 ./run_bot.sh --preflight-only
 ```
 
+Manual teardown khi cần:
+
+```bash
+./stop_infra.sh
+# Windows:
+powershell -ExecutionPolicy Bypass -File .\stop_infra.ps1
+```
+
 ## Runtime hardening (cross-platform)
 
 - Path runtime đã được chuẩn hóa theo `PROJECT_ROOT` tuyệt đối, không còn phụ thuộc `cwd`.
+- Runtime root không còn hardcode cố định: launcher/bootstrap đọc `LOCAL_RUNTIME_ROOT` (env/.env), mặc định `src/.runtime`.
 - Runtime folders/file sẽ tự tạo trước khi dùng (`data/`, `uploaded_files/`, `logs/`, quota state, voice lock files...).
+- `run_bot.py` không hardcode `.venv`; chỉ relaunch khi bạn chủ động set `AZURIS_PYTHON` (launcher tự set sẵn biến này).
+- `run_bot.ps1` / `run_bot.sh` tự phát hiện runtime infra cũ (Kafka/Zookeeper/PostgreSQL qua port + PID file), tự gọi `stop_infra` trước khi start mới.
+- `stop_infra.ps1` / `stop_infra.sh` teardown theo 2 pha (graceful -> force), sau đó verify port đã đóng; nếu chưa đóng thì fail rõ ràng.
+- PostgreSQL start mode cấu hình qua `AZURIS_POSTGRES_START_MODE`:
+  - Windows default `direct` (chạy thẳng `postgres.exe`, tránh kẹt `pg_ctl`).
+  - Linux default `auto` (ưu tiên `pg_ctl`, fallback `direct` nếu cần).
+  - Nếu giữ chung một `.env` cho nhiều OS, nên set tay biến này theo môi trường deploy.
+  - `install_services.ps1` và `stop_infra.ps1` cũng tôn trọng mode này; `direct` sẽ không gọi `pg_ctl`.
 - Startup banner luôn in:
   - Python executable
   - current working directory
@@ -42,33 +59,56 @@ Linux/Ubuntu launcher có hỗ trợ PM2:
 
 ## Deploy runbook chuẩn (Linux + PM2)
 
-1. Clone đúng repo và cài venv:
+### Điểm mới quan trọng
+
+- `install_services.sh` (Linux) và `install_services.ps1` (Windows local) cài runtime **project-local** vào `LOCAL_RUNTIME_ROOT` (mặc định `src/.runtime`).
+- Script sẽ tự động tạo/cập nhật trực tiếp `.env` (không tạo `.env.bak`).
+- Có thể đổi vị trí runtime bằng `LOCAL_RUNTIME_ROOT` trước khi chạy bootstrap/launcher.
+- Bạn **không cần chèn tay** `DATABASE_URL`/`KAFKA_BOOTSTRAP_SERVERS` nữa.
+- Chỉ cần điền secret còn thiếu lần đầu (ví dụ `DISCORD_TOKEN`, `GEMINI_API_KEY_*`).
+
+### Linux VPS flow (khuyến nghị cho production)
+
+1. Upload source (clone hoặc copy thủ công), rồi vào đúng thư mục project:
 
 ```bash
-git clone https://github.com/azizu1012/Gemini-Bot-Discord.git Azuris_bot
-cd Azuris_bot
-python3 -m venv venv
-source venv/bin/activate
+cd <project_root>
+```
+
+1. Bootstrap local runtime + sync `.env` tự động:
+
+```bash
+chmod +x install_services.sh run_bot.sh
+./install_services.sh
+```
+
+1. Cài Python deps (nếu chưa có):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-1. Cấu hình `.env` (tối thiểu `DISCORD_TOKEN`, `GEMINI_API_KEY_1...`).
-   Nếu dùng tính năng `/donate`, thêm `DONATE_ENCRYPTION_KEY` (Fernet key) — xem `.env.example`.
-
-1. Chạy preflight trước khi start:
+1. Mở `.env` chỉ để điền secret thiếu (không cần sửa runtime keys):
 
 ```bash
-python run_bot.py --preflight
+nano .env
 ```
 
-1. Start bằng ecosystem có `cwd` cố định:
+1. Chạy preflight:
 
 ```bash
-BOT_ENABLE_SERVER=1 pm2 start ecosystem.config.js --only azuris-bot --update-env
-# hoặc bot-only:
-BOT_ENABLE_SERVER=0 pm2 start ecosystem.config.js --only azuris-bot --update-env
-pm2 save
+./run_bot.sh --preflight-only
+```
+
+1. Start bằng PM2 (ecosystem giữ nguyên):
+
+```bash
+./run_bot.sh --pm2 --server
+# hoặc bot-only
+./run_bot.sh --pm2
 ```
 
 1. Verify sau deploy:
@@ -79,17 +119,27 @@ pm2 logs azuris-bot --lines 120
 
 Checklist log cần thấy:
 
-- Startup banner in đúng `Project root` và resolved paths.
-- Không còn `unable to open database file`.
-- Không còn `Fallback lite error: [Errno 2]`.
+- Startup banner in đúng `Project root` và runtime paths.
+- `DATABASE_URL` đã được mask password trong log.
+- Không còn lỗi kết nối DB/Kafka.
 
-1. Nếu PM2 bị lỗi stale `pidusage`:
+Nếu PM2 stale (`pidusage`), chạy:
 
 ```bash
 pm2 update
 pm2 restart azuris-bot
 pm2 save
 ```
+
+### Windows local test flow (native, không Docker)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_services.ps1
+powershell -ExecutionPolicy Bypass -File .\run_bot.ps1 --preflight-only
+powershell -ExecutionPolicy Bypass -File .\run_bot.ps1
+```
+
+Lưu ý: runtime build trên Windows không dùng trực tiếp cho Linux VPS; lên VPS vẫn chạy `install_services.sh` để bootstrap binary Linux.
 
 ## Cấu hình tối thiểu
 
@@ -105,7 +155,7 @@ Chi tiết biến môi trường: xem `.env.example`.
 Ảnh QR donation được mã hóa Fernet tại `assets/encrypted/` (commit an toàn lên git).
 Ảnh gốc nằm ở `Donet-qr/` (gitignored, không push).
 
-- **Đổi ảnh QR**: thay file trong `Donet-qr/`, chạy `python scripts/encrypt_donate_qr.py`, commit lại `assets/encrypted/`.
+- **Đổi ảnh QR**: thay file trong `Donet-qr/`, sau đó re-encrypt thành file `.enc` trong `assets/encrypted/` bằng đúng `DONATE_ENCRYPTION_KEY` đang dùng.
 - **Deploy server mới**: đảm bảo `.env` có `DONATE_ENCRYPTION_KEY` (cùng key đã dùng để encrypt).
 - **Generate key mới**: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` — nhớ re-encrypt ảnh sau khi đổi key.
 
@@ -114,13 +164,14 @@ Chi tiết biến môi trường: xem `.env.example`.
 - `main.py`: entrypoint mỏng, ủy quyền chạy cho `run_bot.py`
 - `run_bot.py`: launcher chính, hỗ trợ mode bot-only hoặc bot + server
 - `run_bot.sh`: launcher Linux/PM2 (`--pm2`, `--pm2-fresh`, `--server`)
-- `src/handlers/message_handler.py`: routing, context building, intent detection
+- `stop_infra.sh` / `stop_infra.ps1`: deterministic teardown cho Kafka/Zookeeper/PostgreSQL trước khi relaunch
+- `src/handlers/message_handler.py`: Kafka distributed worker, atomic upsert `is_busy` locking, routing, context building, intent detection
 - `src/core/gemini_api_manager.py`: API key pool, throttle, client pool
 - `src/core/gemini_pipeline.py`: reasoning loop, final synthesis, fallback
-- `src/handlers/bot_core.py`: vòng đời bot, slash commands, admin interactions
+- `src/handlers/bot_core.py`: Kafka publisher (`discord-incoming`), vòng đời bot, slash commands, admin interactions
 - `src/services/file_index_service.py`: LLM-powered file indexing pipeline
 - `src/tools/tools.py`: registry/dispatch tool calls cho model + search pipeline
-- `src/database/repository.py`: SQLite repository, fresh schema bootstrap, auto-rebuild khi schema cũ/lỗi
+- `src/database/repository.py`: PostgreSQL repository via `asyncpg`, connection pooling, array containment (`@>`) & trigram (`<->`) matching.
 - `src/managers/note_manager.py`: logic phân loại note, policy scope, promote global
 - `src/core/prompt_loader.py`: LRU-cached prompt loading từ `src/instructions/`
 
@@ -219,6 +270,7 @@ Voice room:
 - Gói context gửi agent ngoài: `AGENT_HANDOFF_PROJECT_CONTEXT.md`
 
 ## Custom API Health Checker
+
 Tính năng tự động kiểm tra sức khoẻ (health check) của OpenAI Custom Endpoint chạy ngầm. Tính năng này:
 
 1. Nằm trong thư mục `src/services/health_checker.py`.

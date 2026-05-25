@@ -26,7 +26,7 @@ OUTPUT RULES:
 - Give the answer first.
 - Use compact bullets/steps only when they improve readability.
 - If confidence is low, say it briefly and give the best next step.
-- For factual web claims, use only TOOL RESULTS evidence and cite source inline (domain/title).
+- For factual web claims, use only TOOL RESULTS evidence. ALWAYS reference the supporting source inline using markdown hyperlinks: [Title/Domain](URL) so users can click them.
 - If sources conflict or evidence is weak, state uncertainty instead of over-claiming.
 - Do not invent facts.
 
@@ -45,6 +45,7 @@ WHEN 3-BLOCK CONTEXT IS PROVIDED:
 FORMAT:
 - Clean plain text by default.
 - Use markdown only when it clearly improves readability.
+- NEVER output raw markdown tables using pipe characters (|) and dashes (-). Discord does not render them correctly, leading to broken and misaligned columns. Instead, convert table data into clear indented lists (e.g. "**Product**: Price") or construct a preformatted text table enclosed inside code blocks (```) using monospace font to ensure perfectly aligned columns.
 
 MATH FORMATTING:
 - Prefer plain-text formulas using standard operators (* / ^) and parentheses.

@@ -4,7 +4,9 @@ import re
 import hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
-from src.core.config import logger
+from src.core.config import logger, get_config
+from src.core.api_router import get_api_router
+from src.core.gemini_api_manager import GeminiApiManager
 from src.database.repository import DatabaseRepository
 
 
@@ -16,6 +18,9 @@ class NoteManager:
     def __init__(self, db_repo: DatabaseRepository):
         self.db_repo = db_repo
         self.logger = logger
+        self.config = get_config()
+        self.router = get_api_router()
+        self.gemini_mgr = GeminiApiManager(self.config, self.router)
 
     def _normalize_fact_text(self, text: str) -> str:
         normalized = (text or "").strip().lower()
@@ -67,9 +72,48 @@ class NoteManager:
         fact_hash = hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:20] if normalized else ""
         return "global_knowledge", "candidate_global", 4, fact_hash
 
+    
+    async def get_user_identity(self, user_id: str) -> str:
+        """
+        Nhanh chóng lấy định danh và sở thích cá nhân của user
+        (note_type="personal_preference") để nhúng vào system prompt.
+        """
+        notes = await self.db_repo.get_user_notes_db(
+            user_id=user_id,
+            search_query=None,
+            include_global=False,
+            limit=10,
+            note_type="personal_preference"
+        )
+        if not notes:
+            return ""
+        
+        return "\n".join(f"- {n.get('content', '')}" for n in notes)
+
     async def save_note_to_db(self, user_id: str, content: str, source: str) -> str:
         """Save an auto-note to database."""
         try:
+            # Tự động tóm tắt thông minh bằng LLM Lite khi ghi chú vượt quá 1000 ký tự
+            if content and len(content) > 1000:
+                self.logger.info(f"Ghi chú tự động của user {user_id} dài ({len(content)} ký tự). Đang gọi LLM Lite tóm tắt...")
+                prompt = (
+                    f"Bạn là trợ lý quản lý trí nhớ của hệ thống Azuris.\n"
+                    f"Hãy tóm tắt và rút gọn ghi chú/thông tin dưới đây thành một đoạn ngắn gọn, súc tích bằng tiếng Việt có dấu. "
+                    f"Hãy giữ nguyên các từ khóa quan trọng, sở thích cốt lõi và các sự thật (facts) cần ghi nhớ. "
+                    f"Đặc biệt chú ý: Độ dài kết quả BẮT BUỘC phải dưới 500 ký tự để lưu trữ tối ưu.\n\n"
+                    f"Nội dung ghi chú cần tóm tắt:\n\"{content}\""
+                )
+                try:
+                    summary = await self.gemini_mgr.call_gemini_direct(prompt)
+                    if summary and "Error calling LLM" not in summary:
+                        content = summary.strip()
+                        self.logger.info(f"Đã tóm tắt ghi chú bằng LLM Lite thành công. Độ dài mới: {len(content)} ký tự.")
+                    else:
+                        raise ValueError("LLM returned empty or error response")
+                except Exception as err:
+                    self.logger.error(f"Không thể tóm tắt bằng LLM Lite: {err}. Fallback cắt chuỗi thô.")
+                    content = content[:1000] + "..."
+
             note_id = str(uuid.uuid4())
             note_type, scope, importance, fact_hash = self._classify_note(content)
 
@@ -122,6 +166,30 @@ class NoteManager:
     async def save_file_note_to_db(self, user_id: str, content: str, filename: str, source: str = "file_upload") -> bool:
         """Save parsed file content to database. Updates if file already exists."""
         try:
+            # Tóm tắt tệp tin cực lớn (> 20,000 ký tự) bằng LLM Lite
+            if content and len(content) > 20000:
+                self.logger.info(f"Nội dung tệp {filename} quá lớn ({len(content)} ký tự). Đang gọi LLM Lite tổng hợp tóm tắt chất lượng cao...")
+                prompt = (
+                    f"Bạn là chuyên gia phân tích tài liệu của hệ thống Azuris.\n"
+                    f"Tệp tin '{filename}' tải lên có dung lượng rất lớn. Hãy đọc nội dung tệp dưới đây và viết một bản tóm tắt phân tích chất lượng cao bằng tiếng Việt có dấu.\n"
+                    f"Bản tóm tắt cần nêu bật:\n"
+                    f"1. Chủ đề cốt lõi của tài liệu.\n"
+                    f"2. Các thông tin quan trọng nhất, công thức, quy ước hoặc logic nghiệp vụ chính.\n"
+                    f"3. Tóm lược các hướng dẫn hành vi chính.\n\n"
+                    f"Đảm bảo kết quả chặt chẽ, súc tích và BẮT BUỘC có độ dài dưới 2000 ký tự để nạp ngữ cảnh hội thoại tối ưu.\n\n"
+                    f"Nội dung tệp tin:\n\"{content[:30000]}\""
+                )
+                try:
+                    summary = await self.gemini_mgr.call_gemini_direct(prompt)
+                    if summary and "Error calling LLM" not in summary:
+                        content = summary.strip()
+                        self.logger.info(f"Đã tổng hợp tóm tắt tệp thành công bằng LLM Lite. Độ dài: {len(content)} ký tự.")
+                    else:
+                        raise ValueError("LLM returned empty or error response")
+                except Exception as err:
+                    self.logger.error(f"Không thể tóm tắt tệp bằng LLM Lite: {err}. Fallback cắt chuỗi thô.")
+                    content = content[:20000] + "\n[Nội dung bị cắt bớt do vượt quá giới hạn 20,000 ký tự]"
+
             existing_note = await self.db_repo.get_file_note_by_filename_db(user_id, filename)
             
             metadata = {
@@ -213,7 +281,14 @@ class NoteManager:
             formatted_notes = []
             for note in notes:
                 try:
-                    metadata = json.loads(note['metadata']) if note.get('metadata') else {}
+                    metadata_val = note.get('metadata')
+                    if isinstance(metadata_val, str):
+                        metadata = json.loads(metadata_val) if metadata_val else {}
+                    elif isinstance(metadata_val, (dict, list)):
+                        metadata = metadata_val
+                    else:
+                        metadata = {}
+
                     meta_str = (
                         f"Loại: {metadata.get('type', note.get('note_type', 'N/A'))}, "
                         f"Nguồn: {metadata.get('source', 'N/A')}, "

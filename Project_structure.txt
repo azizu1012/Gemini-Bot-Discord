@@ -1,147 +1,100 @@
 Azuris_refactor_code_base/
 ├── README.md
+├── AGENT_HANDOFF_PROJECT_CONTEXT.md
 ├── PROJECT_INFO.txt
 ├── Project_structure.txt
-├── AGENT_HANDOFF_PROJECT_CONTEXT.md
 ├── requirements.txt
 ├── .env.example
 ├── main.py
 ├── run_bot.py
 ├── run_bot.sh
-├── data/
-│   ├── bot_database.db (hoặc file DB theo DB_PATH)
-│   ├── bot_database.db.backup (theo DB_BACKUP_PATH)
-│   ├── short_term_memory.json
-│   ├── weather_cache.json
-│   ├── quota_state.json
-│   └── voice_lock/
-├── uploaded_files/
-└── src/
-    ├── core/
-    │   ├── api_config.py
-    │   ├── api_proxy.py
-    │   ├── api_router.py
-    │   ├── config.py
-    │   ├── gemini_api_manager.py
-    │   ├── gemini_pipeline.py
-    │   ├── gemini_rate_limiter.py
-    │   ├── logger.py
-    │   └── prompt_loader.py
-    ├── database/
-    │   └── repository.py
-    ├── handlers/
-    │   ├── bot_core.py
-    │   ├── bot_server.py
-    │   └── message_handler.py
-    ├── instructions/
-    │   ├── system_prompt.py (Python fallback constant cho azuris_system_prompt.txt)
-    │   ├── lite_sys_prompt.py (Python fallback constant cho lite_reasoning_prompt.txt)
-    │   ├── fallback_sys_prompt.py (Python fallback constant cho fallback_system_prompt.txt)
-    │   ├── azuris_system_prompt.txt (legacy filename, content is Chad Gibiti identity)
-    │   ├── fallback_system_prompt.txt
-    │   ├── identity_capability_prompt.txt
-    │   ├── lite_reasoning_prompt.txt
-    │   ├── three_block_context_prompt.txt
-    │   ├── search_budget_prompt.txt
-    │   ├── extra_retrieval_prompt.txt
-    │   ├── partial_evidence_prompt.txt
-    │   ├── auto_retrieval_limit_prompt.txt
-    │   ├── final_synthesis_prompt.txt
-    │   ├── file_index_reasoning_prompt.txt
-    │   └── file_index_validation_prompt.txt
-    ├── managers/
-    │   ├── cache_manager.py
-    │   ├── cleanup_manager.py
-    │   ├── note_manager.py
-    │   └── premium_manager.py
-    ├── services/
-    │   ├── file_parser.py
-    │   ├── file_index_service.py
-    │   ├── memory_service.py
-    │   └── health_checker.py
-    ├── tools/
-    │   └── tools.py
-    └── voice/
-        └── voice_lock.py
+├── run_bot.ps1
+├── stop_infra.sh
+├── stop_infra.ps1
+├── install_services.sh
+├── install_services.ps1
+├── ecosystem.config.js
+├── src/
+│   ├── api_gateway/
+│   │   └── server.py
+│   ├── core/
+│   │   ├── api_config.py
+│   │   ├── api_proxy.py
+│   │   ├── api_router.py
+│   │   ├── config.py
+│   │   ├── gemini_api_manager.py
+│   │   ├── gemini_pipeline.py
+│   │   ├── gemini_rate_limiter.py
+│   │   ├── logger.py
+│   │   ├── preflight.py
+│   │   └── prompt_loader.py
+│   ├── database/
+│   │   └── repository.py
+│   ├── handlers/
+│   │   ├── bot_core.py
+│   │   ├── bot_server.py
+│   │   └── message_handler.py
+│   ├── instructions/
+│   │   ├── azuris_system_prompt.txt
+│   │   ├── fallback_system_prompt.txt
+│   │   ├── identity_capability_prompt.txt
+│   │   ├── lite_reasoning_prompt.txt
+│   │   ├── three_block_context_prompt.txt
+│   │   ├── search_budget_prompt.txt
+│   │   ├── extra_retrieval_prompt.txt
+│   │   ├── partial_evidence_prompt.txt
+│   │   ├── auto_retrieval_limit_prompt.txt
+│   │   ├── final_synthesis_prompt.txt
+│   │   ├── file_index_reasoning_prompt.txt
+│   │   ├── file_index_validation_prompt.txt
+│   │   ├── system_prompt.py
+│   │   ├── lite_sys_prompt.py
+│   │   └── fallback_sys_prompt.py
+│   ├── managers/
+│   │   ├── cache_manager.py
+│   │   ├── cleanup_manager.py
+│   │   ├── note_manager.py
+│   │   └── premium_manager.py
+│   ├── services/
+│   │   ├── file_index_service.py
+│   │   ├── file_parser.py
+│   │   └── health_checker.py
+│   ├── tools/
+│   │   └── tools.py
+│   ├── voice/
+│   │   └── voice_lock.py
+│   └── .runtime/                 # local runtime artifacts (generated)
+├── data/                         # runtime data (generated/mutable)
+├── uploaded_files/               # runtime uploads (generated/mutable)
+└── .venv/                        # local virtualenv (generated)
 
 ================================================================================
-ROLE MAP
+ROLE MAP (SHORT)
 ================================================================================
 
-Root files:
-- main.py:
-  Thin entrypoint gọi launcher chính.
+- run_bot.py / run_bot.sh / run_bot.ps1:
+  Launcher layer (preflight + runtime mode orchestration).
 
-- run_bot.py:
-  Runtime launcher chính (bot-only hoặc bot + Flask server), log thông tin startup quan trọng.
+- stop_infra.sh / stop_infra.ps1:
+  Deterministic infra teardown layer (Kafka/Zookeeper/PostgreSQL).
 
-- run_bot.sh:
-  Launcher Linux/Ubuntu, hỗ trợ PM2 mode (`--pm2`) và PM2 fresh reinstall (`--pm2-fresh`).
+- install_services.sh / install_services.ps1:
+  Provision Java/Kafka/PostgreSQL project-local under src/.runtime.
 
-- README.md:
-  Quick start + kiến trúc ngắn gọn + command/tool overview.
+- Launcher/bootstrap scripts:
+  Upsert runtime env keys trực tiếp vào `.env` (single-file env workflow, không tạo `.env.bak`).
 
-- PROJECT_INFO.txt:
-  Technical overview chi tiết hơn, gồm memory architecture và roadmap.
+- src/core/*:
+  Pipeline core, model router/manager, config/prompt loader, preflight.
 
-- AGENT_HANDOFF_PROJECT_CONTEXT.md:
-  Context gói gọn để gửi cho agent phân tích ngoài khi không thể gửi full source.
+- src/handlers/*:
+  Discord event flow và message orchestration.
 
-Core runtime modules:
-- src/handlers/bot_core.py:
-  Khởi tạo bot, đăng ký slash commands, quản lý admin interaction views.
-
-- src/handlers/message_handler.py:
-  Routing message, build context, intent detection, file indexing orchestration, gọi pipeline. Chống duplicate spam via `processing_users` lock.
-
-- src/core/gemini_api_manager.py:
-  API key pool rotation, quota management, cooldown, client pool, throttling, error classification. Bao gồm CustomAPIWrapperResponse cho tương thích endpoint OpenAI.
-
-- src/core/gemini_pipeline.py:
-  Two-tier pipeline (reasoning loop → final synthesis → fallback), evidence evaluation, artifact cleaning. Mọi truy cập vào response.candidates sử dụng wrapper an toàn.
-
-File indexing:
-- src/services/file_index_service.py:
-  LLM-powered file indexing (chunk → reasoning index → Flash validation). Helper functions ngoài class.
-
-- src/services/file_parser.py:
-  Download, chunk, text extraction cho file đính kèm Discord.
-
-Memory and persistence:
 - src/database/repository.py:
-  SQLite schema bootstrap/rebuild compatibility path + queries + global note moderation operations.
+  DB access/persistence layer.
 
-- src/managers/note_manager.py:
-  Classification policy cho notes, retrieval scope logic, promote candidate->global.
+- src/services/*:
+  File indexing/parsing và health-check services.
 
-- src/services/memory_service.py:
-  Legacy JSON memory utility path.
-
-- src/assets/:
-  Chứa ảnh QR code donate Momo (đã được mã hóa fernet) và các asset nhạy cảm khác.
-
-Tool layer:
 - src/tools/tools.py:
-  Khai báo tools, dispatch tool-calls, và lớp ổn định web_search (cache/dedup/cooldown/deep-read).
-
-Prompt and config:
-- src/instructions/system_prompt.py, lite_sys_prompt.py, fallback_sys_prompt.py:
-  Python fallback constants cho prompt templates (dùng khi file .txt không tồn tại).
-
-- src/core/prompt_loader.py:
-  LRU-cached loader cho tất cả prompt templates từ src/instructions/*.txt.
-  Có Python fallback constants khi file không tồn tại.
-
-- src/instructions/:
-  Tất cả prompt templates dùng cho pipeline (system, reasoning, fallback, identity, file index, etc.).
-
-================================================================================
-NOTES
-================================================================================
-
-- Không sửa code trong src chỉ để thay docs, trừ khi chủ động làm feature/fix.
-- Khi cập nhật tính năng mới, đồng bộ lại README + PROJECT_INFO + handoff doc.
-
-
-Note: `gemini_api_manager.py` implements complete interface parity with `google-genai` SDK response structures, supporting parallel tool calls and batched responses.
-Note: `bot_core.py` seamlessly integrates `HealthCheckerService` for monitoring API states.
+  Tool registry + dispatch implementation.

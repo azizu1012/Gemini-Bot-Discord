@@ -68,11 +68,11 @@ class GeminiApiManager:
 
     # --- Key selection ---
 
-    def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, str]]]:
+    async def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, str]]]:
         if preferred_model_alias:
-            reservation = self.api_router.get_next_key_for_model_reservation(preferred_model_alias)
+            reservation = await self.api_router.get_next_key_for_model_reservation(preferred_model_alias)
         else:
-            reservation = self.api_router.get_next_key_reservation()
+            reservation = await self.api_router.get_next_key_reservation()
 
         if reservation:
             api_key = reservation.get("key")
@@ -373,13 +373,32 @@ class GeminiApiManager:
                         continue # Tool parts handled
                         
                     # Standard user/assistant message mapping
-                    if parts and isinstance(parts[0], dict) and "text" in parts[0]:
-                        content = parts[0]["text"]
-                    elif parts and isinstance(parts[0], str):
-                        content = parts[0]
+                    has_images = any(isinstance(p, dict) and "inline_data" in p for p in parts)
+                    if has_images and role == "user":
+                        import base64
+                        content_list = []
+                        for part in parts:
+                            if isinstance(part, dict):
+                                if "text" in part:
+                                    content_list.append({"type": "text", "text": part["text"]})
+                                elif "inline_data" in part:
+                                    inline = part["inline_data"]
+                                    base64_str = base64.b64encode(inline["data"]).decode("utf-8")
+                                    content_list.append({
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{inline['mime_type']};base64,{base64_str}"
+                                        }
+                                    })
+                        openai_messages.append({"role": role, "content": content_list})
                     else:
-                        content = str(parts)
-                    openai_messages.append({"role": role, "content": content})
+                        if parts and isinstance(parts[0], dict) and "text" in parts[0]:
+                            content = parts[0]["text"]
+                        elif parts and isinstance(parts[0], str):
+                            content = parts[0]
+                        else:
+                            content = str(parts)
+                        openai_messages.append({"role": role, "content": content})
                 else:
                     openai_messages.append({"role": "user", "content": str(msg)})
 
@@ -456,10 +475,55 @@ class GeminiApiManager:
             return CustomAPIWrapperResponse(parts=parts)
             
         else:
+            from google.genai import types
+
+            sdk_contents = []
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    sdk_contents.append(msg)
+                    continue
+
+                role = msg.get("role")
+                parts = msg.get("parts", [])
+                sdk_parts = []
+
+                for part in parts:
+                    if isinstance(part, dict):
+                        if "text" in part:
+                            sdk_parts.append(types.Part.from_text(text=part["text"]))
+                        elif "inline_data" in part:
+                            inline = part["inline_data"]
+                            sdk_parts.append(types.Part.from_bytes(
+                                data=inline["data"],
+                                mime_type=inline["mime_type"]
+                            ))
+                        elif "function_response" in part:
+                            fr = part["function_response"]
+                            sdk_parts.append(types.Part(
+                                function_response=types.FunctionResponse(
+                                    name=fr.get("name"),
+                                    response=fr.get("response", {})
+                                )
+                            ))
+                        elif "function_call" in part:
+                            fc = part["function_call"]
+                            sdk_parts.append(types.Part(
+                                function_call=types.FunctionCall(
+                                    name=fc.get("name"),
+                                    args=fc.get("args")
+                                )
+                            ))
+                        else:
+                            sdk_parts.append(part)
+                    else:
+                        sdk_parts.append(part)
+
+                sdk_contents.append(types.Content(role=role, parts=sdk_parts))
+
             return await asyncio.to_thread(
                 client.models.generate_content,
                 model=model_name,
-                contents=messages,
+                contents=sdk_contents,
                 config=request_config,
             )
 
@@ -467,9 +531,55 @@ class GeminiApiManager:
     async def call_gemini_direct(self, prompt: str) -> str:
         """Simple direct call for background services (like health check) without pipeline overhead."""
         messages = [{"role": "user", "parts": [{"text": prompt}]}]
-        try:
-            response, _, _ = await self.execute_request(messages, "gemini-3.1-flash-lite", 1000)
-            return response
-        except Exception as e:
-            self.logger.error(f"call_gemini_direct failed: {e}")
-            return "Error calling LLM."
+        model_alias = "gemini-flash-lite"
+        max_output_tokens = 1000
+        
+        for attempt in range(3):
+            api_key, model_id, final_alias, reservation = await self._get_best_api_key(model_alias)
+            
+            if not api_key or not model_id:
+                self.logger.error("call_gemini_direct: No API key available.")
+                return "Error calling LLM."
+                
+            try:
+                await self._throttle_api_request(api_key)
+                
+                has_quota = await self._acquire_gemini_quota(
+                    messages=messages, 
+                    max_output_tokens=max_output_tokens, 
+                    model_alias=final_alias
+                )
+                
+                if not has_quota:
+                    self._mark_key_as_failed(api_key, final_alias, reason="rate_limit", reservation=reservation)
+                    continue
+
+                generation_config = {
+                    "temperature": 0.7,
+                    "max_output_tokens": max_output_tokens
+                }
+
+                response = await self._generate_gemini_content(
+                    api_key=api_key,
+                    model_name=model_id,
+                    system_instruction="You are a helpful assistant.",
+                    generation_config=generation_config,
+                    messages=messages,
+                    tools=None
+                )
+                
+                self._commit_selected_key(reservation)
+                return response.text if response else "Error calling LLM."
+                
+            except Exception as e:
+                error_str = str(e)
+                if self._is_invalid_key_error(error_str):
+                    self._mark_key_as_failed(api_key, final_alias, reason="invalid_key", reservation=reservation, permanently_exhaust=True)
+                elif self._is_rate_limit_error(error_str):
+                    self._mark_key_as_failed(api_key, final_alias, reason="rate_limit", reservation=reservation)
+                elif self._is_unavailable_error(error_str):
+                    self._mark_key_as_failed(api_key, final_alias, reason="unavailable", reservation=reservation, duration=5)
+                else:
+                    self.logger.error(f"call_gemini_direct failed on attempt {attempt}: {e}")
+                    
+        return "Error calling LLM."

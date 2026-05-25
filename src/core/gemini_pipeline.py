@@ -187,7 +187,8 @@ class GeminiPipeline:
         MAX_RETRIES = self.config.REASONING_MAX_API_RETRIES
         reasoning_model_alias = self.reasoning_model_alias
 
-        tools = self.tools_mgr.get_all_tools()
+        is_admin = bool(privacy_context.get("is_admin"))
+        tools = self.tools_mgr.get_all_tools(is_admin=is_admin)
         generation_config = {
             "temperature": 0.35,
             "top_p": 0.9,
@@ -218,6 +219,10 @@ class GeminiPipeline:
                     + extra_admin_context
                 )
 
+                # Thay thế động tên bot
+                bot_name = privacy_context.get("bot_name", "Chad Gibiti")
+                system_instruction = system_instruction.replace("Chad Gibiti", bot_name)
+
                 while iteration < self.config.REASONING_MAX_LOOPS:
                     quota_ok = await self.api_mgr._acquire_gemini_quota(
                         reasoning_messages,
@@ -228,7 +233,7 @@ class GeminiPipeline:
                     if not quota_ok:
                         return ("API busy, please retry shortly.", "")
 
-                    api_key, model_name, used_model_alias, key_reservation = self.api_mgr._get_best_api_key(reasoning_model_alias)
+                    api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(reasoning_model_alias)
                     if not api_key or not model_name:
                         return ("API unavailable, please retry shortly.", "")
 
@@ -250,7 +255,17 @@ class GeminiPipeline:
 
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
-                        break
+                        if api_key:
+                            self.api_mgr._mark_key_as_failed(
+                                api_key,
+                                used_model_alias,
+                                duration=300,
+                                reason="empty_candidate",
+                                reservation=key_reservation,
+                            )
+                        raise ValueError(
+                            f"Empty candidate returned from reasoning loop for key ...{api_key[-4:] if api_key else 'None'}"
+                        )
 
                     has_function_calls = False
                     model_parts = []
@@ -262,7 +277,7 @@ class GeminiPipeline:
                             fc = part.function_call
                             tool_name = (fc.name or "").lower()
                             args = dict(fc.args) if fc.args else {}
-                            self.logger.debug(f"Reasoning tool: {fc.name} args={args}")
+                            self.logger.info(f"[Reasoning Loop {iteration}] Model requested tool: {fc.name} args={args}")
                             model_parts.append(part)
 
                             # Intercept JSON parsing errors from the wrapper
@@ -270,6 +285,7 @@ class GeminiPipeline:
                                 error_msg = args["_parsing_error"]
                                 raw_args = args.get("_raw_arguments", "")
                                 tool_res = "System Error: Failed to parse tool arguments as valid JSON. Error: {} Raw input was: {} Please fix your JSON formatting and try again.".format(error_msg, raw_args)
+                                self.logger.warning(f"[Reasoning Loop {iteration}] Tool {fc.name} parsing failed: {error_msg}")
                                 tool_results_list.append(f"[{fc.name}|error=json_parse_failed]")
                                 func_res = {"name": fc.name, "response": {"content": str(tool_res)}}
                                 if getattr(fc, 'id', None):
@@ -279,6 +295,7 @@ class GeminiPipeline:
 
                             if tool_name == "web_search" and web_search_calls >= 1:
                                 budget_msg = get_search_budget_prompt()
+                                self.logger.info(f"[Reasoning Loop {iteration}] Tool {fc.name} blocked by search budget.")
                                 func_res = {"name": "web_search", "response": {"content": budget_msg}}
                                 if getattr(fc, 'id', None):
                                     func_res['id'] = fc.id
@@ -286,6 +303,7 @@ class GeminiPipeline:
                                 continue
 
                             tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                            self.logger.info(f"[Reasoning Loop {iteration}] Tool {fc.name} returned content (length={len(str(tool_res))})")
                             if tool_name == "web_search":
                                 web_search_calls += 1
                                 intent_query = (args.get("query") or "").strip()
@@ -322,7 +340,7 @@ class GeminiPipeline:
                         if tool_matches:
                             executed_tool = False
                             for tool_name, args_str in tool_matches:
-                                self.logger.debug(f"Detected tool in text: {tool_name}({args_str})")
+                                self.logger.info(f"[Reasoning Loop {iteration}] Detected parsed tool call in text: {tool_name}({args_str})")
                                 args_dict = {}
                                 for arg_match in re.finditer(r'(\w+)\s*=\s*["\']([^"\']+)["\']', args_str):
                                     key, value = arg_match.groups()
@@ -337,6 +355,7 @@ class GeminiPipeline:
 
                                 if tool_name_l == "web_search" and web_search_calls >= 1:
                                     budget_msg = get_search_budget_prompt()
+                                    self.logger.info(f"[Reasoning Loop {iteration}] Parsed tool {tool_name_l} blocked by search budget.")
                                     reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
                                     reasoning_messages.append({
                                         "role": "function",
@@ -347,6 +366,7 @@ class GeminiPipeline:
 
                                 fc = TextParsedFunctionCall(tool_name_l, args_dict)
                                 tool_res = await self.tools_mgr.call_tool(fc, user_id)
+                                self.logger.info(f"[Reasoning Loop {iteration}] Parsed tool {tool_name_l} returned content (length={len(str(tool_res))})")
                                 if tool_name_l == "web_search":
                                     web_search_calls += 1
                                     intent_query = (args_dict.get("query") or "").strip()
@@ -366,10 +386,12 @@ class GeminiPipeline:
                                 continue
 
                         if text and len(text) > 3:
+                            self.logger.info(f"[Reasoning Loop {iteration}] Finished reasoning. Output text summary: {text[:150]}...")
                             tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
                             return (text, tool_results_str)
                         break
 
+                    self.logger.info(f"[Reasoning Loop {iteration}] Loop broken or ended without text. Continuing.")
                     break
 
                 tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
@@ -377,6 +399,11 @@ class GeminiPipeline:
 
             except Exception as e:
                 error_str = str(e)
+
+                if "Empty candidate" in error_str:
+                    self.logger.warning(f"⚠️ {error_str}. Rotating key and retrying attempt {attempt + 1}/{MAX_RETRIES}.")
+                    await asyncio.sleep(1)
+                    continue
 
                 if self.api_mgr._is_invalid_key_error(error_str):
                     if api_key:
@@ -432,7 +459,7 @@ class GeminiPipeline:
         return "Reasoning loop failed", tool_results_str
 
     async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
-        MAX_RETRIES = self.config.FINAL_MAX_API_RETRIES
+        MAX_RETRIES = max(5, self.config.FINAL_MAX_API_RETRIES)
         final_model_alias = self.final_model_alias
 
         if tool_results and not _is_tool_result_sufficient(tool_results):
@@ -483,6 +510,10 @@ class GeminiPipeline:
                     + three_block_context
                 )
 
+                # Thay thế động tên bot
+                bot_name = privacy_context.get("bot_name", "Chad Gibiti")
+                system_with_context = system_with_context.replace("Chad Gibiti", bot_name)
+
                 generation_config = {
                     "temperature": 0.7,
                     "top_p": 0.9,
@@ -505,7 +536,7 @@ class GeminiPipeline:
                     self.logger.warning("Final model quota gate blocked; trying lite fallback finalizer.")
                     return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
 
-                api_key, model_name, used_model_alias, key_reservation = self.api_mgr._get_best_api_key(final_model_alias)
+                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(final_model_alias)
                 if not api_key or not model_name:
                     self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
                     return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
@@ -525,7 +556,20 @@ class GeminiPipeline:
 
                 candidate = response.candidates[0] if response.candidates else None
                 if not (candidate and candidate.content and candidate.content.parts):
-                    return "No final response"
+                    if api_key:
+                        self.api_mgr._mark_key_as_failed(
+                            api_key,
+                            used_model_alias,
+                            duration=300,
+                            reason="empty_candidate",
+                            reservation=key_reservation,
+                        )
+                    self.logger.warning(
+                        f"Final output empty candidate for {user_id} with key ...{api_key[-4:] if api_key else 'None'} "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES}), rotating key and retrying."
+                    )
+                    await asyncio.sleep(1)
+                    continue
 
                 part = candidate.content.parts[0]
 
@@ -534,7 +578,12 @@ class GeminiPipeline:
                     if text and len(text) > 5:
                         return text
 
-                return "Empty final response"
+                self.logger.warning(
+                    f"Final output empty text for {user_id} "
+                    f"(attempt {attempt + 1}/{MAX_RETRIES}), retrying."
+                )
+                await asyncio.sleep(1 + attempt)
+                continue
 
             except Exception as e:
                 error_str = str(e)
@@ -588,6 +637,7 @@ class GeminiPipeline:
     async def _fallback_lite_as_flash(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
         MAX_RETRIES = self.config.FALLBACK_MAX_API_RETRIES
         fallback_model_alias = self.fallback_model_alias
+        user_facing_error = "Xin lỗi, mình chưa lấy được kết quả ổn định lúc này. Bạn thử lại sau ít phút nhé."
 
         for attempt in range(MAX_RETRIES):
             api_key: Optional[str] = None
@@ -616,6 +666,10 @@ class GeminiPipeline:
                     )
                 )
 
+                # Thay thế động tên bot
+                bot_name = privacy_context.get("bot_name", "Chad Gibiti")
+                system_with_context = system_with_context.replace("Chad Gibiti", bot_name)
+
                 generation_config = {
                     "temperature": 0.7,
                     "top_p": 0.9,
@@ -635,11 +689,11 @@ class GeminiPipeline:
                     extra_text=system_with_context,
                 )
                 if not quota_ok:
-                    return "[System] API is busy right now, please try again shortly."
+                    return user_facing_error
 
-                api_key, model_name, used_model_alias, key_reservation = self.api_mgr._get_best_api_key(fallback_model_alias)
+                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(fallback_model_alias)
                 if not api_key or not model_name:
-                    return "[System] API overloaded, please try again later."
+                    return user_facing_error
 
                 await self.api_mgr._throttle_api_request(api_key)
 
@@ -656,6 +710,18 @@ class GeminiPipeline:
 
                 candidate = response.candidates[0] if response.candidates else None
                 if not (candidate and candidate.content and candidate.content.parts):
+                    if api_key:
+                        self.api_mgr._mark_key_as_failed(
+                            api_key,
+                            used_model_alias,
+                            duration=300,
+                            reason="empty_candidate",
+                            reservation=key_reservation,
+                        )
+                    self.logger.warning(
+                        f"Fallback empty candidate for {user_id} with key ...{api_key[-4:] if api_key else 'None'} "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES}), rotating key and retrying."
+                    )
                     continue
 
                 part = candidate.content.parts[0]
@@ -701,4 +767,4 @@ class GeminiPipeline:
                 )
                 continue
 
-        return "[System] Model unavailable, please try again later."
+        return user_facing_error

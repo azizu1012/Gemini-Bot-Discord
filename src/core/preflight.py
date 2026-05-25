@@ -1,9 +1,13 @@
+import asyncio
 import importlib.metadata
 import os
 import sys
 import traceback
 from pathlib import Path
 from typing import Dict, List, Tuple
+from urllib.parse import urlsplit, urlunsplit
+
+import asyncpg
 
 from .config import Config, logger
 
@@ -11,12 +15,29 @@ KEY_PACKAGES = [
     "google-genai",
     "discord.py",
     "python-dotenv",
-    "Flask",
     "aiohttp",
     "openai",
     "requests",
     "pypdf",
+    "asyncpg",
+    "aiokafka",
 ]
+
+
+def _mask_database_url(database_url: str) -> str:
+    if not database_url:
+        return "<missing>"
+    try:
+        parsed = urlsplit(database_url)
+        if parsed.password is None:
+            return database_url
+        username = parsed.username or ""
+        host = parsed.hostname or ""
+        port = f":{parsed.port}" if parsed.port else ""
+        netloc = f"{username}:***@{host}{port}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    except Exception:
+        return "<masked>"
 
 
 def get_dependency_versions() -> Dict[str, str]:
@@ -38,6 +59,9 @@ def emit_startup_banner(config: Config) -> None:
     logger.info(f"Project root: {config.PROJECT_ROOT}")
     for key, value in config.get_runtime_paths().items():
         logger.info(f"Runtime path [{key}]: {value}")
+
+    logger.info(f"Database URL: {_mask_database_url(config.DATABASE_URL)}")
+    logger.info(f"Kafka Servers: {config.KAFKA_BOOTSTRAP_SERVERS}")
     logger.info("=" * 70)
 
 
@@ -57,6 +81,30 @@ def _ensure_writable_dir(path_str: str) -> None:
     probe.unlink(missing_ok=True)
 
 
+async def _verify_database_connection(database_url: str, retries: int = 5, delay_seconds: float = 2.0) -> None:
+    last_error: Exception | None = None
+
+    for attempt in range(1, retries + 1):
+        conn = None
+        try:
+            conn = await asyncpg.connect(dsn=database_url, timeout=5, ssl=False)
+            await conn.fetchval("SELECT 1")
+            return
+        except Exception as e:
+            last_error = e
+            logger.warning(f"Database check attempt {attempt}/{retries} failed: {e}")
+            if attempt < retries:
+                await asyncio.sleep(delay_seconds)
+        finally:
+            if conn is not None:
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
+
+    raise ConnectionError(f"Could not connect to PostgreSQL after {retries} attempts: {last_error}")
+
+
 def run_preflight_checks(config: Config, require_token: bool = False) -> Tuple[bool, List[str]]:
     errors: List[str] = []
 
@@ -71,11 +119,10 @@ def run_preflight_checks(config: Config, require_token: bool = False) -> Tuple[b
         if version == "<missing>":
             errors.append(f"Missing dependency: {pkg}")
 
+    asyncio.run(_verify_database_connection(config.DATABASE_URL, retries=5, delay_seconds=2.0))
+
     try:
-        _ensure_writable_file_path(config.DB_PATH)
-        _ensure_writable_file_path(config.DB_BACKUP_PATH)
         _ensure_writable_file_path(config.WEATHER_CACHE_PATH)
-        _ensure_writable_file_path(config.QUOTA_STATE_PATH)
         _ensure_writable_file_path(config.LOCKED_CHANNELS_FILE)
         _ensure_writable_file_path(config.ENFORCED_NAMES_FILE)
         _ensure_writable_file_path(config.VOICE_WHITELIST_FILE)

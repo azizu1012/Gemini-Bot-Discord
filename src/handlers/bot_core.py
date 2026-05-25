@@ -1,27 +1,26 @@
 import asyncio
 import io
-from collections import defaultdict, deque
-from datetime import datetime
+import json
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Deque, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 import discord
+from src.services.kafka_service import KafkaService
 from discord import app_commands
 from discord.ext import commands
 
-from src.core.config import logger, ADMIN_ID
+from src.core.config import Config, logger
 from src.database.repository import DatabaseRepository
 from src.managers.cleanup_manager import CleanupManager
-from src.managers.premium_manager import PremiumManager
 from src.services.health_checker import get_health_checker
-from src.tools.tools import ToolsManager
 from src.voice.voice_lock import VoiceLockManager
 
 
 def _flatten_note_preview(note: Dict[str, Any], max_len: int = 80) -> str:
     content = str(note.get("content", "")).replace("\n", " ").strip()
     if len(content) > max_len:
-        return content[:max_len - 3] + "..."
+        return content[: max_len - 3] + "..."
     return content or "(empty)"
 
 
@@ -30,7 +29,7 @@ def _format_note_detail(note: Dict[str, Any]) -> str:
     if len(content) > 1600:
         content = content[:1600] + "\n... (truncated)"
     return (
-        f"🧾 **Global note detail**\n"
+        "🧾 **Global note detail**\n"
         f"- id: `{note.get('note_id', '')}`\n"
         f"- owner: `{note.get('user_id', '')}`\n"
         f"- hash: `{note.get('fact_hash', '')}`\n"
@@ -244,36 +243,91 @@ class GlobalNoteDemoteView(discord.ui.View):
         self.add_item(next_button)
 
 
-class BotCore:
-    """Core bot initialization and event handling."""
+class ImageHistorySelect(discord.ui.Select):
+    def __init__(self, history: List[Dict[str, Any]]):
+        self.history = history
+        options = []
+        for i, record in enumerate(history):
+            prompt = str(record.get("prompt", ""))
+            label = prompt[:97] + "..." if len(prompt) > 100 else prompt
+            options.append(discord.SelectOption(label=label, description=f"Ảnh #{i + 1}", value=str(i)))
+        super().__init__(placeholder="Chọn một prompt từ lịch sử...", options=options)
 
-    def __init__(self, config):
+    async def callback(self, interaction: discord.Interaction):
+        idx = int(self.values[0])
+        record = self.history[idx]
+
+        embed = discord.Embed(
+            title="Lịch sử ảnh",
+            description=f"**Prompt:** {record.get('prompt', '')}",
+            color=discord.Color.green(),
+        )
+
+        image_url = record.get("image_url", "")
+        file = None
+        if image_url.startswith(("http://", "https://")):
+            embed.set_image(url=image_url)
+        else:
+            import os
+            if os.path.exists(image_url):
+                filename = os.path.basename(image_url)
+                file = discord.File(image_url, filename=filename)
+                embed.set_image(url=f"attachment://{filename}")
+            else:
+                embed.set_image(url=image_url)
+
+        if file:
+            await interaction.response.edit_message(content=None, embed=embed, attachments=[file], view=self.view)
+        else:
+            await interaction.response.edit_message(content=None, embed=embed, view=self.view)
+
+
+class ImageHistoryView(discord.ui.View):
+    def __init__(self, history: List[Dict[str, Any]]):
+        super().__init__(timeout=300)
+        self.add_item(ImageHistorySelect(history))
+
+
+class BotCore:
+    """Core bot initialization and event handling for Kafka-based architecture."""
+
+    def __init__(self, config: Config):
         self.config = config
         self.logger = logger
-        self.db_repo = DatabaseRepository()
+        self.db_repo = DatabaseRepository(self.config.DATABASE_URL)
         self.cleanup_mgr = CleanupManager()
-        self.premium_mgr = PremiumManager()
-        self.tools_mgr = ToolsManager()
         self.health_checker = get_health_checker()
 
-        self.mention_history: Dict[str, list] = {}
         self.confirmation_pending: Dict[str, Dict[str, Any]] = {}
         self.admin_confirmation_pending: Dict[str, Dict[str, Any]] = {}
-        self.user_queue: defaultdict[str, Deque[datetime]] = defaultdict(deque)
-        self.processing_users = set()
 
         intents = discord.Intents.default()
         intents.message_content = True
         intents.dm_messages = True
         intents.voice_states = True
         intents.members = True
-        self.bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+
+        self.bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+        self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="bot-core")
+        self.active_interactions: Dict[str, discord.Interaction] = {}
+        self.active_typing_tasks: Dict[str, asyncio.Task] = {}
+        self._consume_task: Optional[asyncio.Task] = None
 
         self.voice_lock_manager: Optional[VoiceLockManager] = self._build_voice_lock_manager()
         self._voice_enforce_task: Optional[asyncio.Task] = None
 
+        self._register_slash_commands()
         self._register_events()
-        self._register_commands()
+
+    async def _is_admin_user(self, user_id: str) -> bool:
+        if str(user_id) in self.config.ADMIN_USER_IDS:
+            return True
+        return await self.db_repo.is_admin_user(str(user_id))
+
+    async def _is_moderator_user(self, user_id: str) -> bool:
+        if str(user_id) in self.config.MODERATOR_USER_IDS:
+            return True
+        return await self.db_repo.is_moderator_user(str(user_id))
 
     def _build_voice_lock_manager(self) -> Optional[VoiceLockManager]:
         try:
@@ -347,153 +401,213 @@ class BotCore:
 
             await asyncio.sleep(1)
 
-    def _register_events(self):
-        """Register bot events."""
+    async def _handle_confirmation_message(self, message: discord.Message) -> bool:
+        user_id = str(message.author.id)
+        content = (message.content or "").strip()
+        now = datetime.now()
 
-        @self.bot.event
-        async def on_ready():
-            try:
-                synced = await self.bot.tree.sync()
-                self.logger.info(f"Synced {len(synced)} slash commands!")
-            except Exception as e:
-                self.logger.error(f"Error syncing slash commands: {e}")
+        if user_id in self.confirmation_pending:
+            state = self.confirmation_pending.get(user_id, {})
+            if now - state.get("timestamp", now) > timedelta(seconds=60):
+                self.confirmation_pending.pop(user_id, None)
+                await message.reply("⏳ Hết thời gian xác nhận. Hãy gọi lại /reset-chat nếu cần.", mention_author=False)
+                return True
 
-            await self.db_repo.init_db()
+            # Chỉ nuốt tin nhắn nếu là phản hồi yes/no/y/n/có/không rõ ràng
+            valid_yes = {"yes", "y", "co", "có"}
+            valid_no = {"no", "n", "khong", "không"}
+            normalized_content = content.lower()
 
-            self.logger.info("Running DB cleanup...")
-            await self.db_repo.cleanup_db()
-            self.logger.info("Running local file cleanup...")
-            await self.cleanup_mgr.cleanup_local_files()
-
-            await self.db_repo.backup_db()
-            
-            # Start background health checker if it exists
-            if hasattr(self, 'health_checker'):
+            if normalized_content in valid_yes:
+                self.confirmation_pending.pop(user_id, None)
+                await self.db_repo.clear_user_data_db(user_id)
                 try:
-                    admin_user = await self.bot.fetch_user(int(ADMIN_ID)) if ADMIN_ID else None
-                    self.health_checker.start_background_check(admin_user)
-                    self.logger.info("Health Checker background task started.")
-                except Exception as e:
-                    self.logger.error(f"Failed to start health checker: {e}")
-                    
-            self.logger.info(f'{self.bot.user} is online!')
+                    await self.kafka_service.publish(
+                        "discord-incoming",
+                        payload={"type": "invalidate_cache", "user_id": user_id},
+                        key=user_id
+                    )
+                except Exception as kafka_err:
+                    self.logger.error(f"Failed to publish invalidate_cache for user {user_id}: {kafka_err}")
+                await message.reply("✅ Đã xóa lịch sử chat của bạn.", mention_author=False)
+                return True
+            elif normalized_content in valid_no:
+                self.confirmation_pending.pop(user_id, None)
+                await message.reply("❌ Đã hủy yêu cầu reset chat.", mention_author=False)
+                return True
+            else:
+                # Không phải là yes/no hợp lệ, hủy trạng thái pending nhưng không nuốt tin nhắn
+                self.confirmation_pending.pop(user_id, None)
+                return False
 
-            if self.voice_lock_manager and not self._voice_enforce_task:
-                self._voice_enforce_task = asyncio.create_task(self._voice_lock_enforce_loop())
+        if user_id in self.admin_confirmation_pending:
+            state = self.admin_confirmation_pending.get(user_id, {})
+            if now - state.get("timestamp", now) > timedelta(seconds=60):
+                self.admin_confirmation_pending.pop(user_id, None)
+                await message.reply("⏳ Hết thời gian xác nhận. Hãy gọi lại /reset-all nếu cần.", mention_author=False)
+                return True
 
-        @self.bot.event
-        async def on_message(message: discord.Message):
-            user_id = str(message.author.id)
-            if user_id in self.processing_users:
-                self.logger.warning(f"User {user_id} already processing, skipping duplicate.")
-                return
+            # Chỉ nuốt nếu là "yes reset" hoặc phản hồi hủy rõ ràng "no"/"cancel"
+            normalized_content = content.strip().lower()
+            valid_cancel = {"no", "n", "cancel", "huy", "hủy", "khong", "không"}
 
-            try:
-                self.processing_users.add(user_id)
-            finally:
-                if user_id in self.processing_users:
-                    self.processing_users.remove(user_id)
+            if normalized_content == "yes reset":
+                self.admin_confirmation_pending.pop(user_id, None)
+                if not await self._is_admin_user(user_id):
+                    await message.reply("❌ Bạn không có quyền admin để xác nhận reset.", mention_author=False)
+                    return True
 
-        @self.bot.event
-        async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
-            lm = self.voice_lock_manager
-            if not lm or not self.bot.user:
-                return
-
-            whitelist = lm.load_whitelist()
-            is_whitelisted = (
-                str(member.id) in whitelist
-                or member.id == lm.owner_id
-                or member.id == self.bot.user.id
-            )
-
-            if after.channel and after.channel.id in lm.locked_channels and not is_whitelisted:
+                await self.db_repo.clear_all_data_db()
                 try:
-                    await member.move_to(None, reason="Instant kick by lock system")
-                    lm.log_action(f"🛡️ INSTANT-KICK: {member.name} ({member.id}) vào {after.channel.name}")
-                except Exception:
-                    pass
+                    await self.kafka_service.publish(
+                        "discord-incoming",
+                        payload={"type": "invalidate_all_cache"},
+                        key="all"
+                    )
+                except Exception as kafka_err:
+                    self.logger.error(f"Failed to publish invalidate_all_cache: {kafka_err}")
+                await message.reply("✅ Đã xóa toàn bộ dữ liệu hệ thống.", mention_author=False)
+                return True
+            elif normalized_content in valid_cancel:
+                self.admin_confirmation_pending.pop(user_id, None)
+                await message.reply("❌ Đã hủy yêu cầu reset toàn bộ dữ liệu.", mention_author=False)
+                return True
+            else:
+                # Không phải là xác nhận hợp lệ hoặc từ chối, hủy trạng thái pending nhưng không nuốt tin nhắn
+                self.admin_confirmation_pending.pop(user_id, None)
+                return False
 
-            if (
-                before.channel
-                and before.channel.id in lm.locked_channels
-                and before.channel != after.channel
-                and after.channel is not None
-                and is_whitelisted
-                and member.id != lm.owner_id
-                and member.id != self.bot.user.id
-            ):
-                try:
-                    was_dragged = False
-                    dragger = "Unknown"
-                    try:
-                        async for entry in member.guild.audit_logs(action=discord.AuditLogAction.member_move, limit=5):
-                            if entry.target and getattr(entry.target, "id", None) == member.id:
-                                if (discord.utils.utcnow() - entry.created_at).total_seconds() < 5:
-                                    was_dragged = True
-                                    dragger = getattr(entry.user, "name", "Unknown")
-                                    break
-                    except discord.Forbidden:
-                        pass
+        return False
 
-                    if was_dragged:
-                        await member.move_to(before.channel, reason="Anti-drag protection")
-                        lm.log_action(f"⚓ ANTI-DRAG: trả {member.name} về {before.channel.name} (kéo bởi {dragger})")
-                except Exception as e:
-                    self.logger.warning(f"Anti-drag check failed: {e}")
+    async def setup_kafka(self):
+        try:
+            await self.kafka_service.start_producer()
+            await self.kafka_service.start_consumer("discord-outgoing", group_id="azuris_bot_dispatcher_group")
+            self._consume_task = asyncio.create_task(self.consume_outgoing_loop())
+        except Exception as e:
+            self.logger.error(f"Failed to start BotCore Kafka services: {e}")
+            raise
 
-        @self.bot.event
-        async def on_guild_channel_update(before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
-            lm = self.voice_lock_manager
-            if not lm or not self.bot.user:
-                return
+    async def consume_outgoing_loop(self):
+        self.logger.info("BotCore Kafka consumer loop started. Listening for outgoing replies...")
+        consumer = self.kafka_service.consumers.get("discord-outgoing")
+        if not consumer:
+            self.logger.error("Consumer for 'discord-outgoing' not found in KafkaService")
+            return
 
-            if after.id in lm.ignore_next_updates:
-                return
-            if not isinstance(after, discord.VoiceChannel) or after.id not in lm.locked_channels:
-                return
+        try:
+            async for msg in consumer:
+                payload = msg.value
+                asyncio.create_task(self.handle_outgoing_payload(payload))
+        except asyncio.CancelledError:
+            self.logger.info("BotCore Kafka consumer loop cancelled")
+        except Exception as e:
+            self.logger.error(f"Error in BotCore Kafka consumer loop: {e}")
 
-            is_bot_edit = False
+    async def handle_outgoing_payload(self, payload: dict):
+        action = payload.get("action")
+        channel_id_str = payload.get("channel_id")
+        user_id = payload.get("user_id") or "unknown"
+        self.logger.info(f"[KAFKA-RECV] BotCore consumed outgoing event | Action: {action} | User: {user_id} | MsgID/IntID: {payload.get('reference_message_id') or payload.get('interaction_id')}")
+
+        if not action:
+            return
+
+        # Hủy typing loop ngầm của user nếu nhận được reply hoặc lệnh tắt typing
+        if user_id in self.active_typing_tasks:
+            if action in ("reply", "slash_reply") or (action == "typing" and not payload.get("typing")):
+                self.logger.info(f"Cancelling active typing task for user {user_id}")
+                self.active_typing_tasks[user_id].cancel()
+                self.active_typing_tasks.pop(user_id, None)
+
+        try:
+            if action == "typing" and channel_id_str:
+                channel_id = int(channel_id_str)
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    channel = await self.bot.fetch_channel(channel_id)
+                if channel and bool(payload.get("typing")):
+                    await self.bot.http.send_typing(channel.id)
+
+            elif action == "reply" and channel_id_str:
+                channel_id = int(channel_id_str)
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    channel = await self.bot.fetch_channel(channel_id)
+                if channel:
+                    content = payload.get("content")
+                    ref_id_str = payload.get("reference_message_id")
+
+                    reference = None
+                    if ref_id_str:
+                        reference = discord.MessageReference(
+                            message_id=int(ref_id_str),
+                            channel_id=channel_id,
+                            fail_if_not_exists=False
+                        )
+
+                    await channel.send(content=content, reference=reference, mention_author=False)
+
+            elif action == "slash_reply":
+                interaction_id = payload.get("interaction_id")
+                content = payload.get("content")
+                ephemeral = bool(payload.get("ephemeral", False))
+                files = []
+                embed = None
+
+                base64_data = payload.get("file_base64")
+                if base64_data:
+                    import base64
+                    import io
+                    filename = payload.get("file_name", "file.png")
+                    file_bytes = base64.b64decode(base64_data)
+                    files.append(discord.File(io.BytesIO(file_bytes), filename=filename))
+
+                    if filename.endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                        embed = discord.Embed(title=payload.get("embed_title", "🖼️ Kết quả"), color=discord.Color.blue())
+                        embed.set_image(url=f"attachment://{filename}")
+                        if payload.get("embed_footer"):
+                            embed.set_footer(text=payload.get("embed_footer"))
+
+                interaction = self.active_interactions.pop(interaction_id, None)
+                if interaction:
+                    self.logger.info(f"Delivering slash_reply for interaction {interaction_id} to user {interaction.user.id}")
+                    if files:
+                        await interaction.followup.send(content=content, embed=embed, files=files, ephemeral=ephemeral)
+                    else:
+                        await interaction.followup.send(content=content, ephemeral=ephemeral)
+                else:
+                    self.logger.warning(f"Could not find active interaction for ID {interaction_id}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to handle outgoing Kafka payload: {e}")
+
+    async def shutdown(self):
+        if self._consume_task and not self._consume_task.done():
+            self._consume_task.cancel()
             try:
-                async for entry in after.guild.audit_logs(action=discord.AuditLogAction.channel_update, limit=1):
-                    if entry.target and entry.target.id == after.id and entry.user and entry.user.id == self.bot.user.id:
-                        is_bot_edit = True
-                        break
-            except discord.Forbidden:
+                await self._consume_task
+            except asyncio.CancelledError:
                 pass
 
-            if is_bot_edit:
-                return
+        await self.kafka_service.stop()
 
-            if after.id in lm.enforced_names and after.name != lm.enforced_names[after.id]:
-                try:
-                    lm.ignore_next_updates.add(after.id)
-                    await after.edit(name=lm.enforced_names[after.id], reason="Anti-edit: keep owner-enforced name")
-                    lm.log_action(f"🛡️ ANTI-EDIT: hoàn tác đổi tên room {after.id}")
-                except discord.Forbidden:
-                    pass
-                finally:
-                    async def remove_ignore(cid: int):
-                        await asyncio.sleep(3)
-                        lm.ignore_next_updates.discard(cid)
+        try:
+            await self.db_repo.close()
+        except Exception as e:
+            self.logger.warning(f"Failed to close DB pool cleanly: {e}")
 
-                    self.bot.loop.create_task(remove_ignore(after.id))
-
-        @self.bot.event
-        async def on_command_error(ctx: commands.Context, error: commands.CommandError):
-            if isinstance(error, commands.CommandNotFound):
-                self.logger.warning(f"Command not found: '{ctx.message.content}' from User: {ctx.author}")
-                return
-            self.logger.error(f"Command error: {error}")
-
-        _ = (on_ready, on_message, on_voice_state_update, on_guild_channel_update, on_command_error)
-
-    def _register_commands(self):
-        """Register slash commands."""
-
+    def _register_slash_commands(self):
         def is_admin():
             async def predicate(interaction: discord.Interaction) -> bool:
-                return str(interaction.user.id) == ADMIN_ID
+                return await self._is_admin_user(str(interaction.user.id))
+
+            return app_commands.check(predicate)
+
+        def is_moderator_or_admin():
+            async def predicate(interaction: discord.Interaction) -> bool:
+                uid = str(interaction.user.id)
+                return await self._is_admin_user(uid) or await self._is_moderator_user(uid)
 
             return app_commands.check(predicate)
 
@@ -509,26 +623,29 @@ class BotCore:
                 return None
             return voice_state.channel
 
+        @self.bot.tree.command(name="ping", description="Kiểm tra bot còn phản hồi")
+        async def ping(interaction: discord.Interaction):
+            await interaction.response.send_message("Bot đang hoạt động.", ephemeral=True)
+
         @self.bot.tree.command(name="reset-chat", description="Clear your chat history")
         async def reset_chat_slash(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
             user_id = str(interaction.user.id)
-            self.confirmation_pending[user_id] = {'timestamp': datetime.now(), 'awaiting': True}
+            self.confirmation_pending[user_id] = {"timestamp": datetime.now(), "awaiting": True}
             await interaction.followup.send("Clear chat history? Reply **yes** or **y** in 60 seconds! 😳", ephemeral=True)
 
-
         @self.bot.tree.command(name="health_check", description="Kiểm tra thủ công trạng thái custom API keys (ADMIN ONLY)")
-        @is_admin()
+        @is_moderator_or_admin()
         async def health_check_slash(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
             import os
-            
+
             if os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() != "true":
                 await interaction.followup.send("⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.", ephemeral=True)
                 return
-                
+
             await interaction.followup.send("⏳ Đang ping kiểm tra các custom keys...", ephemeral=True)
-            
+
             report = await self.health_checker.run_health_check_cycle()
             if report:
                 await interaction.user.send(f"REPORT: {report}")
@@ -537,41 +654,36 @@ class BotCore:
                 await interaction.followup.send("✅ Hoàn tất ping. Không có thay đổi trạng thái (chết/sống lại) nào được phát hiện từ lần check trước.", ephemeral=True)
 
         @self.bot.tree.command(name="enable_custom_api", description="Bật/tắt custom endpoint OpenAI (ADMIN ONLY)")
-        @app_commands.describe(
-            state="Bật (true) hoặc Tắt (false)"
-        )
-        @is_admin()
+        @app_commands.describe(state="Bật (true) hoặc Tắt (false)")
+        @is_moderator_or_admin()
         async def enable_custom_api_slash(interaction: discord.Interaction, state: bool):
             await interaction.response.defer(ephemeral=True)
             import os
-            from src.core.api_router import get_api_router
-            
-            os.environ["ENABLE_CUSTOM_ENDPOINT"] = str(state).lower()
-            
-            # Re-init router pool
-            router = get_api_router()
+            from src.core.api_router import create_model_pools, create_summary_pool, get_api_router
             from src.core.api_config import auto_detect_api_keys
-            from src.core.api_router import create_model_pools, create_summary_pool
 
+            os.environ["ENABLE_CUSTOM_ENDPOINT"] = str(state).lower()
+
+            router = get_api_router()
             all_keys, key_to_name = auto_detect_api_keys()
-            router.main_keys = all_keys['main']
-            router.summary_keys = all_keys['summary']
+            router.main_keys = all_keys["main"]
+            router.summary_keys = all_keys["summary"]
             router.key_to_name = key_to_name
-            
+
             router.model_pools = create_model_pools(router.main_keys, key_to_name)
             router.summary_pool = create_summary_pool(router.summary_keys, key_to_name)
-            
+
             status_text = "ĐÃ BẬT" if state else "ĐÃ TẮT"
             await interaction.followup.send(f"✅ {status_text} Custom Endpoint (OpenAI) thành công! Đã refresh lại key pool.", ephemeral=True)
 
         @self.bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
         @app_commands.describe(
             action="Chọn hành động: Tạo ảnh mới hoặc Xem lịch sử",
-            prompt="Mô tả ảnh bạn muốn tạo (chỉ bắt buộc khi Tạo ảnh mới)"
+            prompt="Mô tả ảnh bạn muốn tạo (chỉ bắt buộc khi Tạo ảnh mới)",
         )
         @app_commands.choices(action=[
             app_commands.Choice(name="Tạo ảnh mới", value="create"),
-            app_commands.Choice(name="Lịch sử ảnh", value="history")
+            app_commands.Choice(name="Lịch sử ảnh", value="history"),
         ])
         async def imagine_slash(interaction: discord.Interaction, action: app_commands.Choice[str], prompt: Optional[str] = None):
             user_id = str(interaction.user.id)
@@ -587,21 +699,15 @@ class BotCore:
                 await interaction.followup.send("Vui lòng chọn một prompt từ danh sách bên dưới để xem lại ảnh:", view=view, ephemeral=True)
                 return
 
-            # Action: "create"
             if not prompt:
                 await interaction.response.send_message("⚠️ Bạn cần nhập `prompt` để tạo ảnh mới!", ephemeral=True)
                 return
 
             self.logger.info(f"User {user_id} requested /imagine to create image with prompt: {prompt}")
 
-            # Check Premium/Admin
-            if not (self.premium_mgr.is_admin_user(user_id) or self.premium_mgr.is_premium_user(user_id)):
+            if not (await self._is_admin_user(user_id) or await self._is_moderator_user(user_id) or await self.db_repo.is_premium_user(user_id)):
                 try:
                     await interaction.response.defer(ephemeral=True)
-
-                    from pathlib import Path
-                    import io
-                    import asyncio
 
                     encrypted_path = Path(self.config.PROJECT_ROOT) / "assets" / "encrypted" / "donate_momo_anh_tr.png.enc"
                     key = self.config.DONATE_ENCRYPTION_KEY
@@ -612,6 +718,7 @@ class BotCore:
 
                     try:
                         from cryptography.fernet import Fernet
+
                         fernet = Fernet(key.encode())
                         encrypted_data = encrypted_path.read_bytes()
                         decrypted_data = fernet.decrypt(encrypted_data)
@@ -622,9 +729,13 @@ class BotCore:
                         )
 
                         msg = await interaction.followup.send(
-                            content="⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**!\nCảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR Momo của Anh Tr, hãy donate và liên hệ admin để cấp quyền nhé:\n_Tin nhắn này sẽ tự xóa sau 2 phút._",
+                            content=(
+                                "⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**!\n"
+                                "Cảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR Momo của Anh Tr, hãy donate và liên hệ admin để cấp quyền nhé:\n"
+                                "_Tin nhắn này sẽ tự xóa sau 2 phút._"
+                            ),
                             file=file_obj,
-                            ephemeral=True
+                            ephemeral=True,
                         )
 
                         async def auto_delete():
@@ -643,130 +754,26 @@ class BotCore:
                     pass
                 return
 
-            await interaction.response.defer()
-            await interaction.followup.send("⏳ Đang tạo ảnh... Bot sẽ ping bạn khi hoàn thành!")
+            await interaction.response.defer(ephemeral=False)
+            await interaction.followup.send("⏳ Đang gửi yêu cầu tạo ảnh qua Kafka...")
 
-            import os
+            interaction_id_str = str(interaction.id)
+            self.active_interactions[interaction_id_str] = interaction
 
-            # Check if enabled
-            if os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() != "true":
-                await interaction.channel.send(f"<@{user_id}> ⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.")
-                return
+            payload = {
+                "type": "slash_command",
+                "command": "imagine",
+                "action": "create",
+                "prompt": prompt,
+                "interaction_id": interaction_id_str,
+                "user_id": user_id,
+                "channel_id": str(interaction.channel_id),
+                "author_display_name": interaction.user.display_name
+            }
+            await self.kafka_service.publish("discord-incoming", payload=payload, key=user_id)
 
-            from src.core.api_router import get_api_router
-            from openai import AsyncOpenAI
-
-            router = get_api_router()
-
-            reservation = router._try_get_key_from_model("custom-pro-image")
-            if not reservation:
-                await interaction.channel.send(f"<@{user_id}> ⚠️ Không tìm thấy key nào khả dụng cho custom-pro-image.")
-                return
-
-            api_key = reservation['key']
-            endpoint = self.config.OPENAI_CUSTOM_ENDPOINT
-
-            if not endpoint:
-                await interaction.channel.send(f"<@{user_id}> ⚠️ Custom endpoint URL chưa được cấu hình.")
-                return
-                
-            # Đảm bảo endpoint có hậu tố /v1 để tránh lỗi 404 Not Found từ OpenAI SDK
-            endpoint = endpoint.rstrip("/")
-            if not endpoint.endswith("/v1") and not endpoint.endswith("v1"):
-                endpoint = f"{endpoint}/v1"
-
-            import asyncio
-            async def generate_image_background(api_key: str, endpoint: str, prompt: str, user_id: str, reservation: dict):
-                try:
-                    self.logger.info(f"Đang gửi request tạo ảnh cho user {user_id} tới custom API")
-                    # Chỉnh sửa: Proxy hiện tại trả về ảnh thông qua model `gemini-3.1-pro-image` (hoặc `gemini-3.1-flash-image`)
-                    # Nhưng nó lại gửi qua route /chat/completions thay vì /images/generations
-                    # Và nó nhét raw base64 data hoặc url vào trong `choices[0].message.images[0].image_url.url` thay vì text content.
-                    import httpx
-                    import io
-                    import base64
-
-                    url = f"{endpoint}/chat/completions"
-                    headers = {
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    }
-                    data = {
-                        "model": "gemini-3.1-pro-image",
-                        "messages": [{"role": "user", "content": prompt}]
-                    }
-
-                    async with httpx.AsyncClient(verify=False, timeout=300.0) as client:
-                        response = await client.post(url, headers=headers, json=data)
-
-                        if response.status_code == 200:
-                            json_res = response.json()
-                            message = json_res.get("choices", [{}])[0].get("message", {})
-
-                            image_url = None
-                            raw_base64 = None
-
-                            # 1. Thử lấy từ mảng images (đặc thù của xtek proxy)
-                            if "images" in message and len(message["images"]) > 0:
-                                img_obj = message["images"][0].get("image_url", {})
-                                image_url = img_obj.get("url")
-
-                            # 2. Thử bóc từ markdown nếu proxy nhét URL thẳng vào content
-                            if not image_url and message.get("content"):
-                                import re
-                                match = re.search(r'!\[.*?\]\((https?://[^\)]+)\)', message["content"])
-                                if match:
-                                    image_url = match.group(1)
-
-                            if not image_url:
-                                self.logger.error(f"Thất bại khi tạo ảnh cho user {user_id}: Không thể trích xuất ảnh từ phản hồi API: {message}")
-                                await interaction.channel.send(f"<@{user_id}> ❌ Không thể trích xuất ảnh từ phản hồi của API.")
-                                return
-
-                            # Nếu ảnh là base64 thì decode và gửi file
-                            final_db_url = image_url
-                            if image_url.startswith("data:image"):
-                                header, encoded = image_url.split(",", 1)
-                                image_bytes = base64.b64decode(encoded)
-                                file = discord.File(io.BytesIO(image_bytes), filename="generated_image.png")
-
-                                embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", color=discord.Color.blue())
-                                embed.set_image(url="attachment://generated_image.png")
-                                embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
-                                sent_msg = await interaction.channel.send(content=f"<@{user_id}>", embed=embed, file=file)
-                                if sent_msg.embeds and sent_msg.embeds[0].image:
-                                    final_db_url = sent_msg.embeds[0].image.url
-                            else:
-                                embed = discord.Embed(title="🖼️ Ảnh tạo bởi AI", color=discord.Color.blue())
-                                embed.set_image(url=image_url)
-                                embed.set_footer(text=f"Yêu cầu bởi {interaction.user.display_name}")
-                                sent_msg = await interaction.channel.send(content=f"<@{user_id}>", embed=embed)
-                                if sent_msg.embeds and sent_msg.embeds[0].image:
-                                    final_db_url = sent_msg.embeds[0].image.url
-
-                            # Lưu vào database
-                            save_success = await self.db_repo.save_generated_image(user_id, prompt, final_db_url)
-                            if save_success:
-                                self.logger.info(f"Đã tạo và lưu thành công ảnh cho user {user_id} vào database")
-                            else:
-                                self.logger.warning(f"Tạo ảnh thành công cho user {user_id} nhưng LỖI khi lưu vào database")
-
-                            # Commit usage
-                            router.commit_key_usage(reservation)
-                        else:
-                            self.logger.error(f"Lỗi tạo ảnh từ server API cho user {user_id}: Mã lỗi {response.status_code} - {response.text}")
-                            await interaction.channel.send(f"<@{user_id}> ❌ Lỗi từ server API: {response.status_code}")
-                            
-                except Exception as e:
-                    self.logger.error(f"Thất bại khi tạo ảnh cho user {user_id}: Lỗi ngoại lệ - {e}")
-                    await interaction.channel.send(f"<@{user_id}> ❌ Lỗi khi tạo ảnh: {str(e)[:100]}")
-
-            asyncio.create_task(generate_image_background(api_key, endpoint, prompt, user_id, reservation))
         @self.bot.tree.command(name="premium", description="Tính năng Premium")
-        @app_commands.describe(
-            action="Chọn hành động",
-            user="Người dùng (chỉ dành cho add/check)"
-        )
+        @app_commands.describe(action="Chọn hành động", user="Người dùng (chỉ dành cho add/check)")
         @app_commands.choices(action=[
             app_commands.Choice(name="Check (Kiểm tra Premium)", value="check"),
             app_commands.Choice(name="Buy (Mua Premium)", value="buy"),
@@ -781,8 +788,7 @@ class BotCore:
 
             requester_id = str(interaction.user.id)
             target_user_id = str(user.id) if user else requester_id
-            
-            is_admin = self.premium_mgr.is_admin_user(requester_id)
+            is_admin = await self._is_admin_user(requester_id)
 
             if action.value == "add":
                 if not is_admin:
@@ -791,59 +797,155 @@ class BotCore:
                 if not user:
                     await interaction.followup.send("❌ Vui lòng chọn người dùng cần thêm vào danh sách Premium!", ephemeral=True)
                     return
-                    
-                if self.premium_mgr.add_premium_user(target_user_id):
-                    await interaction.followup.send(f"🎉 Đã thêm **{user.display_name}** vào danh sách Premium thành công!", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"⚠️ **{user.display_name}** đã là Premium từ trước.", ephemeral=True)
-                    
-            elif action.value == "check":
-                if self.premium_mgr.is_admin_user(target_user_id):
-                    await interaction.followup.send(f"👑 {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} là **Admin** của bot!", ephemeral=True)
+
+                await self.db_repo.add_premium_user(target_user_id)
+                await interaction.followup.send(f"🎉 Đã thêm **{user.display_name}** vào danh sách Premium thành công!", ephemeral=True)
+                return
+
+            if action.value == "check":
+                if await self._is_admin_user(target_user_id):
+                    await interaction.followup.send(
+                        f"👑 {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} là **Admin** của bot!",
+                        ephemeral=True,
+                    )
                     return
-                
-                if self.premium_mgr.is_premium_user(target_user_id):
-                    await interaction.followup.send(f"✨ {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} đang sử dụng bản **Premium**!", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"😔 {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} **chưa có Premium**. Dùng `/premium action:Buy` để nâng cấp nhé!", ephemeral=True)
-                    
-            elif action.value == "buy":
-                if self.premium_mgr.is_premium_user(requester_id) or is_admin:
-                    await interaction.followup.send("✨ Bạn đã có quyền Premium/Admin rồi nhé! Không cần mua thêm đâu 🥰", ephemeral=True)
+
+                if await self._is_moderator_user(target_user_id):
+                    await interaction.followup.send(
+                        f"🛡️ {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} là **Moderator** của bot!",
+                        ephemeral=True,
+                    )
                     return
-                    
-                info = DONATE_PLATFORMS.get("anhtr_momo")
+
+                if await self.db_repo.is_premium_user(target_user_id):
+                    await interaction.followup.send(
+                        f"✨ {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} đang sử dụng bản **Premium**!",
+                        ephemeral=True,
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"😔 {'Bạn' if target_user_id == requester_id else (user.display_name if user else 'Người này')} **chưa có Premium**. Dùng `/premium action:Buy` để nâng cấp nhé!",
+                        ephemeral=True,
+                    )
+                return
+
+            if action.value == "buy":
+                is_moderator = await self._is_moderator_user(requester_id)
+                if is_admin or is_moderator or await self.db_repo.is_premium_user(requester_id):
+                    await interaction.followup.send("✨ Bạn đã có quyền Premium/Admin/Moderator rồi nhé! Không cần mua thêm đâu 🥰", ephemeral=True)
+                    return
+
+                donate_platforms = {
+                    "anhtr_momo": {
+                        "file": "donate_momo_anh_tr.png.enc",
+                        "original_filename": "donate_momo_anh_tr.png",
+                    }
+                }
+
+                info = donate_platforms.get("anhtr_momo")
                 encrypted_path = Path(self.config.PROJECT_ROOT) / "assets" / "encrypted" / info["file"]
-                
+
                 if not encrypted_path.exists():
                     await interaction.followup.send("Mã QR hiện không khả dụng. Vui lòng liên hệ Admin.", ephemeral=True)
                     return
-                    
+
                 key = self.config.DONATE_ENCRYPTION_KEY
                 try:
                     from cryptography.fernet import Fernet
-                    import io
+
                     fernet = Fernet(key.encode())
                     decrypted_data = fernet.decrypt(encrypted_path.read_bytes())
                     file_obj = discord.File(fp=io.BytesIO(decrypted_data), filename=info["original_filename"])
-                    
-                    msg = "✨ **Nâng cấp lên Premium** ✨\n\nVới bản Premium, bạn sẽ được:\n- 🔓 **Mở khóa không giới hạn** số tin nhắn chat (miễn phí chỉ 50 tin nhắn/ngày).\n- 🎨 **Sử dụng lệnh `/imagine`** tạo ảnh AI chất lượng cao.\n- 💬 **Sử dụng tính năng chat DM** riêng tư với bot.\n\nĐể mua Premium, vui lòng quét mã QR Momo của Anh Tr bên dưới để donate. Sau khi donate, hãy liên hệ Admin kèm theo ảnh chụp màn hình giao dịch để được kích hoạt ngay nhé!"
+
+                    msg = (
+                        "✨ **Nâng cấp lên Premium** ✨\n\n"
+                        "Với bản Premium, bạn sẽ được:\n"
+                        "- 🔓 **Mở khóa không giới hạn** số tin nhắn chat (miễn phí chỉ 50 tin nhắn/ngày).\n"
+                        "- 🎨 **Sử dụng lệnh `/imagine`** tạo ảnh AI chất lượng cao.\n"
+                        "- 💬 **Sử dụng tính năng chat DM** riêng tư với bot.\n\n"
+                        "Để mua Premium, vui lòng quét mã QR Momo của Anh Tr bên dưới để donate. Sau khi donate, hãy liên hệ Admin kèm theo ảnh chụp màn hình giao dịch để được kích hoạt ngay nhé!"
+                    )
                     await interaction.followup.send(content=msg, file=file_obj, ephemeral=True)
                 except Exception as e:
                     self.logger.error(f"Error decrypting Momo QR for buy premium: {e}")
                     await interaction.followup.send("Không thể tải mã QR lúc này. Vui lòng liên hệ Admin.", ephemeral=True)
+
+        @self.bot.tree.command(name="moderator", description="Quản lý Moderator động (ADMIN ONLY)")
+        @app_commands.describe(action="Chọn hành động", user="Người dùng")
+        @app_commands.choices(action=[
+            app_commands.Choice(name="Check (Kiểm tra)", value="check"),
+            app_commands.Choice(name="Add (Thêm Moderator)", value="add"),
+            app_commands.Choice(name="Remove (Xóa Moderator)", value="remove"),
+        ])
+        @is_admin()
+        async def moderator_slash(interaction: discord.Interaction, action: app_commands.Choice[str], user: discord.User):
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except discord.errors.NotFound:
+                self.logger.error("Interaction not found for moderator command.")
+                return
+
+            requester_id = str(interaction.user.id)
+            target_user_id = str(user.id)
+            is_admin_req = await self._is_admin_user(requester_id)
+
+            if not is_admin_req:
+                await interaction.followup.send("❌ Bạn không phải Admin hệ thống, không có quyền quản lý Moderator!", ephemeral=True)
+                return
+
+            if action.value == "add":
+                if target_user_id in self.config.ADMIN_USER_IDS:
+                    await interaction.followup.send(f"👑 **{user.display_name}** đã là Admin cấu hình tĩnh!", ephemeral=True)
+                    return
+                if target_user_id in self.config.MODERATOR_USER_IDS:
+                    await interaction.followup.send(f"🛡️ **{user.display_name}** đã là Moderator cấu hình tĩnh!", ephemeral=True)
+                    return
+
+                await self.db_repo.add_moderator_user(target_user_id)
+                await interaction.followup.send(f"🎉 Đã thăng chức **{user.display_name}** làm Moderator động thành công!", ephemeral=True)
+                return
+
+            if action.value == "remove":
+                if target_user_id in self.config.ADMIN_USER_IDS or target_user_id in self.config.MODERATOR_USER_IDS:
+                    await interaction.followup.send("❌ Không thể hạ chức tài khoản cấu hình tĩnh trong .env!", ephemeral=True)
+                    return
+
+                removed = await self.db_repo.remove_moderator_user(target_user_id)
+                if removed:
+                    await interaction.followup.send(f"✅ Đã hạ chức người dùng **{user.display_name}** khỏi vai trò Moderator.", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"❌ Người dùng **{user.display_name}** không phải Moderator động.", ephemeral=True)
+                return
+
+            if action.value == "check":
+                is_static_admin = target_user_id in self.config.ADMIN_USER_IDS
+                is_static_mod = target_user_id in self.config.MODERATOR_USER_IDS
+                is_dynamic_admin = await self.db_repo.is_admin_user(target_user_id)
+                is_dynamic_mod = await self.db_repo.is_moderator_user(target_user_id)
+
+                if is_static_admin:
+                    await interaction.followup.send(f"👑 **{user.display_name}** là Admin hệ thống (tĩnh).", ephemeral=True)
+                elif is_dynamic_admin:
+                    await interaction.followup.send(f"👑 **{user.display_name}** là Admin hệ thống (động).", ephemeral=True)
+                elif is_static_mod:
+                    await interaction.followup.send(f"🛡️ **{user.display_name}** là Moderator hệ thống (tĩnh).", ephemeral=True)
+                elif is_dynamic_mod:
+                    await interaction.followup.send(f"🛡️ **{user.display_name}** là Moderator hệ thống (động).", ephemeral=True)
+                else:
+                    await interaction.followup.send(f"👤 **{user.display_name}** là người dùng bình thường.", ephemeral=True)
+                return
 
         @self.bot.tree.command(name="reset-all", description="Clear all DB (ADMIN ONLY)")
         @is_admin()
         async def reset_all_slash(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
             admin_id = str(interaction.user.id)
-            self.admin_confirmation_pending[admin_id] = {'timestamp': datetime.now(), 'awaiting': True}
+            self.admin_confirmation_pending[admin_id] = {"timestamp": datetime.now(), "awaiting": True}
             await interaction.followup.send("⚠️ **ADMIN CONFIRM**: Reply **YES RESET** in 60 seconds to clear all DB!", ephemeral=True)
 
         @self.bot.tree.command(name="global-notes", description="Browse global shared memory notes (ADMIN ONLY)")
         @app_commands.describe(limit="Max notes to load (1-100)")
-        @is_admin()
+        @is_moderator_or_admin()
         async def global_notes_slash(interaction: discord.Interaction, limit: app_commands.Range[int, 1, 100] = 40):
             await interaction.response.defer(ephemeral=True)
             notes = await self.db_repo.get_global_notes_db(limit=int(limit))
@@ -857,7 +959,7 @@ class BotCore:
 
         @self.bot.tree.command(name="global-note-demote", description="Demote shared note from global (ADMIN ONLY)")
         @app_commands.describe(target="(Optional) note_id hoặc fact_hash để demote nhanh")
-        @is_admin()
+        @is_moderator_or_admin()
         async def global_note_demote_slash(interaction: discord.Interaction, target: Optional[str] = None):
             await interaction.response.defer(ephemeral=True)
 
@@ -894,16 +996,24 @@ class BotCore:
             await interaction.followup.send(content=view.summary_text(), view=view, ephemeral=True)
 
         @self.bot.tree.command(name="message_to", description="Send message to user (ADMIN ONLY)")
-        @app_commands.describe(
-            user="Target user",
-            message="Message content",
-            channel="Optional channel"
-        )
-        @is_admin()
+        @app_commands.describe(user="Target user", message="Message content", channel="Optional channel")
+        @is_moderator_or_admin()
         async def message_to_slash(interaction: discord.Interaction, user: discord.User, message: str, channel: Optional[discord.TextChannel] = None):
             await interaction.response.defer(ephemeral=True)
+            requester_id = str(interaction.user.id)
+            is_admin = await self._is_admin_user(requester_id)
+            is_moderator = await self._is_moderator_user(requester_id)
+
+            if is_moderator and not is_admin:
+                if not channel:
+                    await interaction.followup.send("❌ Moderator không được quyền gửi DM trực tiếp!", ephemeral=True)
+                    return
+                if not interaction.guild or channel.guild != interaction.guild:
+                    await interaction.followup.send("❌ Moderator chỉ được phép gửi tin nhắn trong server sở tại!", ephemeral=True)
+                    return
+
             user_id = str(user.id)
-            cleaned_message = ' '.join(message.strip().split())
+            cleaned_message = " ".join(message.strip().split())
 
             try:
                 target_user = await self.bot.fetch_user(int(user_id))
@@ -940,8 +1050,7 @@ class BotCore:
                 await interaction.followup.send(f"Error sending message! 😓 Error: {str(e)}", ephemeral=True)
                 self.logger.error(f"Error sending message to {user_id}: {e}")
 
-        # --- Donate Command ---
-        DONATE_PLATFORMS = {
+        donate_platforms = {
             "kofi": {
                 "file": "donate_kofi.png.enc",
                 "display_name": "Ko-fi",
@@ -973,7 +1082,7 @@ class BotCore:
             await interaction.response.defer()
 
             selected = platform.value if platform else "kofi"
-            info = DONATE_PLATFORMS.get(selected)
+            info = donate_platforms.get(selected)
             if not info:
                 await interaction.followup.send("Nền tảng không hợp lệ.", ephemeral=True)
                 return
@@ -992,6 +1101,7 @@ class BotCore:
 
             try:
                 from cryptography.fernet import Fernet
+
                 fernet = Fernet(key.encode())
                 encrypted_data = encrypted_path.read_bytes()
                 decrypted_data = fernet.decrypt(encrypted_data)
@@ -1018,10 +1128,6 @@ class BotCore:
                     pass
 
             self.bot.loop.create_task(auto_delete())
-
-        _ = (reset_chat_slash, health_check_slash, enable_custom_api_slash, imagine_slash, premium_slash, reset_all_slash,
-             global_notes_slash, global_note_demote_slash,
-             message_to_slash, donate_slash)
 
         lm = self.voice_lock_manager
         if not lm:
@@ -1304,7 +1410,7 @@ class BotCore:
             for uid, data in whitelist.items():
                 if uid == str(lm.owner_id):
                     continue
-                username = data.get('username', 'Unknown')
+                username = data.get("username", "Unknown")
                 lines.append(f"🔹 **{username}** - <@{uid}> `(UID: {uid})`")
 
             await interaction.followup.send("\n".join(lines), ephemeral=True)
@@ -1313,10 +1419,7 @@ class BotCore:
         async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
             if isinstance(error, app_commands.CheckFailure):
                 if not interaction.response.is_done():
-                    await interaction.response.send_message(
-                        "❌ Lệnh này chỉ dành cho owner đã cấu hình.",
-                        ephemeral=True,
-                    )
+                    await interaction.response.send_message("❌ Lệnh này chỉ dành cho owner đã cấu hình.", ephemeral=True)
                 return
             try:
                 if not interaction.response.is_done():
@@ -1326,44 +1429,227 @@ class BotCore:
             except Exception:
                 pass
 
-        _ = (lock_room, unlock_room, move_member, move_all, set_room,
-             add_privet, remove_privet, list_privet, on_app_command_error)
+        _ = (ping, reset_chat_slash, health_check_slash, enable_custom_api_slash, imagine_slash, premium_slash, reset_all_slash,
+             global_notes_slash, global_note_demote_slash, message_to_slash, donate_slash,
+             lock_room, unlock_room, move_member, move_all, set_room, add_privet, remove_privet, list_privet, on_app_command_error)
+
+    def _register_events(self):
+        @self.bot.event
+        async def on_ready():
+            self.logger.info(f"Bot logged in as {self.bot.user.name} (ID: {self.bot.user.id})")
+
+            await self.db_repo.init_db()
+            try:
+                await self.setup_kafka()
+            except Exception as e:
+                self.logger.error(f"Failed to start Kafka producer: {e}")
+
+            try:
+                synced = await self.bot.tree.sync()
+                self.logger.info(f"Slash commands synced: {len(synced)}")
+            except Exception as e:
+                self.logger.error(f"Failed to sync slash commands: {e}")
+
+            try:
+                self.logger.info("Running DB cleanup...")
+                await self.db_repo.cleanup_db()
+            except Exception as e:
+                self.logger.warning(f"DB cleanup failed: {e}")
+
+            try:
+                self.logger.info("Running local file cleanup...")
+                await self.cleanup_mgr.cleanup_local_files()
+            except Exception as e:
+                self.logger.warning(f"Local cleanup failed: {e}")
+
+            try:
+                await self.db_repo.backup_db()
+            except Exception as e:
+                self.logger.warning(f"DB backup failed: {e}")
+
+            if self.health_checker:
+                try:
+                    admin_user = await self.bot.fetch_user(int(self.config.ADMIN_ID)) if self.config.ADMIN_ID else None
+                    self.health_checker.start_background_check(admin_user)
+                    self.logger.info("Health Checker background task started.")
+                except Exception as e:
+                    self.logger.error(f"Failed to start health checker: {e}")
+
+            if self.voice_lock_manager and not self._voice_enforce_task:
+                self._voice_enforce_task = asyncio.create_task(self._voice_lock_enforce_loop())
+
+            self.logger.info(f"{self.bot.user} is online and ready!")
+
+        @self.bot.event
+        async def on_message(message: discord.Message):
+            if message.author.bot:
+                return
+
+            if await self._handle_confirmation_message(message):
+                return
+
+            user_id = str(message.author.id)
+            is_dm = isinstance(message.channel, discord.DMChannel)
+            is_mentioned = self.bot.user in message.mentions
+
+            if not is_dm and not is_mentioned:
+                return
+
+            stage = "đang xử lý"
+            try:
+                busy_state = await self.db_repo.set_user_processing_state(user_id, stage)
+            except Exception as e:
+                self.logger.error(f"Error checking processing state: {e}")
+                await message.reply("🚨 Lỗi kết nối database. Vui lòng thử lại sau.", mention_author=False)
+                return
+
+            if busy_state:
+                busy_text = f"Đợi chút nha, mình đang bận {busy_state}. Nhắn chen ngang cũng bị trừ tin nhắn đó nha!"
+                await message.reply(busy_text, mention_author=False)
+                return
+
+            # Hủy typing loop cũ của user này nếu có
+            if user_id in self.active_typing_tasks:
+                self.active_typing_tasks[user_id].cancel()
+
+            # Định nghĩa typing loop ngầm gửi typing status liên tục mỗi 5s
+            async def _typing_loop(channel_obj):
+                try:
+                    while True:
+                        await self.bot.http.send_typing(channel_obj.id)
+                        await asyncio.sleep(5)
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    self.logger.error(f"Error in typing loop: {e}")
+
+            self.active_typing_tasks[user_id] = asyncio.create_task(_typing_loop(message.channel))
+
+            # Xác định tên bot động
+            bot_name = self.bot.user.name if self.bot.user else "Chad Gibiti"
+
+            payload = {
+                "message_id": str(message.id),
+                "channel_id": str(message.channel.id),
+                "user_id": user_id,
+                "bot_name": bot_name,
+                "content": message.content,
+                "author_name": message.author.name,
+                "author_display_name": message.author.display_name,
+                "is_dm": is_dm,
+                "mentions": [str(m.id) for m in message.mentions],
+                "reference_message_id": str(message.reference.message_id) if message.reference else None,
+                "attachments": [{"url": a.url, "filename": a.filename} for a in message.attachments] if message.attachments else [],
+            }
+
+            try:
+                payload["type"] = "chat"
+                success = await self.kafka_service.publish("discord-incoming", payload=payload, key=user_id)
+                if not success:
+                    raise RuntimeError("Kafka publish returned False")
+            except Exception as e:
+                self.logger.error(f"Failed to publish incoming message: {e}")
+                # Hủy typing loop nếu publish thất bại
+                if user_id in self.active_typing_tasks:
+                    self.active_typing_tasks[user_id].cancel()
+                    self.active_typing_tasks.pop(user_id, None)
+                await self.db_repo.clear_user_processing_state(user_id)
+                await message.reply("🚨 Hệ thống Kafka đang lỗi. Vui lòng thử lại sau.", mention_author=False)
+
+        @self.bot.event
+        async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+            lm = self.voice_lock_manager
+            if not lm or not self.bot.user:
+                return
+
+            if after.channel and after.channel.id in lm.locked_channels:
+                whitelist = lm.load_whitelist()
+                is_whitelisted = (
+                    str(member.id) in whitelist
+                    or member.id == lm.owner_id
+                    or member.id == self.bot.user.id
+                )
+
+                if not is_whitelisted:
+                    try:
+                        await member.move_to(None, reason="Instant kick by lock system")
+                        lm.log_action(f"🛡️ INSTANT-KICK: {member.name} ({member.id}) vào {after.channel.name}")
+                    except Exception:
+                        pass
+
+            if (
+                before.channel
+                and before.channel.id in lm.locked_channels
+                and before.channel != after.channel
+                and after.channel is not None
+                and member.id != lm.owner_id
+                and member.id != self.bot.user.id
+            ):
+                try:
+                    was_dragged = False
+                    dragger = "Unknown"
+                    try:
+                        async for entry in member.guild.audit_logs(action=discord.AuditLogAction.member_move, limit=5):
+                            if entry.target and getattr(entry.target, "id", None) == member.id:
+                                if (discord.utils.utcnow() - entry.created_at).total_seconds() < 5:
+                                    was_dragged = True
+                                    dragger = getattr(entry.user, "name", "Unknown")
+                                    break
+                    except discord.Forbidden:
+                        pass
+
+                    if was_dragged:
+                        await member.move_to(before.channel, reason="Anti-drag protection")
+                        lm.log_action(f"⚓ ANTI-DRAG: trả {member.name} về {before.channel.name} (kéo bởi {dragger})")
+                except Exception as e:
+                    self.logger.warning(f"Anti-drag check failed: {e}")
+
+        @self.bot.event
+        async def on_guild_channel_update(before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
+            lm = self.voice_lock_manager
+            if not lm or not self.bot.user:
+                return
+
+            if after.id in lm.ignore_next_updates:
+                return
+            if not isinstance(after, discord.VoiceChannel) or after.id not in lm.locked_channels:
+                return
+
+            is_bot_edit = False
+            try:
+                async for entry in after.guild.audit_logs(action=discord.AuditLogAction.channel_update, limit=1):
+                    if entry.target and entry.target.id == after.id and entry.user and entry.user.id == self.bot.user.id:
+                        is_bot_edit = True
+                        break
+            except discord.Forbidden:
+                pass
+
+            if is_bot_edit:
+                return
+
+            if after.id in lm.enforced_names and after.name != lm.enforced_names[after.id]:
+                try:
+                    lm.ignore_next_updates.add(after.id)
+                    await after.edit(name=lm.enforced_names[after.id], reason="Anti-edit: keep owner-enforced name")
+                    lm.log_action(f"🛡️ ANTI-EDIT: hoàn tác đổi tên room {after.id}")
+                except discord.Forbidden:
+                    pass
+                finally:
+                    async def remove_ignore(cid: int):
+                        await asyncio.sleep(3)
+                        lm.ignore_next_updates.discard(cid)
+
+                    self.bot.loop.create_task(remove_ignore(after.id))
+
+        @self.bot.event
+        async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+            if isinstance(error, commands.CommandNotFound):
+                self.logger.warning(f"Command not found: '{ctx.message.content}' from User: {ctx.author}")
+                return
+            self.logger.error(f"Command error: {error}")
+
+        _ = (on_ready, on_message, on_voice_state_update, on_guild_channel_update, on_command_error)
 
     async def start(self, token: str):
-        """Start the bot."""
         async with self.bot:
             await self.bot.start(token)
-import discord
-from typing import List, Dict
-
-class ImageHistorySelect(discord.ui.Select):
-    def __init__(self, history: List[Dict]):
-        self.history = history
-        options = []
-        for i, record in enumerate(history):
-            # Truncate prompt if it's too long for a select option label (max 100 chars)
-            label = record['prompt'][:97] + "..." if len(record['prompt']) > 100 else record['prompt']
-            options.append(discord.SelectOption(
-                label=label,
-                description=f"Ảnh #{i+1}",
-                value=str(i)
-            ))
-        super().__init__(placeholder="Chọn một prompt từ lịch sử...", options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        idx = int(self.values[0])
-        record = self.history[idx]
-        
-        embed = discord.Embed(
-            title=f"Lịch sử ảnh",
-            description=f"**Prompt:** {record['prompt']}",
-            color=discord.Color.green()
-        )
-        embed.set_image(url=record['image_url'])
-        
-        await interaction.response.edit_message(content=None, embed=embed, view=self.view)
-
-class ImageHistoryView(discord.ui.View):
-    def __init__(self, history: List[Dict]):
-        super().__init__(timeout=300)
-        self.add_item(ImageHistorySelect(history))

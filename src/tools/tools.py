@@ -38,6 +38,7 @@ from src.core.config import (
     GEMINI_API_KEYS,
     MODEL_NAME,
 )
+import src.core.config as config
 from src.core.api_router import get_api_router
 from src.core.api_config import AVAILABLE_MODELS
 
@@ -231,10 +232,11 @@ class ToolsManager:
     }
 
 
-    def __init__(self, note_mgr=None):
+    def __init__(self, note_mgr=None, db_repo=None):
         self.logger = logger
         self.api_router = get_api_router()
         self.note_mgr = note_mgr
+        self.db_repo = db_repo
         self.web_search_cache = {}
         self.image_recognition_cache = {}
         self.weather_lock = asyncio.Lock()
@@ -277,26 +279,26 @@ class ToolsManager:
         else:
             self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
 
-    def _resolve_router_model_alias_for_vision(self) -> str:
+    async def _resolve_router_model_alias_for_vision(self) -> str:
         """Map configured vision model_id to router alias for shared key/quota accounting."""
         # Use FINAL_MODEL_ALIAS (default gemini-flash-35) for vision tasks
         # consistent with message_handler where Lite is for reasoning only.
         final_alias = os.getenv("FINAL_MODEL_ALIAS", "gemini-flash-35").strip()
 
         # If the final_alias is valid, ensure we can route to it or its peer
-        if final_alias in self.api_router.model_pools:
+        if True:
             # We don't want to actually reserve the key here, we just want to verify
             # if final_alias or its priority peer (like flash-30) is available.
             # Using get_next_key_for_model_reservation handles checking priority fallback.
-            reservation = self.api_router.get_next_key_for_model_reservation(final_alias)
+            reservation = await self.api_router.get_next_key_for_model_reservation(final_alias)
             if reservation:
                 return reservation["model_alias"]
 
         return final_alias
 
-    def get_all_tools(self):
+    def get_all_tools(self, is_admin: bool = False):
         """Return all tool definitions for Gemini."""
-        return [
+        tools_list = [
             genai_types.Tool(function_declarations=[
                 genai_types.FunctionDeclaration(
                     name="web_search",
@@ -412,6 +414,31 @@ class ToolsManager:
                 )
             ]),
         ]
+
+        if is_admin:
+            tools_list.append(
+                genai_types.Tool(function_declarations=[
+                    genai_types.FunctionDeclaration(
+                        name="manage_user_role",
+                        description=(
+                            "Quản lý vai trò (roles) của người dùng: Thăng chức làm Moderator, Premium hoặc Admin, "
+                            "hoặc hạ chức người dùng về User thông thường. Lệnh này chỉ thực hiện được khi người gọi lệnh "
+                            "(tham số user_id của chat context) là Admin thực tế của bot."
+                        ),
+                        parameters={
+                            "type": "object",
+                            "properties": {
+                                "target_user_id": {"type": "string", "description": "ID Discord số của người dùng cần thay đổi vai trò."},
+                                "action": {"type": "string", "description": "Hành động: 'add' (thăng chức/thêm) hoặc 'remove' (hạ chức/xóa).", "enum": ["add", "remove"]},
+                                "role": {"type": "string", "description": "Vai trò cần thiết lập: 'moderator', 'premium', hoặc 'admin'.", "enum": ["moderator", "premium", "admin"]}
+                            },
+                            "required": ["target_user_id", "action", "role"]
+                        }
+                    )
+                ])
+            )
+
+        return tools_list
     
     def _remove_diacritics(self, text: str) -> str:
         normalized = unicodedata.normalize("NFKD", text or "")
@@ -1115,7 +1142,7 @@ class ToolsManager:
             return cached_result
 
         start_ts = datetime.now().timestamp()
-        vision_alias = self._resolve_router_model_alias_for_vision()
+        vision_alias = await self._resolve_router_model_alias_for_vision()
         vision_model_id = self.api_router.get_model_id(vision_alias)
         attempt_budget = max(1, min(5, len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1))
         last_error = ""
@@ -1136,7 +1163,7 @@ class ToolsManager:
                 return "⚠️ Hệ thống đang quá tải (vượt giới hạn truy vấn ảnh), vui lòng thử lại sau vài giây."
 
             for attempt in range(1, attempt_budget + 1):
-                reservation = self.api_router.get_next_key_for_model_reservation(vision_alias)
+                reservation = await self.api_router.get_next_key_for_model_reservation(vision_alias)
                 api_key = (reservation or {}).get("key") or self._next_gemini_api_key()
                 if not api_key:
                     break
@@ -1697,10 +1724,11 @@ class ToolsManager:
         cache_key = f"{mode}|{clean_query}"
         normalized_key = self._normalize_search_cache_key(cache_key)
         time_sensitive = self._is_time_sensitive_query(clean_query)
+        bypass_cache = time_sensitive and not force_fallback
 
         inflight_task: Optional[asyncio.Task] = None
         async with self.cache_lock:
-            cached_result = None if force_fallback else self.get_web_search_cache(cache_key)
+            cached_result = None if (force_fallback or bypass_cache) else self.get_web_search_cache(cache_key)
             if not cached_result:
                 inflight_task = self.inflight_search_tasks.get(normalized_key)
 
@@ -1712,7 +1740,7 @@ class ToolsManager:
             self.logger.info(f"Web search joined inflight task for key={normalized_key[:80]}")
             return await inflight_task
 
-        if not force_fallback and self.search_failed_query_cooldown_seconds > 0:
+        if not force_fallback and not time_sensitive and self.search_failed_query_cooldown_seconds > 0:
             async with self.cache_lock:
                 cooldown_until = self.failed_search_cooldowns.get(normalized_key, 0)
             if cooldown_until > time.time():
@@ -1725,20 +1753,32 @@ class ToolsManager:
 
         try:
             output = await task
+            if not output and time_sensitive and not force_fallback:
+                absolute_date = datetime.now().strftime("%d/%m/%Y")
+                forced_query = f"{clean_query} ngay {absolute_date}"
+                self.logger.info(
+                    f"Time-sensitive query produced empty result. Retrying forced fallback query='{forced_query[:80]}'."
+                )
+                output = await self._execute_search_pipeline(forced_query, True)
+
             if output:
                 async with self.cache_lock:
-                    self.set_web_search_cache(cache_key, output, time_sensitive=time_sensitive)
+                    if not bypass_cache:
+                        self.set_web_search_cache(cache_key, output, time_sensitive=time_sensitive)
                     self.failed_search_cooldowns.pop(normalized_key, None)
-                self.logger.info(f"Completed search for query='{clean_query[:60]}' and cached.")
+                if bypass_cache:
+                    self.logger.info(f"Completed fresh search for time-sensitive query='{clean_query[:60]}'.")
+                else:
+                    self.logger.info(f"Completed search for query='{clean_query[:60]}' and cached.")
                 return output
 
-            if self.search_failed_query_cooldown_seconds > 0:
+            if not time_sensitive and self.search_failed_query_cooldown_seconds > 0:
                 async with self.cache_lock:
                     self.failed_search_cooldowns[normalized_key] = time.time() + self.search_failed_query_cooldown_seconds
             self.logger.error("All search providers failed for all intents.")
             return ""
         except Exception as e:
-            if self.search_failed_query_cooldown_seconds > 0:
+            if not time_sensitive and self.search_failed_query_cooldown_seconds > 0:
                 async with self.cache_lock:
                     self.failed_search_cooldowns[normalized_key] = time.time() + self.search_failed_query_cooldown_seconds
             self.logger.error(f"Search pipeline exception: {e}")
@@ -1759,11 +1799,9 @@ class ToolsManager:
             if name == "web_search":
                 query = args.get("query", "")
                 result = await self.run_search_apis(query, "general")
-                # Log into Database
                 try:
-                    from src.database.repository import DatabaseRepository
-                    db = DatabaseRepository()
-                    await db.log_web_search(user_id, query, str(result)[:2000]) # Trucate if too long
+                    if self.db_repo is not None:
+                        await self.db_repo.log_web_search(user_id, query, str(result)[:2000])
                 except Exception as e:
                     self.logger.error(f"Error logging web search to DB: {e}")
                 return result
@@ -1809,6 +1847,48 @@ class ToolsManager:
                 if not image_url or not question:
                     return "Lỗi: 'image_url' và 'question' không được rỗng cho image_recognition."
                 return await self.run_image_recognition(image_url, question)
+
+            elif name == "manage_user_role":
+                target_user_id = (args.get("target_user_id") or "").strip()
+                action = (args.get("action") or "").strip()
+                role = (args.get("role") or "").strip()
+
+                if not target_user_id or not action or not role:
+                    return "Lỗi: Thiếu tham số bắt buộc 'target_user_id', 'action' hoặc 'role'."
+
+                if self.db_repo is None:
+                    return "Lỗi hệ thống: Kết nối cơ sở dữ liệu chưa sẵn sàng."
+
+                # 1. Xác thực quyền Admin của người đang chat (user_id)
+                is_caller_admin = (user_id in config.ADMIN_USER_IDS) or (await self.db_repo.is_admin_user(user_id))
+                if not is_caller_admin:
+                    return "❌ Lỗi: Bạn không phải Admin hệ thống, không có quyền thăng chức hay hạ chức người khác!"
+
+                # 2. Thực hiện hành động thăng/hạ chức tương ứng
+                if action == "add":
+                    if role == "moderator":
+                        await self.db_repo.add_moderator_user(target_user_id)
+                        return f"🎉 Thăng chức thành công người dùng {target_user_id} làm Moderator!"
+                    elif role == "admin":
+                        await self.db_repo.add_admin_user(target_user_id)
+                        return f"👑 Thăng chức thành công người dùng {target_user_id} làm Admin!"
+                    elif role == "premium":
+                        await self.db_repo.add_premium_user(target_user_id)
+                        return f"✨ Kích hoạt Premium thành công cho người dùng {target_user_id}!"
+                elif action == "remove":
+                    if role == "moderator":
+                        await self.db_repo.remove_moderator_user(target_user_id)
+                        return f"✅ Đã hạ chức người dùng {target_user_id} khỏi vai trò Moderator."
+                    elif role == "admin":
+                        # Không cho phép demote tài khoản static trong .env
+                        if target_user_id in config.ADMIN_USER_IDS:
+                            return "❌ Lỗi: Không thể hạ chức Admin gốc cấu hình tĩnh trong .env!"
+                        await self.db_repo.remove_admin_user(target_user_id)
+                        return f"✅ Đã hạ chức người dùng {target_user_id} khỏi vai trò Admin."
+                    elif role == "premium":
+                        await self.db_repo.remove_premium_user(target_user_id)
+                        return f"✅ Đã hủy Premium của người dùng {target_user_id}."
+                return "Lỗi: Hành động hoặc vai trò không hợp lệ."
 
             else:
                 return "Tool không tồn tại!"
