@@ -13,7 +13,7 @@ module.exports = {
       args: [], // ÉP CỨNG CHẾ ĐỘ PRODUCTION: UP CẢ BOT CORE VÀ API GATEWAY SERVER
       interpreter,
       watch: false,
-      max_memory_restart: "1G",
+      max_memory_restart: "3G",
       autorestart: true,
       merge_logs: true,
       out_file: path.join(projectRoot, "logs", "azuris-bot-out.log"),
