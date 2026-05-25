@@ -48,6 +48,13 @@ KAFKA_VERSION="${KAFKA_VERSION:-3.7.0}"
 SCALA_VERSION="${SCALA_VERSION:-2.13}"
 KAFKA_DOWNLOAD_URL="${KAFKA_DOWNLOAD_URL:-https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz}"
 POSTGRES_DOWNLOAD_URL="${POSTGRES_DOWNLOAD_URL:-https://get.enterprisedb.com/postgresql/postgresql-16.4-1-linux-x64-binaries.tar.gz}"
+POSTGRES_DOWNLOAD_URL_ALT="${POSTGRES_DOWNLOAD_URL_ALT:-}"
+POSTGRES_MAJOR_VERSION="${POSTGRES_MAJOR_VERSION:-16}"
+POSTGRES_SOURCE_VERSION="${POSTGRES_SOURCE_VERSION:-16.14}"
+POSTGRES_SOURCE_URL="${POSTGRES_SOURCE_URL:-https://ftp.postgresql.org/pub/source/v${POSTGRES_SOURCE_VERSION}/postgresql-${POSTGRES_SOURCE_VERSION}.tar.gz}"
+POSTGRES_SOURCE_URL_ALT="${POSTGRES_SOURCE_URL_ALT:-}"
+POSTGRES_BUILD_JOBS="${POSTGRES_BUILD_JOBS:-}"
+DOWNLOAD_USER_AGENT="${DOWNLOAD_USER_AGENT:-Mozilla/5.0}"
 
 mkdir -p "$DOWNLOADS_DIR" "$CONFIG_DIR" "$LOGS_DIR" "$RUN_DIR"
 
@@ -111,7 +118,44 @@ download_if_missing() {
     return
   fi
   log "Downloading: $url"
-  curl -fL "$url" -o "$out"
+  if [ -n "$DOWNLOAD_USER_AGENT" ]; then
+    curl -fL --retry 3 --retry-delay 2 --retry-all-errors -A "$DOWNLOAD_USER_AGENT" "$url" -o "$out"
+  else
+    curl -fL --retry 3 --retry-delay 2 --retry-all-errors "$url" -o "$out"
+  fi
+}
+
+download_with_fallback() {
+  local out="$1"
+  shift
+  local url=""
+
+  if [ -f "$out" ]; then
+    log "Using cached file: $out"
+    return
+  fi
+
+  for url in "$@"; do
+    if [ -z "$url" ]; then
+      continue
+    fi
+    log "Downloading: $url"
+    if [ -n "$DOWNLOAD_USER_AGENT" ]; then
+      if curl -fL --retry 3 --retry-delay 2 --retry-all-errors -A "$DOWNLOAD_USER_AGENT" "$url" -o "$out"; then
+        return
+      fi
+    else
+      if curl -fL --retry 3 --retry-delay 2 --retry-all-errors "$url" -o "$out"; then
+        return
+      fi
+    fi
+    rm -f "$out" 2>/dev/null || true
+    warn "Download failed. Trying next mirror..."
+  done
+
+  warn "All configured PostgreSQL archive downloads failed."
+  warn "Set POSTGRES_DOWNLOAD_URL or POSTGRES_DOWNLOAD_URL_ALT, or place the archive at $out to force a tarball source."
+  return 1
 }
 
 extract_tar_to_dir() {
@@ -138,6 +182,186 @@ extract_tar_to_dir() {
 
   mv "$first_dir" "$final_dir"
   rm -rf "$tmp_extract"
+}
+
+verify_postgres_runtime() {
+  local cmd=""
+
+  for cmd in initdb pg_ctl postgres psql; do
+    if [ ! -x "$POSTGRES_DIR/bin/$cmd" ]; then
+      return 1
+    fi
+  done
+
+  "$POSTGRES_DIR/bin/initdb" --version >/dev/null 2>&1
+  "$POSTGRES_DIR/bin/pg_ctl" --version >/dev/null 2>&1
+  "$POSTGRES_DIR/bin/postgres" --version >/dev/null 2>&1
+  "$POSTGRES_DIR/bin/psql" --version >/dev/null 2>&1
+}
+
+create_postgres_bin_wrappers() {
+  local source_bin="$1"
+  local cmd=""
+  local wrapper=""
+  local inferred_major="$POSTGRES_MAJOR_VERSION"
+  local source_lib=""
+  local lib_path=""
+  local lib_dir=""
+
+  if [ "$source_bin" = "$POSTGRES_DIR/bin" ]; then
+    return
+  fi
+
+  case "$source_bin" in
+    */usr/lib/postgresql/*/bin)
+      inferred_major="$(basename "$(dirname "$source_bin")")"
+      ;;
+  esac
+
+  source_lib="$(cd "$source_bin/../lib" 2>/dev/null && pwd || true)"
+  lib_path="$POSTGRES_DIR/usr/lib/postgresql/${inferred_major}/lib"
+  if [ -n "$source_lib" ]; then
+    lib_path="$source_lib:$lib_path"
+  fi
+
+  for lib_dir in "$POSTGRES_DIR"/usr/lib/* "$POSTGRES_DIR"/usr/lib/*/*; do
+    if [ -d "$lib_dir" ]; then
+      lib_path="$lib_path:$lib_dir"
+    fi
+  done
+
+  mkdir -p "$POSTGRES_DIR/bin"
+  for cmd in initdb pg_ctl postgres psql pg_isready createdb createuser; do
+    if [ -x "$source_bin/$cmd" ]; then
+      wrapper="$POSTGRES_DIR/bin/$cmd"
+      cat > "$wrapper" <<EOF
+#!/usr/bin/env bash
+export LD_LIBRARY_PATH="$lib_path:\${LD_LIBRARY_PATH:-}"
+exec "$source_bin/$cmd" "\$@"
+EOF
+      chmod +x "$wrapper"
+    fi
+  done
+}
+
+find_system_postgres_bin_dir() {
+  local cmd_path=""
+  local cmd_dir=""
+  local candidate=""
+
+  cmd_path="$(command -v initdb 2>/dev/null || true)"
+  if [ -n "$cmd_path" ]; then
+    cmd_dir="$(cd "$(dirname "$cmd_path")" && pwd)"
+    if [ -x "$cmd_dir/pg_ctl" ] && [ -x "$cmd_dir/postgres" ] && [ -x "$cmd_dir/psql" ]; then
+      printf '%s\n' "$cmd_dir"
+      return 0
+    fi
+  fi
+
+  for candidate in \
+    "/usr/lib/postgresql/${POSTGRES_MAJOR_VERSION}/bin" \
+    /usr/lib/postgresql/*/bin \
+    /usr/local/pgsql/bin \
+    /usr/local/postgresql/bin; do
+    if [ -x "$candidate/initdb" ] && [ -x "$candidate/pg_ctl" ] && [ -x "$candidate/postgres" ] && [ -x "$candidate/psql" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+install_postgres_from_system() {
+  local system_bin=""
+
+  system_bin="$(find_system_postgres_bin_dir || true)"
+  if [ -z "$system_bin" ]; then
+    warn "No usable system PostgreSQL binaries were found."
+    return 1
+  fi
+
+  log "Using system PostgreSQL binaries from $system_bin with project-local data directory."
+  create_postgres_bin_wrappers "$system_bin"
+
+  if verify_postgres_runtime; then
+    log "Prepared PostgreSQL runtime wrappers at $POSTGRES_DIR/bin"
+    return 0
+  fi
+
+  warn "System PostgreSQL binaries were found but failed runtime verification."
+  return 1
+}
+
+install_postgres_from_source() {
+  local compiler="${CC:-}"
+  local jobs="$POSTGRES_BUILD_JOBS"
+  local archive="$DOWNLOADS_DIR/postgresql-${POSTGRES_SOURCE_VERSION}.tar.gz"
+  local tmp_dir=""
+  local source_dir=""
+  local build_log="$LOGS_DIR/postgres_build.log"
+
+  if [ -z "$compiler" ]; then
+    compiler="$(command -v cc 2>/dev/null || command -v gcc 2>/dev/null || true)"
+  fi
+  if [ -z "$compiler" ] || ! command -v make >/dev/null 2>&1; then
+    warn "C compiler or make is missing; cannot build PostgreSQL from source."
+    return 1
+  fi
+
+  if [ -z "$jobs" ]; then
+    jobs="$(nproc 2>/dev/null || printf '2')"
+  fi
+
+  if ! download_with_fallback "$archive" "$POSTGRES_SOURCE_URL" "$POSTGRES_SOURCE_URL_ALT"; then
+    return 1
+  fi
+
+  tmp_dir="$(mktemp -d)"
+  if ! tar -xzf "$archive" -C "$tmp_dir"; then
+    rm -rf "$tmp_dir"
+    rm -f "$archive" 2>/dev/null || true
+    warn "PostgreSQL source archive could not be extracted."
+    return 1
+  fi
+  source_dir="$(find "$tmp_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  if [ -z "$source_dir" ]; then
+    rm -rf "$tmp_dir"
+    warn "PostgreSQL source archive did not contain a top-level directory."
+    return 1
+  fi
+
+  log "Building PostgreSQL $POSTGRES_SOURCE_VERSION locally. This can take several minutes. Log: $build_log"
+  rm -f "$build_log"
+  if ! (
+    cd "$source_dir" && \
+    CC="$compiler" ./configure \
+      --prefix="$POSTGRES_DIR" \
+      --without-readline \
+      --without-zlib \
+      --without-icu \
+      --without-openssl \
+      --without-ldap \
+      --without-pam \
+      --without-systemd \
+      --without-libxml \
+      --without-libxslt >>"$build_log" 2>&1 && \
+    make -s -j "$jobs" >>"$build_log" 2>&1 && \
+    make -s install >>"$build_log" 2>&1
+  ); then
+    rm -rf "$tmp_dir"
+    warn "PostgreSQL source build failed. Check: $build_log"
+    return 1
+  fi
+
+  rm -rf "$tmp_dir"
+  if verify_postgres_runtime; then
+    log "Built and installed PostgreSQL at $POSTGRES_DIR"
+    return 0
+  fi
+
+  warn "Source-built PostgreSQL failed runtime verification."
+  return 1
 }
 
 stop_postgres_if_running() {
@@ -193,24 +417,38 @@ install_kafka() {
 }
 
 install_postgres() {
-  if [ -x "$POSTGRES_DIR/bin/initdb" ]; then
+  if verify_postgres_runtime; then
     log "PostgreSQL already installed at $POSTGRES_DIR"
     return
   fi
 
   local archive="$DOWNLOADS_DIR/postgresql-linux-x64-binaries.tar.gz"
-  download_if_missing "$POSTGRES_DOWNLOAD_URL" "$archive"
+  if download_with_fallback "$archive" "$POSTGRES_DOWNLOAD_URL" "$POSTGRES_DOWNLOAD_URL_ALT"; then
+    mkdir -p "$POSTGRES_DIR"
+    if tar -xzf "$archive" -C "$POSTGRES_DIR" --strip-components=1; then
+      if verify_postgres_runtime; then
+        log "Installed PostgreSQL at $POSTGRES_DIR"
+        return
+      fi
 
-  mkdir -p "$POSTGRES_DIR"
-  tar -xzf "$archive" -C "$POSTGRES_DIR" --strip-components=1
-
-  if [ ! -x "$POSTGRES_DIR/bin/initdb" ]; then
-    err "PostgreSQL binaries were not extracted correctly."
-    err "Set POSTGRES_DOWNLOAD_URL to a valid linux-x64 binaries tarball and rerun."
-    exit 1
+      warn "PostgreSQL archive was extracted but did not provide a runnable runtime."
+    else
+      rm -f "$archive" 2>/dev/null || true
+      warn "PostgreSQL archive could not be extracted. Trying fallback paths."
+    fi
   fi
 
-  log "Installed PostgreSQL at $POSTGRES_DIR"
+  if install_postgres_from_system; then
+    return
+  fi
+
+  if install_postgres_from_source; then
+    return
+  fi
+
+  err "Failed to prepare PostgreSQL runtime."
+  err "Set POSTGRES_DOWNLOAD_URL/POSTGRES_DOWNLOAD_URL_ALT, install PostgreSQL on the host, or install build tools so PostgreSQL can be built from source."
+  exit 1
 }
 
 init_postgres_data() {
@@ -359,6 +597,12 @@ main() {
   require_cmd curl
   require_cmd tar
   require_cmd python3
+
+  export JAVA_HOME="$JAVA_DIR"
+  export PATH="$JAVA_DIR/bin:$PATH"
+
+  log "Project root: $PROJECT_ROOT"
+  log "Runtime root: $RUNTIME_ROOT"
 
   log "Project root: $PROJECT_ROOT"
   log "Runtime root: $RUNTIME_ROOT"
