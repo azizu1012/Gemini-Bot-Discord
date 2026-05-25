@@ -192,16 +192,6 @@ install_kafka() {
   log "Installed Kafka at $KAFKA_DIR"
 }
 
-  extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
-  log "Installed Kafka at $KAFKA_DIR"
-}
-
-  local archive="$DOWNLOADS_DIR/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
-  download_if_missing "$KAFKA_DOWNLOAD_URL" "$archive"
-  extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
-  log "Installed Kafka at $KAFKA_DIR"
-}
-
 install_postgres() {
   if [ -x "$POSTGRES_DIR/bin/initdb" ]; then
     log "PostgreSQL already installed at $POSTGRES_DIR"
