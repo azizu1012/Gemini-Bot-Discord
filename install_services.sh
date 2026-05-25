@@ -166,6 +166,34 @@ install_kafka() {
   fi
 
   local archive="$DOWNLOADS_DIR/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
+  
+  if [ -f "$archive" ]; then
+    log "Using cached file: $archive"
+  else
+    local primary_url="$KAFKA_DOWNLOAD_URL"
+    local archive_url="https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
+    
+    log "Attempting to download Kafka from primary mirror..."
+    # Thử tải từ link mirror chính thức, nếu trả về lỗi (404/500) sẽ kích hoạt luồng fallback
+    if curl -fL "$primary_url" -o "$archive"; then
+      log "Downloaded Kafka successfully from primary mirror."
+    else
+      warn "Primary mirror returned error (404 or network drop). Retrying via Apache Archive..."
+      rm -f "$archive" 2>/dev/null || true
+      if curl -fL "$archive_url" -o "$archive"; then
+        log "Downloaded Kafka successfully from Apache Archive Backup."
+      else
+        err "Failed to download Kafka from all available repositories."
+        exit 1
+      fi
+    fi
+  fi
+
+  extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
+  log "Installed Kafka at $KAFKA_DIR"
+}
+
+  local archive="$DOWNLOADS_DIR/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
   download_if_missing "$KAFKA_DOWNLOAD_URL" "$archive"
   extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
   log "Installed Kafka at $KAFKA_DIR"
