@@ -159,7 +159,7 @@ install_java() {
   log "Installed Java at $JAVA_DIR"
 }
 
-install_kafka() 
+install_kafka() {
   if [ -x "$KAFKA_DIR/bin/kafka-server-start.sh" ]; then
     log "Kafka already installed at $KAFKA_DIR"
     return
@@ -174,7 +174,6 @@ install_kafka()
     local archive_url="https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
     
     log "Attempting to download Kafka from primary mirror..."
-    # Thử tải từ link mirror chính thức, nếu trả về lỗi (404/500) sẽ kích hoạt luồng fallback
     if curl -fL "$primary_url" -o "$archive"; then
       log "Downloaded Kafka successfully from primary mirror."
     else
@@ -188,6 +187,10 @@ install_kafka()
       fi
     fi
   fi
+
+  extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
+  log "Installed Kafka at $KAFKA_DIR"
+}
 
   extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
   log "Installed Kafka at $KAFKA_DIR"
