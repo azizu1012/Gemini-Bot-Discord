@@ -159,7 +159,7 @@ install_java() {
   log "Installed Java at $JAVA_DIR"
 }
 
-install_kafka() {
+install_kafka() 
   if [ -x "$KAFKA_DIR/bin/kafka-server-start.sh" ]; then
     log "Kafka already installed at $KAFKA_DIR"
     return
