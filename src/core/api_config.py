@@ -22,7 +22,7 @@ AVAILABLE_MODELS = {
         "rpd": int(os.getenv('GEMINI_FLASH_35_RPD', '20')),
     },
     "gemini-flash-30": {
-        "display": "Gemini Flash 3.5 Latest",
+        "display": "Gemini Flash 3.0 Latest",
         "priority": 1,
         "model_id": os.getenv('GEMINI_FLASH_30_MODEL', 'gemini-3-flash-preview'),
         "rpm": int(os.getenv('GEMINI_FLASH_30_RPM', '5')),
