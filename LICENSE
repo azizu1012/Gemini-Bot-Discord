@@ -1,5 +1,5 @@
 📄 AZURIS SOURCE-AVAILABLE & NON-COMMERCIAL LICENSE (ASNCL)
-Version 3.0 - Production Edition
+Version 3.2 - Strict Enforcement Edition
 COPYRIGHT (c) 2026 azizu1012. ALL RIGHTS RESERVED.
 
 ARTICLE 1. DEFINITIONS
@@ -8,12 +8,9 @@ ARTICLE 1. DEFINITIONS
 1.2. "Licensor": The original creator and sole intellectual property owner, azizu1012.
 
 1.3. "Commercial Use": Any execution, deployment, or modification of the Software aimed at direct or indirect financial leverage or commercial operations. This explicitly covers:
-
-Offering the Software as a paid service, sub-hosting, or automated SaaS platform.
-
-Using the Software within institutional commercial workflows or business environments.
-
-Locking any component, feature, or access code of the Software behind digital paywalls, transactional requirements, or compulsory subscription fees.
+- Offering the Software as a paid service, sub-hosting, or automated SaaS platform.
+- Using the Software within institutional commercial workflows or business environments.
+- Locking any component, feature, or access code of the Software behind digital paywalls, transactional requirements, or compulsory subscription fees.
 
 1.4. "Authorized Donation": Non-compulsory, voluntary financial contributions processed strictly through the Licensor’s encrypted endpoints (e.g., the built-in /donate architecture). Any external redirection of donations by third-party licensees constitutes a material breach of this Agreement.
 
@@ -22,38 +19,49 @@ Locking any component, feature, or access code of the Software behind digital pa
 ARTICLE 2. LICENSE GRANT & SOURCE-AVAILABLE CONDITIONS
 2.1. Non-Commercial Evaluation Grant: Subject to compliance with this Agreement, Licensor grants the End-User a non-exclusive, non-transferable, revocable worldwide license to download, view, modify, and execute the Software strictly for personal, educational, non-profit, and local testing purposes.
 
-2.2. Modification Boundaries: You are permitted to modify the source code to suit local performance metrics. However, any public exposure, distribution, or fork of these Derivative Works must remain 100% open, open-source under this identical ASNCL v3.0 license, and must retain all original attribution credits.
+2.2. Modification Boundaries: You are permitted to modify the source code to suit local performance metrics. However, any public exposure, distribution, or fork of these Derivative Works must remain 100% open, open-source under this identical ASNCL v3.2 license, and must retain all original attribution credits.
 
-ARTICLE 3. STRICT INTELLECTUAL PROPERTY & INFRASTRUCTURE RESTRICTIONS
+ARTICLE 3. STRICT INTELLECTUAL PROPERTY & ENFORCEMENT RESTRICTIONS
 3.1. Absolute Commercial Prohibition: Any deployment violating Section 1.3 without a custom, signed Commercial License directly from the Licensor is legally void and constitutes an actionable copyright infringement.
 
-3.2. Source Attribution Preservation vs. Runtime Dynamic Identity:
+3.2. Right to Platform Takedown & Infrastructure Suspension: In the event of Unauthorized Commercialization, the Licensor reserves the absolute, immediate right to execute intellectual property defense actions without prior notice. This includes:
+- Filing DMCA Takedown notices against the infringing repository host (e.g., GitHub, GitLab).
+- Issuing copyright enforcement complaints to infrastructure providers (e.g., VPS hosts) to suspend the unauthorized server endpoints.
+- Submitting violation reports to platform authorities (e.g., Discord Developer Platform) to permanently deactivate the target Bot ID.
 
-Licensees must preserve all hardcoded copyright headers, authorship references, and metadata comments within the source files intact.
+3.3. Source Attribution Preservation vs. Runtime Dynamic Identity:
+- Licensees must preserve all hardcoded copyright headers, authorship references, and metadata comments within the source files intact.
+- Licensees are allowed to utilize the Software's Dynamic Identity feature to rename the client profile on target platforms. However, removing or misrepresenting the base structural identity within software documentation or code structures is strictly prohibited.
 
-Licensees are allowed to utilize the Software's Dynamic Identity feature to rename the client profile on target platforms. However, removing or misrepresenting the base structural identity within software documentation or code structures is strictly prohibited.
+3.4. API Token & Quota Liability Disclaimer: The Software utilizes advanced dynamic API key pools and custom endpoints. End-Users bear full legal, financial, and operational responsibility for any API consumption, resource exhaustion (HTTP 429), or financial liability incurred through keys loaded into the database pool. The Licensor is 100% exempt from upstream billing charges.
 
-3.3. API Token & Quota Liability Disclaimer: The Software utilizes advanced dynamic API key pools and custom endpoints. End-Users bear full legal, financial, and operational responsibility for any API consumption, resource exhaustion (HTTP 429), or financial liability incurred through keys loaded into the database pool. The Licensor is 100% exempt from upstream billing charges.
+3.5. Local Infrastructure Separation: The Software deploys isolated local database engine runtimes (PostgreSQL, Apache Kafka KRaft) under the project sub-directory. Licensees acknowledge that execution occurs entirely at their own system risk.
 
-3.4. Local Infrastructure Separation: The Software deploys isolated local database engine runtimes (PostgreSQL, Apache Kafka KRaft) under the project sub-directory. Licensees acknowledge that execution occurs entirely at their own system risk.
+3.6. Non-Waiver of Enforcement Rights: The Licensor’s decision to prioritize platform-level copyright strikes (Article 3.2) over immediate judicial litigation does not constitute a waiver of copyright ownership. The Licensor retains the full right to report violations to national intellectual property authorities or initiate formal legal/criminal proceedings at any time.
 
 ARTICLE 4. INDEMNIFICATION & WARRANTY LIMITATIONS
 4.1. Warranties: THE SOFTWARE IS DISPATCHED "AS IS", WITH ZERO WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. THE LICENSOR DOES NOT GUARANTEE SYSTEM UP-TIME, UPSTREAM TELEMETRY STABILITY (DISCORD/GEMINI APIS), OR ERROR-FREE RUNTIME LOOP EXECUTION.
 
 4.2. Liability Cap: UNDER NO LEGAL THEORY SHALL THE LICENSOR BE LIABLE FOR DATA CORRUPTION WITHIN POSTGRESQL FLUXES, KAFKA PARTITION DROPS, HARDWARE DEGRADATION DUE TO INTENSE COMPUTATION, OR ANY CONSEQUENTIAL DAMAGES STEMMING FROM INCOMPATIBLE DEPLOYMENT ENVIRONMENT CONFIGURATIONS.
 
+------------------------------------------------------------------------------------------------
 ⚖️ BẢN TÓM TẮT ĐIỀU KHOẢN PHÁP LÝ (EXECUTIVE SUMMARY - MAINTAINER USE ONLY)
+
 1. QUYỀN SỞ HỮU GỐC & CREDIT TĨNH
 Mã nguồn, cấu trúc kiến trúc phân tán hướng sự kiện, hệ thống prompts và toàn bộ công cụ tự cấp phát hạ tầng local là tài sản trí tuệ tối cao của nhà phát triển azizu1012.
-
 Người dùng được phép dùng tính năng đổi tên Bot động (Dynamic Identity) để hiển thị cấu hình riêng trên Discord. Nhưng tất cả tệp mã nguồn gốc, header file và phần mô tả bản quyền hệ thống BẮT BUỘC phải giữ nguyên tên tác giả, cấm hành vi chiếm đoạt re-brand.
 
 2. BIÊN GIỚI PHI THƯƠNG MẠI CHẶT CHẼ
 Nghiêm cấm tuyệt đối việc sử dụng Azuris Bot để kinh doanh, mở dịch vụ SaaS thu phí, hoặc đóng gói bán kèm sản phẩm thương mại thương hiệu khác.
-
 Cơ chế Quyên góp (Donation): Chỉ duy nhất cổng Quyên góp gốc do Tác giả cấu hình sẵn (như slash command /donate mã hóa cứng) mới được coi là hợp lệ. Người dùng phái sinh (Licensees) nghiêm cấm việc sửa đổi cổng nạp tiền hoặc thu lợi nhuận gián tiếp dựa trên mã nguồn này dưới mọi hình thức.
 
-3. MIỄN TRỪ TRÁCH NHIỆM TIỀN BẠC & PHẦN CỨNG (AS-IS)
-Trách nhiệm API Key: Người chạy bot tự chịu trách nhiệm chi trả và bảo mật cho toàn bộ bể API Keys (Gemini, OpenAI Custom Endpoints) nạp vào hệ thống. Tác giả hoàn toàn miễn trừ trách nhiệm nếu người dùng cấu hình lỗi làm rò rỉ hoặc bị nhà cung cấp vả hóa đơn cước phí.
+3. QUYỀN THỰC THI BẢN QUYỀN & XỬ LÝ VI PHẠM (TAKEDOWN)
+Tác giả nắm toàn quyền sinh sát đối với các bản sao vi phạm thương mại. Khi phát hiện mã nguồn bị luộc để kinh doanh trục lợi, Tác giả có quyền:
+- Bắn gậy bản quyền (DMCA Takedown) xóa sổ repository trên GitHub.
+- Báo cáo nhà cung cấp máy chủ (VPS) để đình chỉ hạ tầng mạng của kẻ vi phạm.
+- Yêu cầu Discord khóa vĩnh viễn Bot ID (Token) lậu.
+- (Tối hậu thư): Quyền bảo lưu hồ sơ để tố cáo lên Cục Sở hữu Trí tuệ và Cơ quan Cảnh sát Điều tra khi xét thấy mức độ thu lợi bất chính của kẻ vi phạm vượt ngưỡng nghiêm trọng.
 
+4. MIỄN TRỪ TRÁCH NHIỆM TIỀN BẠC & PHẦN CỨNG (AS-IS)
+Trách nhiệm API Key: Người chạy bot tự chịu trách nhiệm chi trả và bảo mật cho toàn bộ bể API Keys (Gemini, OpenAI Custom Endpoints) nạp vào hệ thống. Tác giả hoàn toàn miễn trừ trách nhiệm nếu người dùng cấu hình lỗi làm rò rỉ hoặc bị nhà cung cấp vả hóa đơn cước phí.
 An toàn hạ tầng: Hệ thống khởi chạy các tiến trình nặng ngầm (Postgres, Kafka Broker JVM). Tác giả không chịu bất kỳ trách nhiệm nào về việc xung đột cổng mạng, nghẽn I/O ổ cứng, tràn VRAM sập hệ thống, hoặc hao tổn phần cứng máy chủ phát sinh trong quá trình vận hành thực tế.
