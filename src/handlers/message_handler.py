@@ -28,10 +28,21 @@ from src.core.prompt_loader import build_identity_capability_prompt
 
 class DummyAttachment:
     """Mock discord attachment details passed from Gateway."""
-    def __init__(self, url: str, filename: str, size: int = 10 * 1024 * 1024):
+    def __init__(
+        self,
+        url: str,
+        filename: str,
+        size: int = 10 * 1024 * 1024,
+        attachment_id: str = "",
+        content_type: str = "",
+        proxy_url: str = "",
+    ):
         self.url = url
         self.filename = filename
         self.size = size
+        self.id = attachment_id
+        self.content_type = content_type
+        self.proxy_url = proxy_url
 
 
 class MessageHandler:
@@ -315,8 +326,12 @@ class MessageHandler:
             }
 
             for att in attachments:
-                filename = att.get("filename", "").lower()
-                url = att.get("url", "")
+                original_filename = att.get("filename") or "attachment"
+                filename = original_filename.lower()
+                url = att.get("url") or att.get("proxy_url") or ""
+                if not url:
+                    attachment_data += f"\n[System Error: File {original_filename} không có URL tải về từ Discord]\n"
+                    continue
 
                 # Check if it is an image
                 is_image = False
@@ -334,9 +349,20 @@ class MessageHandler:
                 if filename.endswith(SUPPORTED_TEXT_EXTS):
                     try:
                         doc_id = str(uuid.uuid4())
-                        dummy_att = DummyAttachment(url, att.get("filename"))
+                        dummy_att = DummyAttachment(
+                            url,
+                            original_filename,
+                            int(att.get("size") or 10 * 1024 * 1024),
+                            str(att.get("id") or ""),
+                            str(att.get("content_type") or ""),
+                            str(att.get("proxy_url") or ""),
+                        )
 
-                        file_meta = await self.file_parser.prepare_file_for_indexing(dummy_att, base_name=doc_id)
+                        file_meta = await self.file_parser.prepare_file_for_indexing(
+                            dummy_att,
+                            base_name=doc_id,
+                            chunk_dir=os.path.join(self.file_chunk_dir, doc_id),
+                        )
                         if not file_meta or file_meta.get("error"):
                             attachment_data += f"\n[System Error: Lỗi file {att.get('filename')}]\n"
                             continue

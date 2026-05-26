@@ -479,6 +479,79 @@ class BotCore:
 
         return False
 
+    def _build_attachment_payload(
+        self,
+        attachment: discord.Attachment,
+        *,
+        source: str,
+        source_message_id: str,
+    ) -> Dict[str, Any]:
+        return {
+            "id": str(attachment.id),
+            "url": attachment.url,
+            "proxy_url": attachment.proxy_url,
+            "filename": attachment.filename,
+            "size": attachment.size,
+            "content_type": attachment.content_type,
+            "source": source,
+            "source_message_id": source_message_id,
+        }
+
+    async def _resolve_referenced_message(self, message: discord.Message) -> Optional[discord.Message]:
+        reference = message.reference
+        if not reference or not reference.message_id:
+            return None
+
+        resolved = getattr(reference, "resolved", None)
+        if isinstance(resolved, discord.Message):
+            return resolved
+
+        channel = message.channel
+        reference_channel_id = getattr(reference, "channel_id", None)
+        if reference_channel_id and int(reference_channel_id) != message.channel.id:
+            resolved_channel = self.bot.get_channel(int(reference_channel_id))
+            if resolved_channel is not None and hasattr(resolved_channel, "fetch_message"):
+                channel = resolved_channel
+
+        try:
+            return await channel.fetch_message(reference.message_id)
+        except (discord.NotFound, discord.Forbidden):
+            return None
+        except Exception as e:
+            self.logger.warning(f"Failed to fetch referenced message {reference.message_id}: {e}")
+            return None
+
+    async def _collect_message_attachments(self, message: discord.Message) -> List[Dict[str, Any]]:
+        attachments: List[Dict[str, Any]] = []
+        seen_ids = set()
+
+        for attachment in message.attachments:
+            attachments.append(
+                self._build_attachment_payload(
+                    attachment,
+                    source="current_message",
+                    source_message_id=str(message.id),
+                )
+            )
+            seen_ids.add(str(attachment.id))
+
+        referenced_message = await self._resolve_referenced_message(message)
+        if referenced_message:
+            for attachment in referenced_message.attachments:
+                attachment_id = str(attachment.id)
+                if attachment_id in seen_ids:
+                    continue
+                attachments.append(
+                    self._build_attachment_payload(
+                        attachment,
+                        source="referenced_message",
+                        source_message_id=str(referenced_message.id),
+                    )
+                )
+                seen_ids.add(attachment_id)
+
+        return attachments
+
     async def setup_kafka(self):
         try:
             await self.kafka_service.start_producer()
@@ -1527,6 +1600,10 @@ class BotCore:
 
             # Xác định tên bot động
             bot_name = self.bot.user.name if self.bot.user else "Chad Gibiti"
+            attachment_payloads = await self._collect_message_attachments(message)
+            if attachment_payloads:
+                sources = ",".join(sorted({str(item.get("source", "unknown")) for item in attachment_payloads}))
+                self.logger.info(f"Collected {len(attachment_payloads)} attachment(s) for message {message.id} from {sources}")
 
             payload = {
                 "message_id": str(message.id),
@@ -1539,7 +1616,7 @@ class BotCore:
                 "is_dm": is_dm,
                 "mentions": [str(m.id) for m in message.mentions],
                 "reference_message_id": str(message.reference.message_id) if message.reference else None,
-                "attachments": [{"url": a.url, "filename": a.filename} for a in message.attachments] if message.attachments else [],
+                "attachments": attachment_payloads,
             }
 
             try:
