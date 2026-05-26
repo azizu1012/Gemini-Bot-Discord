@@ -783,7 +783,7 @@ class DatabaseRepository:
                 SELECT chunk_id, document_id, content, chunk_summary, keywords, metadata, created_at,
                        (chunk_summary <-> $1) AS summary_distance
                 FROM rag_chunks
-                WHERE chunk_summary %% $1 OR $2::text[] && keywords
+                WHERE chunk_summary % $1 OR $2::text[] && keywords
                 ORDER BY summary_distance ASC
                 LIMIT $3
                 """,
