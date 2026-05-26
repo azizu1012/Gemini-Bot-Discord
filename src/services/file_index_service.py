@@ -251,12 +251,13 @@ class FileIndexService:
 
         index_entries: List[Dict[str, Any]] = []
         for chunk in chunk_manifest:
-            chunk_id = chunk.get("chunk_id")
+            manifest_chunk_id = chunk.get("chunk_id")
             chunk_path = chunk.get("chunk_path")
             chunk_source = chunk.get("source", {})
-            if not chunk_id or not chunk_path:
+            if not manifest_chunk_id or not chunk_path:
                 continue
 
+            chunk_id = f"{document_id}:{manifest_chunk_id}"
             chunk_text = self.file_parser.read_chunk_text(
                 chunk_path,
                 max_chars=self.INDEX_CHUNK_PREVIEW_CHARS * 2,

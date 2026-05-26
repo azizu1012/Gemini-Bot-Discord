@@ -141,24 +141,29 @@ class FileParserService:
             self.logger.error(f"Error extracting text from '{filename}': {e}")
             return {"filename": filename, "content": f"[LỖI: Không thể trích xuất văn bản từ file '{filename}'. Lỗi: {e}]"}
 
-    async def prepare_file_for_indexing(self, attachment: discord.Attachment, base_name: str = "") -> Dict[str, Any]:
+    async def prepare_file_for_indexing(
+        self,
+        attachment: discord.Attachment,
+        base_name: str = "",
+        chunk_dir: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Download and chunk a file for indexing."""
         filename = attachment.filename
         safe_filename = base_name or self._safe_filename(filename)
         local_path = os.path.join(self.storage_path, safe_filename)
+        resolved_chunk_dir = chunk_dir or os.path.join(self.storage_path, f"{safe_filename}_chunks")
 
         local_path, download_error = await self._download_attachment(attachment, local_path)
         if download_error:
             return {"filename": filename, "error": download_error}
 
         file_extension = os.path.splitext(filename)[1].lower()
-        chunk_dir = "" # chunk_dir is no longer used, we store chunks in memory for postgres insertion
 
         try:
             chunk_manifest, security_report, truncated = self._build_chunk_manifest(
                 local_path,
                 file_extension,
-                chunk_dir,
+                resolved_chunk_dir,
             )
             return {
                 "filename": filename,
@@ -174,14 +179,19 @@ class FileParserService:
             return {"filename": filename, "error": f"[LỖI: Không thể chuẩn bị file để index: {e}]"}
 
     async def _download_attachment(self, attachment: discord.Attachment, local_path: str) -> Tuple[Optional[str], Optional[str]]:
-        if attachment.size > self.MAX_FILE_SIZE_BYTES:
+        attachment_size = int(getattr(attachment, "size", 0) or 0)
+        if attachment_size > self.MAX_FILE_SIZE_BYTES:
             self.logger.warning(
-                f"File {attachment.filename} ({(attachment.size / 1024 / 1024):.2f} MB) too large. Skipping."
+                f"File {attachment.filename} ({(attachment_size / 1024 / 1024):.2f} MB) too large. Skipping."
             )
             return None, f"[LỖI: File quá lớn, giới hạn {self.MAX_FILE_SIZE_BYTES // 1024 // 1024}MB]"
 
+        download_url = getattr(attachment, "url", "") or getattr(attachment, "proxy_url", "")
+        if not download_url:
+            return None, "[LỖI: Discord không cung cấp URL tải file]"
+
         try:
-            required_space_mb = (attachment.size // (1024 * 1024)) + 10
+            required_space_mb = (attachment_size // (1024 * 1024)) + 10
             if self.cleanup_mgr.get_disk_free_space_mb() < required_space_mb:
                 self.logger.warning(f"Disk full. Cannot download new file. Need {required_space_mb}MB.")
                 return None, "[LỖI: Server sắp hết bộ nhớ. Vui lòng thử lại sau.]"
@@ -189,7 +199,7 @@ class FileParserService:
             os.makedirs(self.storage_path, exist_ok=True)
 
             async with aiohttp.ClientSession() as session:
-                async with session.get(attachment.url) as resp:
+                async with session.get(download_url) as resp:
                     if resp.status == 200:
                         data = await resp.read()
                         with open(local_path, 'wb') as f:
@@ -393,8 +403,9 @@ class FileParserService:
         return "\n".join(report_lines)
 
     def _write_chunk(self, chunk_dir: str, chunk_id: str, text: str) -> str:
-        os.makedirs(chunk_dir, exist_ok=True)
-        chunk_path = os.path.join(chunk_dir, f"{chunk_id}.txt")
+        resolved_chunk_dir = chunk_dir or os.path.join(self.storage_path, "chunks")
+        os.makedirs(resolved_chunk_dir, exist_ok=True)
+        chunk_path = os.path.join(resolved_chunk_dir, f"{chunk_id}.txt")
         with open(chunk_path, 'w', encoding='utf-8') as f:
             f.write(text)
         return chunk_path
