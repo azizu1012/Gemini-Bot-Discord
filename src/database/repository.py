@@ -277,6 +277,8 @@ class DatabaseRepository:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_metadata_gin ON user_notes USING gin (metadata)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_keywords ON rag_chunks USING GIN (keywords)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_summary_trgm ON rag_chunks USING GIN (chunk_summary gin_trgm_ops)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_web_history_user_time ON web_history (user_id, timestamp DESC)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_logs_user_time ON usage_logs (user_id, timestamp DESC)")
 
             env_keys = self._collect_env_keys()
             for key, provider in env_keys:
@@ -614,7 +616,7 @@ class DatabaseRepository:
                 """
                 SELECT note_id, content, metadata, created_at
                 FROM user_notes
-                WHERE user_id = $1 AND metadata->>'filename' = $2
+                WHERE user_id = $1 AND metadata @> jsonb_build_object('filename', $2::text)
                 LIMIT 1
                 """,
                 user_id,
