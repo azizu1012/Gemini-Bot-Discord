@@ -1,6 +1,8 @@
 import asyncio
 import io
 import json
+import random
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -11,10 +13,36 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.core.config import Config, logger
+from src.core.custom_endpoint import CUSTOM_ENDPOINT_PRESETS, normalize_custom_endpoint, resolve_custom_endpoint_preset
 from src.database.repository import DatabaseRepository
 from src.managers.cleanup_manager import CleanupManager
 from src.services.health_checker import get_health_checker
 from src.voice.voice_lock import VoiceLockManager
+
+
+CUSTOM_ENDPOINT_PRESET_LABELS = {
+    "manual": "Nhập tay endpoint",
+    "lm_studio": "LM Studio local",
+    "ollama": "Ollama local",
+}
+
+CUSTOM_ENDPOINT_DUMMY_KEYS = {
+    "lm_studio": "lm-studio-local",
+    "ollama": "ollama-local",
+}
+
+
+def _custom_endpoint_preset_label(preset: Any) -> str:
+    return CUSTOM_ENDPOINT_PRESET_LABELS.get(str(preset or "manual").strip().lower(), CUSTOM_ENDPOINT_PRESET_LABELS["manual"])
+
+
+def _custom_endpoint_dummy_key(preset: Any) -> str:
+    return CUSTOM_ENDPOINT_DUMMY_KEYS.get(str(preset or "manual").strip().lower(), "")
+
+
+def _clean_custom_endpoint_preset(preset: Any) -> str:
+    clean = str(preset or "manual").strip().lower()
+    return clean if clean in CUSTOM_ENDPOINT_PRESETS else "manual"
 
 
 def _flatten_note_preview(note: Dict[str, Any], max_len: int = 80) -> str:
@@ -288,6 +316,417 @@ class ImageHistoryView(discord.ui.View):
         self.add_item(ImageHistorySelect(history))
 
 
+class CustomApiConfigView(discord.ui.View):
+    def __init__(
+        self,
+        models: List[Dict[str, Any]],
+        current_config: Dict[str, Any],
+        db_repo: DatabaseRepository,
+        router: Any,
+        updated_by: str,
+        provider_config: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(timeout=300)
+        self.models = list(models[:25])
+        self.db_repo = db_repo
+        self.router = router
+        self.updated_by = updated_by
+        self.provider_config = provider_config or {}
+        self.reasoning_model_id = self._initial_model_id(current_config.get("reasoning_model_id"))
+        self.final_model_id = self._initial_model_id(current_config.get("final_model_id"))
+        self.image_generator_model_id = self._initial_model_id(current_config.get("image_generator_model_id"), allow_none=True)
+        self._rebuild_components()
+
+    def _initial_model_id(self, value: Any, allow_none: bool = False) -> Optional[str]:
+        model_ids = [str(model.get("model_id")) for model in self.models if model.get("model_id")]
+        selected = str(value or "").strip()
+        if selected in model_ids:
+            return selected
+        if allow_none:
+            return None
+        return model_ids[0] if model_ids else None
+
+    def _option_label(self, model: Dict[str, Any]) -> str:
+        label = str(model.get("display_name") or model.get("model_id") or "model")
+        return label[:97] + "..." if len(label) > 100 else label
+
+    def _option_description(self, model: Dict[str, Any]) -> str:
+        model_id = str(model.get("model_id") or "")
+        return model_id[:97] + "..." if len(model_id) > 100 else model_id
+
+    def _model_id_from_value(self, value: str) -> Optional[str]:
+        if value == "__none__":
+            return None
+        try:
+            idx = int(value)
+        except (TypeError, ValueError):
+            return None
+        if 0 <= idx < len(self.models):
+            return str(self.models[idx].get("model_id") or "") or None
+        return None
+
+    def _build_options(self, selected_model_id: Optional[str], include_none: bool = False) -> List[discord.SelectOption]:
+        options: List[discord.SelectOption] = []
+        if include_none:
+            options.append(discord.SelectOption(
+                label="Không dùng custom image generator",
+                description="Giữ luồng Gemini Imagen mặc định hoặc bỏ qua custom image model.",
+                value="__none__",
+                default=selected_model_id is None,
+            ))
+        for idx, model in enumerate(self.models):
+            model_id = str(model.get("model_id") or "")
+            if not model_id:
+                continue
+            options.append(discord.SelectOption(
+                label=self._option_label(model),
+                description=self._option_description(model),
+                value=str(idx),
+                default=model_id == selected_model_id,
+            ))
+        return options[:25]
+
+    def summary_text(self) -> str:
+        image_text = self.image_generator_model_id or "Không dùng custom image generator"
+        endpoint_preset = _clean_custom_endpoint_preset(self.provider_config.get("endpoint_preset"))
+        endpoint = str(self.provider_config.get("normalized_base_url") or self.provider_config.get("endpoint_base_url") or "chưa lưu")
+        return (
+            "⚙️ **Custom API Config**\n"
+            "Chọn model custom đang alive cho từng vai trò rồi bấm Save.\n\n"
+            f"- Đang chạy: `{_custom_endpoint_preset_label(endpoint_preset)}`\n"
+            f"- Endpoint: `{endpoint}`\n"
+            f"- Reasoning: `{self.reasoning_model_id or 'chưa chọn'}`\n"
+            f"- Final output: `{self.final_model_id or 'chưa chọn'}`\n"
+            f"- Image generator: `{image_text}`\n\n"
+            f"Model alive hiển thị: `{len(self.models)}`"
+        )
+
+    def _rebuild_components(self) -> None:
+        self.clear_items()
+
+        reasoning_select = discord.ui.Select(
+            placeholder="Chọn model reasoning",
+            min_values=1,
+            max_values=1,
+            options=self._build_options(self.reasoning_model_id),
+            disabled=not self.models,
+        )
+        final_select = discord.ui.Select(
+            placeholder="Chọn model final output",
+            min_values=1,
+            max_values=1,
+            options=self._build_options(self.final_model_id),
+            disabled=not self.models,
+        )
+        image_select = discord.ui.Select(
+            placeholder="Chọn model image generator nếu có",
+            min_values=1,
+            max_values=1,
+            options=self._build_options(self.image_generator_model_id, include_none=True),
+            disabled=not self.models,
+        )
+
+        async def on_reasoning(select_interaction: discord.Interaction):
+            self.reasoning_model_id = self._model_id_from_value(reasoning_select.values[0])
+            self._rebuild_components()
+            await select_interaction.response.edit_message(content=self.summary_text(), view=self)
+
+        async def on_final(select_interaction: discord.Interaction):
+            self.final_model_id = self._model_id_from_value(final_select.values[0])
+            self._rebuild_components()
+            await select_interaction.response.edit_message(content=self.summary_text(), view=self)
+
+        async def on_image(select_interaction: discord.Interaction):
+            self.image_generator_model_id = self._model_id_from_value(image_select.values[0])
+            self._rebuild_components()
+            await select_interaction.response.edit_message(content=self.summary_text(), view=self)
+
+        async def on_save(button_interaction: discord.Interaction):
+            alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
+            alive_model_ids = {str(model.get("model_id")) for model in alive_models if model.get("model_id")}
+            required = [self.reasoning_model_id, self.final_model_id]
+            if not all(model_id and model_id in alive_model_ids for model_id in required):
+                await button_interaction.response.send_message(
+                    "⚠️ Model reasoning/final đã không còn alive hoặc chưa được chọn. Hãy chạy /health_check rồi mở lại config.",
+                    ephemeral=True,
+                )
+                return
+            if self.image_generator_model_id and self.image_generator_model_id not in alive_model_ids:
+                await button_interaction.response.send_message(
+                    "⚠️ Model image generator đã không còn alive. Hãy chọn lại hoặc để trống.",
+                    ephemeral=True,
+                )
+                return
+            saved = await self.db_repo.set_bot_model_config(
+                self.reasoning_model_id,
+                self.final_model_id,
+                self.image_generator_model_id,
+                self.updated_by,
+            )
+            await self.router.refresh_custom_models_from_db(force=True)
+            endpoint_preset = _clean_custom_endpoint_preset(self.provider_config.get("endpoint_preset"))
+            endpoint = str(self.provider_config.get("normalized_base_url") or self.provider_config.get("endpoint_base_url") or "chưa lưu")
+            await button_interaction.response.edit_message(
+                content=(
+                    "✅ Đã lưu Custom API Config.\n"
+                    f"- Endpoint mode: `{_custom_endpoint_preset_label(endpoint_preset)}`\n"
+                    f"- Endpoint: `{endpoint}`\n"
+                    f"- Reasoning: `{saved.get('reasoning_model_id')}`\n"
+                    f"- Final output: `{saved.get('final_model_id')}`\n"
+                    f"- Image generator: `{saved.get('image_generator_model_id') or 'Không dùng custom image generator'}`"
+                ),
+                view=None,
+            )
+
+        reasoning_select.callback = on_reasoning
+        final_select.callback = on_final
+        image_select.callback = on_image
+        self.add_item(reasoning_select)
+        self.add_item(final_select)
+        self.add_item(image_select)
+
+        save_button = discord.ui.Button(label="Save", style=discord.ButtonStyle.success)
+        save_button.callback = on_save
+        self.add_item(save_button)
+
+
+class CustomApiEndpointModal(discord.ui.Modal):
+    def __init__(
+        self,
+        db_repo: DatabaseRepository,
+        health_checker: Any,
+        router: Any,
+        updated_by: str,
+        endpoint_preset: str = "manual",
+        initial_endpoint: str = "",
+    ):
+        self.endpoint_preset = _clean_custom_endpoint_preset(endpoint_preset)
+        preset_endpoint = resolve_custom_endpoint_preset(self.endpoint_preset)
+        endpoint_default = str(initial_endpoint or preset_endpoint or "")
+        super().__init__(title=f"Custom API - {_custom_endpoint_preset_label(self.endpoint_preset)}")
+        self.db_repo = db_repo
+        self.health_checker = health_checker
+        self.router = router
+        self.updated_by = updated_by
+        self.endpoint_input = discord.ui.TextInput(
+            label="Endpoint custom API",
+            placeholder="https://provider.example/ hoặc http://host:port/",
+            default=endpoint_default[:4000],
+            required=True,
+            max_length=4000,
+        )
+        api_key_required = self.endpoint_preset == "manual"
+        self.api_key_input = discord.ui.TextInput(
+            label="API key",
+            placeholder="Bỏ trống với LM Studio/Ollama local nếu server không kiểm tra auth" if not api_key_required else "Nhập key của endpoint OpenAI-compatible",
+            required=api_key_required,
+            max_length=4000,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(self.endpoint_input)
+        self.add_item(self.api_key_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        endpoint_raw = str(self.endpoint_input.value or "").strip()
+        api_key = str(self.api_key_input.value or "").strip()
+        if not api_key and self.endpoint_preset != "manual":
+            api_key = _custom_endpoint_dummy_key(self.endpoint_preset)
+        if not api_key:
+            await interaction.followup.send("⚠️ API key không được để trống với endpoint nhập tay.", ephemeral=True)
+            return
+
+        try:
+            normalized_endpoint = normalize_custom_endpoint(endpoint_raw)
+        except ValueError as endpoint_error:
+            await interaction.followup.send(f"⚠️ Endpoint không hợp lệ: {endpoint_error}", ephemeral=True)
+            return
+
+        scan_result = await self.health_checker.scan_openai_models(api_key, normalized_endpoint)
+        models = list(scan_result.get("models") or [])
+        if not scan_result.get("scan_success") or not scan_result.get("alive") or not models:
+            await interaction.followup.send(
+                "⚠️ Không áp dụng cấu hình mới vì scan `/v1/models` thất bại.\n"
+                f"Lỗi: `{str(scan_result.get('error') or 'không tìm thấy model alive')[:500]}`",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            from datetime import timezone
+
+            key_row = await self.db_repo.upsert_provider_api_key(api_key, provider="openai")
+            await self.db_repo.deactivate_other_provider_keys(provider="openai", keep_key_id=key_row.get("key_id"))
+            provider_config = await self.db_repo.set_custom_provider_config(
+                provider="openai",
+                endpoint_base_url=endpoint_raw,
+                normalized_base_url=normalized_endpoint,
+                active_key_id=key_row.get("key_id"),
+                is_enabled=True,
+                last_scan_ok=True,
+                last_scan_error="",
+                updated_by=self.updated_by,
+                endpoint_preset=self.endpoint_preset,
+            )
+            checked_at = datetime.now(timezone.utc)
+            await self.db_repo.upsert_custom_api_models(
+                provider="openai",
+                models=models,
+                checked_at=checked_at,
+            )
+            await self.db_repo.mark_missing_custom_api_models_dead(
+                provider="openai",
+                seen_model_ids=[
+                    str(model.get("id") or model.get("model") or model.get("name") or "").strip()
+                    for model in models
+                    if str(model.get("id") or model.get("model") or model.get("name") or "").strip()
+                ],
+                checked_at=checked_at,
+            )
+            await self.router.refresh_custom_provider_config(force=True)
+            await self.router.refresh_custom_models_from_db(force=True)
+            await self.health_checker.gemini_mgr.clear_custom_api_clients()
+        except Exception as save_error:
+            logger.error(f"Failed to save custom provider config: {save_error}")
+            await interaction.followup.send(f"⚠️ Scan model thành công nhưng lưu DB thất bại: `{save_error}`", ephemeral=True)
+            return
+
+        alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
+        current_config = await self.db_repo.get_bot_model_config()
+        view = CustomApiConfigView(
+            alive_models,
+            current_config,
+            self.db_repo,
+            self.router,
+            self.updated_by,
+            provider_config=provider_config,
+        )
+        await interaction.followup.send(
+            "✅ Đã lưu endpoint/API key và quét model thành công.\n"
+            f"Endpoint mode: `{_custom_endpoint_preset_label(self.endpoint_preset)}`\n"
+            f"Endpoint đang dùng: `{normalized_endpoint}`\n\n"
+            f"{view.summary_text()}",
+            view=view,
+            ephemeral=True,
+        )
+
+
+class CustomApiEndpointPresetView(discord.ui.View):
+    def __init__(
+        self,
+        db_repo: DatabaseRepository,
+        health_checker: Any,
+        router: Any,
+        updated_by: str,
+        provider_config: Optional[Dict[str, Any]] = None,
+        legacy_endpoint: str = "",
+    ):
+        super().__init__(timeout=180)
+        self.db_repo = db_repo
+        self.health_checker = health_checker
+        self.router = router
+        self.updated_by = updated_by
+        self.provider_config = provider_config or {}
+        self.legacy_endpoint = str(legacy_endpoint or "").strip()
+        self.current_preset = _clean_custom_endpoint_preset(self.provider_config.get("endpoint_preset"))
+        self._build_components()
+
+    def summary_text(self) -> str:
+        endpoint = str(self.provider_config.get("normalized_base_url") or self.provider_config.get("endpoint_base_url") or self.legacy_endpoint or "chưa cấu hình")
+        is_enabled = bool(self.provider_config.get("is_enabled")) if self.provider_config else False
+        status_text = "ĐÃ BẬT" if is_enabled else "ĐANG TẮT"
+        return (
+            "Chọn loại endpoint custom API trước khi nhập chi tiết hoặc bấm **Dùng cấu hình hiện tại** để bỏ qua.\n\n"
+            f"- Đang chạy: `{_custom_endpoint_preset_label(self.current_preset)}` ({status_text})\n"
+            f"- Endpoint hiện tại: `{endpoint}`\n\n"
+            "Manual giữ chuẩn OpenAI-compatible cho provider production. LM Studio/Ollama chỉ là preset local để điền nhanh endpoint."
+        )
+
+    def _initial_endpoint_for_preset(self, preset: str) -> str:
+        clean_preset = _clean_custom_endpoint_preset(preset)
+        stored_endpoint = str(self.provider_config.get("endpoint_base_url") or self.provider_config.get("normalized_base_url") or "").strip()
+        if clean_preset == self.current_preset and stored_endpoint:
+            return stored_endpoint
+        preset_endpoint = resolve_custom_endpoint_preset(clean_preset)
+        if preset_endpoint:
+            return preset_endpoint
+        return self.legacy_endpoint if clean_preset == "manual" else ""
+
+    def _build_components(self) -> None:
+        preset_select = discord.ui.Select(
+            placeholder="Chọn loại endpoint custom API",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label="Nhập tay endpoint",
+                    description="Dùng provider production hoặc endpoint OpenAI-compatible bất kỳ.",
+                    value="manual",
+                    default=self.current_preset == "manual",
+                ),
+                discord.SelectOption(
+                    label="LM Studio local",
+                    description="Mặc định http://127.0.0.1:1234/; API key có thể để trống.",
+                    value="lm_studio",
+                    default=self.current_preset == "lm_studio",
+                ),
+                discord.SelectOption(
+                    label="Ollama local",
+                    description="Mặc định http://127.0.0.1:11434/; API key có thể để trống.",
+                    value="ollama",
+                    default=self.current_preset == "ollama",
+                ),
+            ],
+        )
+
+        async def on_select(select_interaction: discord.Interaction):
+            selected_preset = _clean_custom_endpoint_preset(preset_select.values[0])
+            await select_interaction.response.send_modal(CustomApiEndpointModal(
+                db_repo=self.db_repo,
+                health_checker=self.health_checker,
+                router=self.router,
+                updated_by=self.updated_by,
+                endpoint_preset=selected_preset,
+                initial_endpoint=self._initial_endpoint_for_preset(selected_preset),
+            ))
+
+        preset_select.callback = on_select
+        self.add_item(preset_select)
+
+        skip_disabled = not self.provider_config or not self.provider_config.get("normalized_base_url") or self.provider_config.get("active_key_id") is None
+        skip_button = discord.ui.Button(label="Dùng cấu hình hiện tại", style=discord.ButtonStyle.secondary, disabled=skip_disabled)
+
+        async def on_skip(button_interaction: discord.Interaction):
+            if skip_disabled:
+                await button_interaction.response.send_message(
+                    "⚠️ Chưa có cấu hình endpoint/API key hợp lệ để dùng lại. Hãy chọn mode và nhập lại endpoint.",
+                    ephemeral=True,
+                )
+                return
+
+            alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
+            if not alive_models:
+                await button_interaction.response.send_message(
+                    "⚠️ Chưa có model alive. Hãy chạy /health_check rồi thử lại.",
+                    ephemeral=True,
+                )
+                return
+
+            current_config = await self.db_repo.get_bot_model_config()
+            view = CustomApiConfigView(
+                alive_models,
+                current_config,
+                self.db_repo,
+                self.router,
+                self.updated_by,
+                provider_config=self.provider_config,
+            )
+            await button_interaction.response.edit_message(content=view.summary_text(), view=view)
+
+        skip_button.callback = on_skip
+        self.add_item(skip_button)
+
+
 class BotCore:
     """Core bot initialization and event handling for Kafka-based architecture."""
 
@@ -297,6 +736,8 @@ class BotCore:
         self.db_repo = DatabaseRepository(self.config.DATABASE_URL)
         self.cleanup_mgr = CleanupManager()
         self.health_checker = get_health_checker()
+        self.health_checker.db_repo = self.db_repo
+        self.health_checker.router.set_db_repo(self.db_repo)
 
         self.confirmation_pending: Dict[str, Dict[str, Any]] = {}
         self.admin_confirmation_pending: Dict[str, Dict[str, Any]] = {}
@@ -311,6 +752,9 @@ class BotCore:
         self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="bot-core")
         self.active_interactions: Dict[str, discord.Interaction] = {}
         self.active_typing_tasks: Dict[str, asyncio.Task] = {}
+        self._outgoing_queues: Dict[str, asyncio.Queue] = {}
+        self._outgoing_senders: Dict[str, asyncio.Task] = {}
+        self._delivery_state: Dict[str, Dict[str, Any]] = {}
         self._consume_task: Optional[asyncio.Task] = None
 
         self.voice_lock_manager: Optional[VoiceLockManager] = self._build_voice_lock_manager()
@@ -365,6 +809,87 @@ class BotCore:
             if not m.bot and current.lower() in m.display_name.lower():
                 members.append(app_commands.Choice(name=m.display_name[:100], value=str(m.id)))
         return members[:25]
+
+    async def _resolve_user_display_name(self, user_id: int, channel: Optional[discord.abc.GuildChannel]) -> str:
+        if channel and getattr(channel, "guild", None):
+            guild = channel.guild
+            member = guild.get_member(user_id)
+            if member is None:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except Exception:
+                    member = None
+            if member is not None:
+                return member.display_name
+
+        user = self.bot.get_user(user_id)
+        if user is None:
+            try:
+                user = await self.bot.fetch_user(user_id)
+            except Exception:
+                user = None
+        if user is not None:
+            return getattr(user, "display_name", None) or user.name
+
+        return f"User {user_id}"
+
+    async def _sanitize_mentions(
+        self,
+        content: Optional[str],
+        channel: Optional[discord.abc.GuildChannel],
+        allow_user_mentions: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        if not content:
+            return content
+
+        allow_set = {str(uid) for uid in (allow_user_mentions or []) if str(uid)}
+
+        content = content.replace("@everyone", "everyone").replace("@here", "here")
+
+        role_ids = set(re.findall(r"<@&(\d+)>", content))
+        channel_ids = set(re.findall(r"<#(\d+)>", content))
+        user_ids = set(re.findall(r"<@!?(\d+)>", content))
+
+        role_map: Dict[str, str] = {}
+        if channel and getattr(channel, "guild", None):
+            guild = channel.guild
+            for rid in role_ids:
+                role = guild.get_role(int(rid))
+                role_map[rid] = role.name if role else f"role {rid}"
+            for cid in channel_ids:
+                ch = guild.get_channel(int(cid))
+                channel_name = f"#{ch.name}" if ch else f"channel {cid}"
+                role_map[cid] = channel_name
+        else:
+            for rid in role_ids:
+                role_map[rid] = f"role {rid}"
+            for cid in channel_ids:
+                role_map[cid] = f"channel {cid}"
+
+        user_map: Dict[str, str] = {}
+        for uid in user_ids:
+            if uid in allow_set:
+                continue
+            user_map[uid] = await self._resolve_user_display_name(int(uid), channel)
+
+        def replace_user(match: re.Match) -> str:
+            uid = match.group(1)
+            if uid in allow_set:
+                return f"<@{uid}>"
+            return user_map.get(uid, f"User {uid}")
+
+        def replace_role(match: re.Match) -> str:
+            rid = match.group(1)
+            return role_map.get(rid, f"role {rid}")
+
+        def replace_channel(match: re.Match) -> str:
+            cid = match.group(1)
+            return role_map.get(cid, f"channel {cid}")
+
+        content = re.sub(r"<@!?(\d+)>", replace_user, content)
+        content = re.sub(r"<@&(\d+)>", replace_role, content)
+        content = re.sub(r"<#(\d+)>", replace_channel, content)
+        return content
 
     async def _voice_lock_enforce_loop(self):
         while not self.bot.is_closed():
@@ -586,12 +1111,11 @@ class BotCore:
         if not action:
             return
 
-        # Hủy typing loop ngầm của user nếu nhận được reply hoặc lệnh tắt typing
-        if user_id in self.active_typing_tasks:
-            if action in ("reply", "slash_reply") or (action == "typing" and not payload.get("typing")):
-                self.logger.info(f"Cancelling active typing task for user {user_id}")
-                self.active_typing_tasks[user_id].cancel()
-                self.active_typing_tasks.pop(user_id, None)
+        if action in ("reply", "reply_batch"):
+            queue = self._get_outgoing_queue(user_id)
+            await queue.put(payload)
+            self._ensure_sender_task(user_id)
+            return
 
         try:
             if action == "typing" and channel_id_str:
@@ -601,25 +1125,8 @@ class BotCore:
                     channel = await self.bot.fetch_channel(channel_id)
                 if channel and bool(payload.get("typing")):
                     await self.bot.http.send_typing(channel.id)
-
-            elif action == "reply" and channel_id_str:
-                channel_id = int(channel_id_str)
-                channel = self.bot.get_channel(channel_id)
-                if not channel:
-                    channel = await self.bot.fetch_channel(channel_id)
-                if channel:
-                    content = payload.get("content")
-                    ref_id_str = payload.get("reference_message_id")
-
-                    reference = None
-                    if ref_id_str:
-                        reference = discord.MessageReference(
-                            message_id=int(ref_id_str),
-                            channel_id=channel_id,
-                            fail_if_not_exists=False
-                        )
-
-                    await channel.send(content=content, reference=reference, mention_author=False)
+                if channel and not bool(payload.get("typing")):
+                    self._cancel_typing_task(user_id)
 
             elif action == "slash_reply":
                 interaction_id = payload.get("interaction_id")
@@ -645,15 +1152,289 @@ class BotCore:
                 interaction = self.active_interactions.pop(interaction_id, None)
                 if interaction:
                     self.logger.info(f"Delivering slash_reply for interaction {interaction_id} to user {interaction.user.id}")
+                    content = await self._sanitize_mentions(content, interaction.channel, payload.get("allow_user_mentions") or [])
                     if files:
                         await interaction.followup.send(content=content, embed=embed, files=files, ephemeral=ephemeral)
                     else:
                         await interaction.followup.send(content=content, ephemeral=ephemeral)
+                    self._cancel_typing_task(str(interaction.user.id))
                 else:
                     self.logger.warning(f"Could not find active interaction for ID {interaction_id}")
 
         except Exception as e:
             self.logger.error(f"Failed to handle outgoing Kafka payload: {e}")
+
+    def _get_outgoing_queue(self, user_id: str) -> asyncio.Queue:
+        queue = self._outgoing_queues.get(user_id)
+        if queue is None:
+            queue = asyncio.Queue()
+            self._outgoing_queues[user_id] = queue
+        return queue
+
+    def _ensure_sender_task(self, user_id: str) -> None:
+        task = self._outgoing_senders.get(user_id)
+        if task and not task.done():
+            return
+        self._outgoing_senders[user_id] = asyncio.create_task(self._outgoing_sender_loop(user_id))
+
+    def _cancel_typing_task(self, user_id: str) -> None:
+        task = self.active_typing_tasks.pop(user_id, None)
+        if task:
+            self.logger.info(f"Cancelling active typing task for user {user_id}")
+            task.cancel()
+
+    async def _outgoing_sender_loop(self, user_id: str) -> None:
+        queue = self._outgoing_queues.get(user_id)
+        if queue is None:
+            return
+        try:
+            while True:
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=15)
+                except asyncio.TimeoutError:
+                    if queue.empty():
+                        break
+                    continue
+
+                try:
+                    await self._process_outgoing_payload(payload)
+                finally:
+                    queue.task_done()
+        finally:
+            if queue.empty():
+                self._outgoing_queues.pop(user_id, None)
+                self._outgoing_senders.pop(user_id, None)
+
+    async def _process_outgoing_payload(self, payload: dict) -> None:
+        action = payload.get("action")
+        if not action:
+            return
+
+        if action == "reply_batch":
+            await self._process_reply_batch(payload)
+            return
+
+        if action == "reply":
+            await self._process_reply(payload)
+            return
+
+    async def _process_reply(self, payload: dict) -> None:
+        channel_id_str = payload.get("channel_id")
+        user_id = payload.get("user_id") or "unknown"
+        if not channel_id_str:
+            return
+
+        channel_id = int(channel_id_str)
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            channel = await self.bot.fetch_channel(channel_id)
+        if not channel:
+            return
+
+        content = payload.get("content")
+        allow_user_mentions = payload.get("allow_user_mentions") or []
+        content = await self._sanitize_mentions(content, channel, allow_user_mentions)
+        ref_id_str = payload.get("reference_message_id")
+
+        reference = None
+        if ref_id_str:
+            reference = discord.MessageReference(
+                message_id=int(ref_id_str),
+                channel_id=channel_id,
+                fail_if_not_exists=False,
+            )
+
+        sent_message = await self._send_message_with_retry(
+            channel,
+            content=content,
+            reference=reference,
+            mention_author=False,
+            label="reply",
+        )
+        if sent_message:
+            self._cancel_typing_task(user_id)
+
+    async def _process_reply_batch(self, payload: dict) -> None:
+        channel_id_str = payload.get("channel_id")
+        user_id = payload.get("user_id") or "unknown"
+        if not channel_id_str:
+            return
+
+        channel_id = int(channel_id_str)
+        channel = self.bot.get_channel(channel_id)
+        if not channel:
+            channel = await self.bot.fetch_channel(channel_id)
+        if not channel:
+            return
+
+        reply_group_id = str(payload.get("reply_group_id") or payload.get("reference_message_id") or "unknown")
+        allow_user_mentions = payload.get("allow_user_mentions") or []
+        mode_hint = str(payload.get("mode_hint") or "").strip().lower()
+
+        chunk_items = payload.get("chunk_items") or []
+        chunks = payload.get("chunks") or []
+
+        items: List[Dict[str, Any]] = []
+        if isinstance(chunk_items, list) and chunk_items:
+            for item in chunk_items:
+                if not isinstance(item, dict):
+                    continue
+                items.append({
+                    "index": int(item.get("index", len(items))),
+                    "content": item.get("content"),
+                })
+        else:
+            items = [{"index": idx, "content": chunk} for idx, chunk in enumerate(chunks)]
+
+        if not items:
+            return
+
+        items.sort(key=lambda x: x.get("index", 0))
+        chunk_total = int(payload.get("chunk_total") or len(items))
+
+        state = self._delivery_state.setdefault(
+            reply_group_id,
+            {"sent": set(), "last_index": -1, "created_at": datetime.utcnow()},
+        )
+        sent_set = state.get("sent", set())
+        start_index = int(state.get("last_index", -1)) + 1
+
+        ref_id_str = payload.get("reference_message_id")
+        reference = None
+        if ref_id_str:
+            reference = discord.MessageReference(
+                message_id=int(ref_id_str),
+                channel_id=channel_id,
+                fail_if_not_exists=False,
+            )
+
+        for item in items:
+            idx = int(item.get("index", 0))
+            if idx < start_index or idx in sent_set:
+                continue
+            content = item.get("content")
+            content = await self._sanitize_mentions(content, channel, allow_user_mentions)
+            sent_ok = False
+            if idx == 0 and chunk_total == 1 and mode_hint == "edit_then_batch":
+                placeholder = "..."
+                sent_message = await self._send_message_with_retry(
+                    channel,
+                    content=placeholder,
+                    reference=reference,
+                    mention_author=False,
+                    label="reply_batch_placeholder",
+                )
+                if sent_message:
+                    edited = await self._edit_message_with_retry(
+                        sent_message,
+                        content=content,
+                        label="reply_batch_edit",
+                    )
+                    if edited:
+                        sent_ok = True
+                    else:
+                        fallback = await self._send_message_with_retry(
+                            channel,
+                            content=content,
+                            reference=None,
+                            mention_author=False,
+                            label="reply_batch_edit_fallback",
+                        )
+                        sent_ok = fallback is not None
+            else:
+                sent_message = await self._send_message_with_retry(
+                    channel,
+                    content=content,
+                    reference=reference if idx == 0 else None,
+                    mention_author=False,
+                    label="reply_batch",
+                )
+                sent_ok = sent_message is not None
+
+            if not sent_ok:
+                break
+
+            if idx == 0:
+                self._cancel_typing_task(user_id)
+
+            sent_set.add(idx)
+            state["last_index"] = idx
+
+        if int(state.get("last_index", -1)) >= chunk_total - 1:
+            self._delivery_state.pop(reply_group_id, None)
+
+    async def _send_message_with_retry(
+        self,
+        channel: discord.abc.Messageable,
+        *,
+        content: Optional[str],
+        reference: Optional[discord.MessageReference],
+        mention_author: bool,
+        label: str,
+        max_attempts: int = 3,
+        base_delay: float = 0.35,
+    ) -> Optional[discord.Message]:
+        async def _do_send():
+            return await channel.send(content=content, reference=reference, mention_author=mention_author)
+
+        try:
+            return await self._run_with_retry(_do_send, label, max_attempts, base_delay)
+        except Exception as e:
+            self.logger.error(f"Failed to {label}: {e}")
+            return None
+
+    async def _edit_message_with_retry(
+        self,
+        message: discord.Message,
+        *,
+        content: Optional[str],
+        label: str,
+        max_attempts: int = 3,
+        base_delay: float = 0.35,
+    ) -> bool:
+        async def _do_edit():
+            await message.edit(content=content)
+            return True
+
+        try:
+            await self._run_with_retry(_do_edit, label, max_attempts, base_delay)
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to {label}: {e}")
+            return False
+
+    async def _run_with_retry(
+        self,
+        coro_factory,
+        label: str,
+        max_attempts: int,
+        base_delay: float,
+    ):
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await coro_factory()
+            except discord.HTTPException as e:
+                last_exc = e
+                status = getattr(e, "status", None)
+                if status == 429:
+                    retry_after = getattr(e, "retry_after", None)
+                    if retry_after is None:
+                        headers = getattr(getattr(e, "response", None), "headers", {}) or {}
+                        retry_after = float(headers.get("Retry-After", "1"))
+                    await asyncio.sleep(max(0.2, float(retry_after or 1.0)))
+                    continue
+                if status and 500 <= status < 600:
+                    await asyncio.sleep(base_delay * (2 ** (attempt - 1)) + random.uniform(0, 0.25))
+                    continue
+                break
+            except (asyncio.TimeoutError, OSError, discord.DiscordException) as e:
+                last_exc = e
+                await asyncio.sleep(base_delay * (2 ** (attempt - 1)) + random.uniform(0, 0.25))
+
+        if last_exc:
+            raise last_exc
+        return None
 
     async def shutdown(self):
         if self._consume_task and not self._consume_task.done():
@@ -711,20 +1492,62 @@ class BotCore:
         @is_moderator_or_admin()
         async def health_check_slash(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
-            import os
+            from src.core.api_router import get_api_router
 
-            if os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() != "true":
-                await interaction.followup.send("⚠️ Custom endpoint đang tắt. Hãy bật bằng lệnh /enable_custom_api trước.", ephemeral=True)
+            router = get_api_router()
+            provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
+            if not await router.is_custom_enabled_async(force=True):
+                if provider_config is None:
+                    await interaction.followup.send("⚠️ Chưa có cấu hình custom provider. Hãy chạy /custom_api_config để nhập endpoint/API key trước.", ephemeral=True)
+                else:
+                    await interaction.followup.send("⚠️ Custom provider đang tắt hoặc thiếu endpoint/key. Hãy bật bằng /enable_custom_api true hoặc chạy lại /custom_api_config.", ephemeral=True)
                 return
 
-            await interaction.followup.send("⏳ Đang ping kiểm tra các custom keys...", ephemeral=True)
+            endpoint_preset = str((provider_config or {}).get("endpoint_preset") or "manual").strip().lower()
+            model_config = await self.db_repo.get_bot_model_config()
+            selected_model_ids = [
+                model_config.get("reasoning_model_id"),
+                model_config.get("final_model_id"),
+            ]
+            full_key_scan = endpoint_preset == "manual"
 
-            report = await self.health_checker.run_health_check_cycle()
-            if report:
-                await interaction.user.send(f"REPORT: {report}")
-                await interaction.followup.send("✅ Đã phát hiện thay đổi và gửi report vào inbox của bạn.", ephemeral=True)
-            else:
-                await interaction.followup.send("✅ Hoàn tất ping. Không có thay đổi trạng thái (chết/sống lại) nào được phát hiện từ lần check trước.", ephemeral=True)
+            await interaction.followup.send("⏳ Đang ping health check và quét /v1/models...", ephemeral=True)
+
+            report = await self.health_checker.run_health_check_cycle(
+                full_key_scan=full_key_scan,
+                selected_model_ids=selected_model_ids,
+                ping_selected_models=True,
+            )
+
+            key_lines = []
+            for entry in report.get("key_checks", []):
+                emoji = "✅" if entry.get("alive") else "❌"
+                error_text = f" — {entry.get('error')}" if entry.get("error") else ""
+                key_lines.append(f"{emoji} `{entry.get('key')}` ({entry.get('provider')}){error_text}")
+            key_block = "\n".join(key_lines) if key_lines else "(không có key để kiểm tra)"
+
+            ping_lines = []
+            for entry in report.get("model_ping", []):
+                emoji = "✅" if entry.get("alive") else "❌"
+                err_text = f" — {entry.get('error')}" if entry.get("error") else ""
+                ping_lines.append(f"{emoji} `{entry.get('model_id')}` qua `{entry.get('key')}`{err_text}")
+            ping_block = "\n".join(ping_lines) if ping_lines else "(không ping model)"
+
+            model_scan = report.get("model_scan", {})
+            model_scan_text = (
+                f"keys sống/chết: {model_scan.get('alive_keys', 0)}/{model_scan.get('dead_keys', 0)}; "
+                f"models alive: {model_scan.get('models_alive', 0)}"
+            )
+            if model_scan.get("error"):
+                model_scan_text += f"; lỗi: {model_scan.get('error')}"
+
+            await interaction.followup.send(
+                "✅ Hoàn tất health check.\n\n"
+                f"**Trạng thái API keys**\n{key_block}\n\n"
+                f"**Ping model đã chọn**\n{ping_block}\n\n"
+                f"**Model scan**\n{model_scan_text}",
+                ephemeral=True,
+            )
 
         @self.bot.tree.command(name="enable_custom_api", description="Bật/tắt custom endpoint OpenAI (ADMIN ONLY)")
         @app_commands.describe(state="Bật (true) hoặc Tắt (false)")
@@ -732,22 +1555,75 @@ class BotCore:
         async def enable_custom_api_slash(interaction: discord.Interaction, state: bool):
             await interaction.response.defer(ephemeral=True)
             import os
-            from src.core.api_router import create_model_pools, create_summary_pool, get_api_router
-            from src.core.api_config import auto_detect_api_keys
-
-            os.environ["ENABLE_CUSTOM_ENDPOINT"] = str(state).lower()
+            from src.core.api_router import get_api_router
 
             router = get_api_router()
-            all_keys, key_to_name = auto_detect_api_keys()
-            router.main_keys = all_keys["main"]
-            router.summary_keys = all_keys["summary"]
-            router.key_to_name = key_to_name
+            provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
+            if provider_config is None:
+                os.environ["ENABLE_CUSTOM_ENDPOINT"] = "false" if not state else os.environ.get("ENABLE_CUSTOM_ENDPOINT", "false")
+                if state:
+                    await interaction.followup.send("⚠️ Chưa có cấu hình custom provider trong DB. Hãy chạy /custom_api_config để nhập endpoint/API key trước.", ephemeral=True)
+                else:
+                    await interaction.followup.send("✅ Custom provider chưa có cấu hình DB; đã giữ trạng thái tắt.", ephemeral=True)
+                return
 
-            router.model_pools = create_model_pools(router.main_keys, key_to_name)
-            router.summary_pool = create_summary_pool(router.summary_keys, key_to_name)
-
+            saved = await self.db_repo.set_custom_provider_enabled("openai", state, str(interaction.user.id))
+            await router.refresh_custom_provider_config(force=True)
             status_text = "ĐÃ BẬT" if state else "ĐÃ TẮT"
-            await interaction.followup.send(f"✅ {status_text} Custom Endpoint (OpenAI) thành công! Đã refresh lại key pool.", ephemeral=True)
+            if not state:
+                await self.health_checker.gemini_mgr.clear_custom_api_clients()
+                await interaction.followup.send(f"✅ {status_text} Custom Endpoint (OpenAI). Cấu hình endpoint/key được giữ lại trong DB.", ephemeral=True)
+                return
+
+            if not saved or not saved.get("normalized_base_url") or saved.get("active_key_id") is None:
+                await interaction.followup.send("⚠️ Cấu hình custom provider thiếu endpoint hoặc API key. Hãy chạy lại /custom_api_config.", ephemeral=True)
+                return
+
+            model_config = await self.db_repo.get_bot_model_config()
+            selected_model_ids = [
+                model_config.get("reasoning_model_id"),
+                model_config.get("final_model_id"),
+            ]
+            report = await self.health_checker.run_health_check_cycle(
+                force_send_alerts=False,
+                full_key_scan=False,
+                selected_model_ids=selected_model_ids,
+                ping_selected_models=True,
+            )
+            alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
+            key_checks = report.get("key_checks", [])
+            alive_keys = sum(1 for k in key_checks if k.get("alive"))
+            dead_keys = sum(1 for k in key_checks if not k.get("alive"))
+            report_text = f"Key sống/chết: {alive_keys}/{dead_keys}."
+            await interaction.followup.send(
+                f"✅ {status_text} Custom Endpoint (OpenAI) thành công!\n"
+                f"{report_text}\n"
+                f"Model custom đang alive: `{len(alive_models)}`.",
+                ephemeral=True,
+            )
+
+        @self.bot.tree.command(name="custom_api_config", description="Chọn endpoint/API key và model custom API")
+        @is_moderator_or_admin()
+        async def custom_api_config_slash(interaction: discord.Interaction):
+            import os
+            from src.core.api_router import get_api_router
+
+            router = get_api_router()
+            try:
+                provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
+            except Exception as config_error:
+                self.logger.warning(f"Không đọc được custom provider config trước khi mở modal: {config_error}")
+                provider_config = None
+            legacy_endpoint = os.getenv("OPENAI_CUSTOM_ENDPOINT", "").strip()
+            view = CustomApiEndpointPresetView(
+                db_repo=self.db_repo,
+                health_checker=self.health_checker,
+                router=router,
+                updated_by=str(interaction.user.id),
+                provider_config=provider_config,
+                legacy_endpoint=legacy_endpoint,
+            )
+            await interaction.response.send_message(view.summary_text(), view=view, ephemeral=True)
 
         @self.bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
         @app_commands.describe(
@@ -1426,7 +2302,7 @@ class BotCore:
                 await owner_channel.set_permissions(member, overwrite=member_overwrite)
 
             await interaction.followup.send(
-                f"✅ Đã thêm **{member.display_name}** (<@{member.id}>) vào whitelist.",
+                f"✅ Đã thêm **{member.display_name}** vào whitelist.",
                 ephemeral=True,
             )
 
@@ -1462,7 +2338,7 @@ class BotCore:
                 await owner_channel.set_permissions(member, overwrite=member_overwrite)
 
             await interaction.followup.send(
-                f"🗑️ Đã xóa **{member.display_name}** (<@{member.id}>) khỏi whitelist.",
+                f"🗑️ Đã xóa **{member.display_name}** khỏi whitelist.",
                 ephemeral=True,
             )
 
@@ -1484,7 +2360,7 @@ class BotCore:
                 if uid == str(lm.owner_id):
                     continue
                 username = data.get("username", "Unknown")
-                lines.append(f"🔹 **{username}** - <@{uid}> `(UID: {uid})`")
+                lines.append(f"🔹 **{username}** `(UID: {uid})`")
 
             await interaction.followup.send("\n".join(lines), ephemeral=True)
 
@@ -1502,7 +2378,7 @@ class BotCore:
             except Exception:
                 pass
 
-        _ = (ping, reset_chat_slash, health_check_slash, enable_custom_api_slash, imagine_slash, premium_slash, reset_all_slash,
+        _ = (ping, reset_chat_slash, health_check_slash, enable_custom_api_slash, custom_api_config_slash, imagine_slash, premium_slash, reset_all_slash,
              global_notes_slash, global_note_demote_slash, message_to_slash, donate_slash,
              lock_room, unlock_room, move_member, move_all, set_room, add_privet, remove_privet, list_privet, on_app_command_error)
 

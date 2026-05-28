@@ -186,6 +186,8 @@ extract_tar_to_dir() {
 
 verify_postgres_runtime() {
   local cmd=""
+  local sharedir=""
+  local extension_candidate=""
 
   for cmd in initdb pg_ctl postgres psql; do
     if [ ! -x "$POSTGRES_DIR/bin/$cmd" ]; then
@@ -197,6 +199,24 @@ verify_postgres_runtime() {
   "$POSTGRES_DIR/bin/pg_ctl" --version >/dev/null 2>&1
   "$POSTGRES_DIR/bin/postgres" --version >/dev/null 2>&1
   "$POSTGRES_DIR/bin/psql" --version >/dev/null 2>&1
+
+  if [ -x "$POSTGRES_DIR/bin/pg_config" ]; then
+    sharedir="$($POSTGRES_DIR/bin/pg_config --sharedir 2>/dev/null || true)"
+    if [ -n "$sharedir" ] && [ -f "$sharedir/extension/pg_trgm.control" ]; then
+      return 0
+    fi
+  fi
+
+  for extension_candidate in \
+    "$POSTGRES_DIR/share/extension/pg_trgm.control" \
+    "/usr/share/postgresql/${POSTGRES_MAJOR_VERSION}/extension/pg_trgm.control" \
+    /usr/share/postgresql/*/extension/pg_trgm.control; do
+    if [ -f "$extension_candidate" ]; then
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 create_postgres_bin_wrappers() {
@@ -231,7 +251,7 @@ create_postgres_bin_wrappers() {
   done
 
   mkdir -p "$POSTGRES_DIR/bin"
-  for cmd in initdb pg_ctl postgres psql pg_isready createdb createuser; do
+  for cmd in initdb pg_ctl postgres psql pg_config pg_isready createdb createuser; do
     if [ -x "$source_bin/$cmd" ]; then
       wrapper="$POSTGRES_DIR/bin/$cmd"
       cat > "$wrapper" <<EOF
@@ -347,7 +367,8 @@ install_postgres_from_source() {
       --without-libxml \
       --without-libxslt >>"$build_log" 2>&1 && \
     make -s -j "$jobs" >>"$build_log" 2>&1 && \
-    make -s install >>"$build_log" 2>&1
+    make -s install >>"$build_log" 2>&1 && \
+    make -s -C contrib/pg_trgm install >>"$build_log" 2>&1
   ); then
     rm -rf "$tmp_dir"
     warn "PostgreSQL source build failed. Check: $build_log"

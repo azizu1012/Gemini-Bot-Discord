@@ -56,18 +56,34 @@ def _prepare_user_context_block(user_input: str, privacy_context: Dict[str, Any]
     return f"{metadata_block}\n{user_input_block}"
 
 
-def _is_tool_result_sufficient(tool_results: str) -> bool:
+def _prepare_lm_studio_correction_block(privacy_context: Dict[str, Any]) -> str:
+    correction = str(privacy_context.get("active_user_correction") or "").strip()
+    if not correction:
+        return ""
+    if len(correction) > 500:
+        correction = correction[:500].rstrip()
+    return (
+        "\n\n[LATEST USER CORRECTION FOR LM STUDIO]\n"
+        f"{correction}\n"
+        "Correction này chỉ áp dụng cho request LM Studio local hiện tại và thắng các phát biểu assistant/history cũ mâu thuẫn.\n"
+        "[/LATEST USER CORRECTION FOR LM STUDIO]"
+    )
+
+
+def _extract_intent_blocks(tool_results: str) -> Dict[str, str]:
     if not tool_results:
-        return False
+        return {}
+    pattern = re.compile(r"\[web_search\|intent=(.*?)\]\s*(.*?)(?=\n\[web_search\|intent=|\Z)", re.DOTALL | re.IGNORECASE)
+    matches = pattern.findall(tool_results)
+    blocks: Dict[str, str] = {}
+    for intent, body in matches:
+        key = (intent or "").strip() or "unknown"
+        blocks[key] = (body or "").strip()
+    return blocks
 
-    lower = tool_results.lower()
-    marker_groups = [
-        ["top ranked sources", "required quality sources", "quality sources found"],
-        ["top trusted sources", "required reputable sources", "reputable sources found"],
-    ]
-    if not any(all(marker in lower for marker in group) for group in marker_groups):
-        return False
 
+def _parse_quality_counts(text: str) -> Tuple[Optional[int], Optional[int]]:
+    lower = (text or "").lower()
     req_matches = [
         int(v)
         for v in re.findall(r"required (?:quality|reputable) sources:\s*(\d+)", lower)
@@ -76,28 +92,87 @@ def _is_tool_result_sufficient(tool_results: str) -> bool:
         int(v)
         for v in re.findall(r"(?:quality|reputable) sources found:\s*(\d+)", lower)
     ]
-    if not req_matches or not found_matches:
+    required = req_matches[-1] if req_matches else None
+    found = found_matches[-1] if found_matches else None
+    return required, found
+
+
+def _is_block_sufficient(tool_results: str) -> bool:
+    if not tool_results:
+        return False
+    lower = tool_results.lower()
+    marker_groups = [
+        ["top ranked sources", "required quality sources", "quality sources found"],
+        ["top trusted sources", "required reputable sources", "reputable sources found"],
+    ]
+    if not any(all(marker in lower for marker in group) for group in marker_groups):
         return False
 
-    required = req_matches[-1]
-    found = found_matches[-1]
+    required, found = _parse_quality_counts(lower)
+    if required is None or found is None:
+        return False
+
     return found >= required and "chưa đủ nguồn chất lượng" not in lower and "chưa đủ nguồn uy tín" not in lower
+
+
+def _has_minimum_evidence_block(tool_results: str) -> bool:
+    if not tool_results:
+        return False
+
+    lower = tool_results.lower()
+    _, found = _parse_quality_counts(lower)
+    if found is not None and found >= 1:
+        return True
+
+    if "additional corroborating sources:" in lower and "(không có nguồn bổ sung)" not in lower:
+        return True
+
+    return False
+
+
+def _is_tool_result_sufficient(tool_results: str) -> bool:
+    if not tool_results:
+        return False
+
+    intent_blocks = _extract_intent_blocks(tool_results)
+    if not intent_blocks:
+        return _is_block_sufficient(tool_results)
+
+    return all(_is_block_sufficient(block) for block in intent_blocks.values())
 
 
 def _has_minimum_search_evidence(tool_results: str) -> bool:
     if not tool_results:
         return False
 
-    lower = tool_results.lower()
-    found_matches = [
-        int(v)
-        for v in re.findall(r"(?:quality|reputable) sources found:\s*(\d+)", lower)
-    ]
-    if found_matches and found_matches[-1] >= 1:
+    intent_blocks = _extract_intent_blocks(tool_results)
+    if not intent_blocks:
+        return _has_minimum_evidence_block(tool_results)
+
+    return any(_has_minimum_evidence_block(block) for block in intent_blocks.values())
+
+
+def _looks_semantically_incomplete(text: str) -> bool:
+    cleaned = (text or "").strip()
+    if len(cleaned) < 120:
+        return False
+
+    if cleaned.count("```") % 2 == 1:
         return True
 
-    if "additional corroborating sources:" in lower and "(không có nguồn bổ sung)" not in lower:
+    if cleaned.endswith(("...", "…", "—", "-")):
         return True
+
+    if cleaned.endswith(("(", "[", "{")):
+        return True
+
+    last_line = cleaned.splitlines()[-1].strip().lower()
+    if re.search(r"\b(và|va|hoặc|or|and|with|to|of|for|là|la|của|cho|theo)\b$", last_line):
+        return True
+
+    if not re.search(r"[.!?…]$|[\"”'\)\]]$", cleaned):
+        if re.search(r"[a-z0-9]$", cleaned.lower()):
+            return True
 
     return False
 
@@ -120,7 +195,7 @@ _ARTIFACT_PATTERNS = [
     (re.compile(r'<tool_code>.*?</tool_code>', re.IGNORECASE | re.DOTALL), ''),
     (re.compile(r'<tool_result>.*?</tool_result>', re.IGNORECASE | re.DOTALL), ''),
     (re.compile(
-        r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note).*?```',
+        r'```(python|javascript|js|py)?\s*(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note|manage_user_role).*?```',
         re.IGNORECASE | re.DOTALL,
     ), ''),
 ]
@@ -130,6 +205,68 @@ def _clean_response_artifacts(text: str) -> str:
     for pattern, replacement in _ARTIFACT_PATTERNS:
         text = pattern.sub(replacement, text).strip()
     return text
+
+
+def _candidate_text(candidate: Any) -> str:
+    parts = getattr(getattr(candidate, "content", None), "parts", None) or []
+    text_parts = []
+    for part in parts:
+        text = getattr(part, "text", None)
+        if text:
+            text_parts.append(str(text))
+    return _clean_response_artifacts("".join(text_parts).strip())
+
+
+def _finish_reason_text(candidate: Any) -> str:
+    finish_reason = getattr(candidate, "finish_reason", "")
+    name = getattr(finish_reason, "name", None)
+    if name:
+        return str(name).lower()
+    return str(finish_reason or "").lower()
+
+
+def _is_truncated_candidate(candidate: Any) -> bool:
+    reason = _finish_reason_text(candidate)
+    if not reason:
+        return False
+    return any(marker in reason for marker in ("max_token", "max_tokens", "max_output", "length"))
+
+
+def _append_continuation_text(current_text: str, next_text: str) -> str:
+    current = (current_text or "").rstrip()
+    incoming = (next_text or "").lstrip()
+    if not current:
+        return incoming
+    if not incoming:
+        return current
+
+    max_overlap = min(len(current), len(incoming), 1200)
+    for overlap in range(max_overlap, 80, -1):
+        if current[-overlap:] == incoming[:overlap]:
+            return current + incoming[overlap:]
+    return f"{current}\n\n{incoming}"
+
+
+def _long_output_prompt(base_prompt: str) -> str:
+    base = (base_prompt or "[SYSTEM NOTE: Please provide a final, well-structured response.]").strip()
+    return (
+        f"{base}\n\n"
+        "[LONG OUTPUT MODE]\n"
+        "Nếu câu trả lời là báo cáo dài, hãy viết đầy đủ nhất có thể trong giới hạn output của lượt này. "
+        "Không tự rút gọn chỉ vì câu trả lời dài. Nếu chạm giới hạn token, hệ thống sẽ yêu cầu viết tiếp ở lượt sau."
+    )
+
+
+def _continuation_prompt(accumulated_text: str, part_index: int, max_parts: int) -> str:
+    tail = (accumulated_text or "")[-5000:]
+    return (
+        "[CONTINUATION REQUEST]\n"
+        f"Đây là phần tiếp theo {part_index}/{max_parts} của cùng một câu trả lời dài. "
+        "Hãy viết tiếp ngay từ điểm dừng, không lặp lại phần đã viết, không mở đầu lại, giữ cùng ngôn ngữ và định dạng.\n\n"
+        "<PREVIOUS_OUTPUT_TAIL>\n"
+        f"{tail}\n"
+        "</PREVIOUS_OUTPUT_TAIL>"
+    )
 
 
 class GeminiPipeline:
@@ -154,6 +291,131 @@ class GeminiPipeline:
         self.final_model_alias = final_model_alias
         self.fallback_model_alias = fallback_model_alias
         self.logger = logger
+
+    async def _continue_final_output(
+        self,
+        *,
+        accumulated_text: str,
+        system_instruction: str,
+        generation_config: Dict[str, Any],
+        model_alias: str,
+        user_id: str,
+        stage: str,
+    ) -> str:
+        max_calls = int(getattr(self.config, "FINAL_CONTINUATION_MAX_CALLS", 5) or 5)
+        current_text = accumulated_text
+        per_part_retries = 2
+
+        for part_index in range(2, max_calls + 1):
+            continuation_messages = [{
+                "role": "user",
+                "parts": [{"text": _continuation_prompt(current_text, part_index, max_calls)}],
+            }]
+
+            for retry_index in range(1, per_part_retries + 1):
+                quota_ok = await self.api_mgr._acquire_gemini_quota(
+                    continuation_messages,
+                    generation_config["max_output_tokens"],
+                    model_alias,
+                    extra_text=system_instruction,
+                )
+                if not quota_ok:
+                    self.logger.warning(f"{stage} continuation quota blocked for {user_id}; returning accumulated output.")
+                    return current_text
+
+                api_key: Optional[str] = None
+                model_name: Optional[str] = None
+                used_model_alias: Optional[str] = None
+                key_reservation: Optional[Dict[str, str]] = None
+
+                try:
+                    api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(model_alias)
+                    if not api_key or not model_name:
+                        self.logger.warning(f"{stage} continuation has no available key for {user_id}; returning accumulated output.")
+                        return current_text
+
+                    await self.api_mgr._throttle_api_request(api_key)
+                    self.logger.info(
+                        f"{stage} continuation {part_index}/{max_calls} retry {retry_index}/{per_part_retries} for {user_id} ({model_name})"
+                    )
+
+                    response = await self.api_mgr._generate_gemini_content(
+                        api_key=api_key,
+                        model_name=model_name,
+                        system_instruction=system_instruction,
+                        generation_config=generation_config,
+                        messages=continuation_messages,
+                        provider=(key_reservation or {}).get("provider", "gemini"),
+                        endpoint=(key_reservation or {}).get("endpoint"),
+                        endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
+                    )
+                    self.api_mgr._commit_selected_key(key_reservation)
+
+                    candidate = response.candidates[0] if response.candidates else None
+                    if not (candidate and candidate.content and candidate.content.parts):
+                        self.logger.warning(
+                            f"{stage} continuation empty candidate on part {part_index}/{max_calls}; returning accumulated output."
+                        )
+                        return current_text
+
+                    next_text = _candidate_text(candidate)
+                    if not next_text:
+                        self.logger.warning(
+                            f"{stage} continuation empty text on part {part_index}/{max_calls}; returning accumulated output."
+                        )
+                        return current_text
+
+                    current_text = _append_continuation_text(current_text, next_text)
+                    if not _is_truncated_candidate(candidate):
+                        return current_text
+                    break
+
+                except Exception as e:
+                    error_str = str(e)
+                    if self.api_mgr._is_invalid_key_error(error_str):
+                        if api_key:
+                            self.api_mgr._mark_key_as_failed(
+                                api_key,
+                                used_model_alias,
+                                duration=86400,
+                                reason="invalid_key",
+                                permanently_exhaust=True,
+                                reservation=key_reservation,
+                            )
+                        self.logger.warning(
+                            f"{stage} continuation invalid key on part {part_index}/{max_calls} retry {retry_index}/{per_part_retries}; rotating."
+                        )
+                        continue
+
+                    if self.api_mgr._is_rate_limit_error(error_str):
+                        error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
+                        if api_key:
+                            self.api_mgr._mark_key_as_failed(
+                                api_key,
+                                used_model_alias,
+                                duration=60,
+                                reason=error_type,
+                                reservation=key_reservation,
+                            )
+                        self.logger.warning(
+                            f"{stage} continuation transient {error_type} on part {part_index}/{max_calls} retry {retry_index}/{per_part_retries}; rotating."
+                        )
+                        await asyncio.sleep(2)
+                        continue
+
+                    self.api_mgr._log_gemini_exception(
+                        stage=f"{stage}_continuation",
+                        error=e,
+                        user_id=user_id,
+                        model_alias=used_model_alias,
+                        model_name=model_name,
+                        api_key=api_key,
+                        attempt=part_index,
+                        max_attempts=max_calls,
+                    )
+                    return current_text
+
+        return current_text
 
     async def call_gemini_api(self, messages: List[Dict[str, Any]], user_id: str, privacy_context: Dict[str, Any]) -> str:
         """Two-Tier Model Strategy: Flash-Lite (reasoning) -> Flash (final output)."""
@@ -247,6 +509,9 @@ class GeminiPipeline:
                         generation_config=generation_config,
                         messages=reasoning_messages,
                         tools=tools,
+                        provider=(key_reservation or {}).get("provider", "gemini"),
+                        endpoint=(key_reservation or {}).get("endpoint"),
+                        endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                     )
                     self.api_mgr._commit_selected_key(key_reservation)
                     
@@ -293,7 +558,8 @@ class GeminiPipeline:
                                 function_response_parts.append({"function_response": func_res})
                                 continue
 
-                            if tool_name == "web_search" and web_search_calls >= 1:
+                            max_search_calls = getattr(self.config, "MAX_SEARCH_CALLS_PER_TURN", 5)
+                            if tool_name == "web_search" and web_search_calls >= max_search_calls:
                                 budget_msg = get_search_budget_prompt()
                                 self.logger.info(f"[Reasoning Loop {iteration}] Tool {fc.name} blocked by search budget.")
                                 func_res = {"name": "web_search", "response": {"content": budget_msg}}
@@ -322,7 +588,7 @@ class GeminiPipeline:
 
                     if has_function_calls:
                         reasoning_messages.append({"role": "model", "parts": model_parts})
-                        reasoning_messages.append({"role": "function", "parts": function_response_parts})
+                        reasoning_messages.append({"role": "user", "parts": function_response_parts})
                         continue
                     
                     part = candidate.content.parts[0]
@@ -333,9 +599,9 @@ class GeminiPipeline:
                         tool_matches = []
                         if tool_code_match:
                             tool_code_content = tool_code_match.group(1)
-                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note)\s*\(\s*([^)]+)\)', tool_code_content, re.IGNORECASE)
+                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note|manage_user_role)\s*\(\s*([^)]+)\)', tool_code_content, re.IGNORECASE)
                         elif text.strip().upper().startswith("TOOL_CALL:"):
-                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note)\s*\(\s*([^)]+)\)', text, re.IGNORECASE)
+                            tool_matches = re.findall(r'(web_search|calculate|get_weather|image_recognition|save_note|retrieve_notes|delete_note|manage_user_role)\s*\(\s*([^)]+)\)', text, re.IGNORECASE)
 
                         if tool_matches:
                             executed_tool = False
@@ -353,12 +619,13 @@ class GeminiPipeline:
                                 if tool_name_l == "web_search" and not args_dict.get("query"):
                                     continue
 
-                                if tool_name_l == "web_search" and web_search_calls >= 1:
+                                max_search_calls = getattr(self.config, "MAX_SEARCH_CALLS_PER_TURN", 5)
+                                if tool_name_l == "web_search" and web_search_calls >= max_search_calls:
                                     budget_msg = get_search_budget_prompt()
                                     self.logger.info(f"[Reasoning Loop {iteration}] Parsed tool {tool_name_l} blocked by search budget.")
                                     reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
                                     reasoning_messages.append({
-                                        "role": "function",
+                                        "role": "user",
                                         "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}]
                                     })
                                     executed_tool = True
@@ -376,7 +643,7 @@ class GeminiPipeline:
 
                                 reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
                                 reasoning_messages.append({
-                                    "role": "function",
+                                    "role": "user",
                                     "parts": [{"function_response": {"name": tool_name_l, "response": {"content": str(tool_res)}}}]
                                 })
                                 executed_tool = True
@@ -514,16 +781,29 @@ class GeminiPipeline:
                 bot_name = privacy_context.get("bot_name", "Chad Gibiti")
                 system_with_context = system_with_context.replace("Chad Gibiti", bot_name)
 
+                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(final_model_alias)
+                if not api_key or not model_name:
+                    self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
+                    return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
+
+                is_lm_studio = self.api_mgr._is_lm_studio_endpoint(
+                    (key_reservation or {}).get("provider", "gemini"),
+                    (key_reservation or {}).get("endpoint"),
+                    (key_reservation or {}).get("endpoint_preset"),
+                )
+                if is_lm_studio:
+                    system_with_context += _prepare_lm_studio_correction_block(privacy_context)
+
                 generation_config = {
-                    "temperature": 0.7,
-                    "top_p": 0.9,
+                    "temperature": 0.2 if is_lm_studio else 0.7,
+                    "top_p": 0.8 if is_lm_studio else 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 2600,
+                    "max_output_tokens": int(getattr(self.config, "FINAL_MAX_OUTPUT_TOKENS", 8192) or 8192),
                 }
 
                 final_messages = [{
                     "role": "user",
-                    "parts": [{"text": get_final_synthesis_prompt()}]
+                    "parts": [{"text": _long_output_prompt(get_final_synthesis_prompt())}]
                 }]
 
                 quota_ok = await self.api_mgr._acquire_gemini_quota(
@@ -536,11 +816,6 @@ class GeminiPipeline:
                     self.logger.warning("Final model quota gate blocked; trying lite fallback finalizer.")
                     return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
 
-                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(final_model_alias)
-                if not api_key or not model_name:
-                    self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
-                    return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
-
                 await self.api_mgr._throttle_api_request(api_key)
 
                 self.logger.info(f"Final output for user {user_id} ({model_name}, attempt {attempt + 1}/{MAX_RETRIES})")
@@ -551,6 +826,9 @@ class GeminiPipeline:
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
+                    provider=(key_reservation or {}).get("provider", "gemini"),
+                    endpoint=(key_reservation or {}).get("endpoint"),
+                    endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                 )
                 self.api_mgr._commit_selected_key(key_reservation)
 
@@ -571,12 +849,29 @@ class GeminiPipeline:
                     await asyncio.sleep(1)
                     continue
 
-                part = candidate.content.parts[0]
-
-                if part.text:
-                    text = _clean_response_artifacts(part.text.strip())
-                    if text and len(text) > 5:
-                        return text
+                text = _candidate_text(candidate)
+                if text and len(text) > 5:
+                    if _is_truncated_candidate(candidate):
+                        self.logger.info(f"Final output hit token limit for {user_id}; requesting continuation chunks.")
+                        return await self._continue_final_output(
+                            accumulated_text=text,
+                            system_instruction=system_with_context,
+                            generation_config=generation_config,
+                            model_alias=final_model_alias,
+                            user_id=user_id,
+                            stage="final_flash",
+                        )
+                    if _looks_semantically_incomplete(text):
+                        self.logger.info(f"Final output looks semantically incomplete for {user_id}; requesting continuation.")
+                        return await self._continue_final_output(
+                            accumulated_text=text,
+                            system_instruction=system_with_context,
+                            generation_config=generation_config,
+                            model_alias=final_model_alias,
+                            user_id=user_id,
+                            stage="final_flash_semantic",
+                        )
+                    return text
 
                 self.logger.warning(
                     f"Final output empty text for {user_id} "
@@ -670,16 +965,28 @@ class GeminiPipeline:
                 bot_name = privacy_context.get("bot_name", "Chad Gibiti")
                 system_with_context = system_with_context.replace("Chad Gibiti", bot_name)
 
+                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(fallback_model_alias)
+                if not api_key or not model_name:
+                    return user_facing_error
+
+                is_lm_studio = self.api_mgr._is_lm_studio_endpoint(
+                    (key_reservation or {}).get("provider", "gemini"),
+                    (key_reservation or {}).get("endpoint"),
+                    (key_reservation or {}).get("endpoint_preset"),
+                )
+                if is_lm_studio:
+                    system_with_context += _prepare_lm_studio_correction_block(privacy_context)
+
                 generation_config = {
-                    "temperature": 0.7,
-                    "top_p": 0.9,
+                    "temperature": 0.2 if is_lm_studio else 0.7,
+                    "top_p": 0.8 if is_lm_studio else 0.9,
                     "top_k": 40,
-                    "max_output_tokens": 2600,
+                    "max_output_tokens": int(getattr(self.config, "FALLBACK_MAX_OUTPUT_TOKENS", 8192) or 8192),
                 }
 
                 final_messages = [{
                     "role": "user",
-                    "parts": [{"text": get_final_synthesis_prompt()}],
+                    "parts": [{"text": _long_output_prompt(get_final_synthesis_prompt())}],
                 }]
 
                 quota_ok = await self.api_mgr._acquire_gemini_quota(
@@ -689,10 +996,6 @@ class GeminiPipeline:
                     extra_text=system_with_context,
                 )
                 if not quota_ok:
-                    return user_facing_error
-
-                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(fallback_model_alias)
-                if not api_key or not model_name:
                     return user_facing_error
 
                 await self.api_mgr._throttle_api_request(api_key)
@@ -705,6 +1008,9 @@ class GeminiPipeline:
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
+                    provider=(key_reservation or {}).get("provider", "gemini"),
+                    endpoint=(key_reservation or {}).get("endpoint"),
+                    endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                 )
                 self.api_mgr._commit_selected_key(key_reservation)
 
@@ -724,12 +1030,30 @@ class GeminiPipeline:
                     )
                     continue
 
-                part = candidate.content.parts[0]
-                if part.text:
-                    text = _clean_response_artifacts(part.text.strip())
-                    if text and len(text) > 5:
-                        self.logger.info(f"✅ Fallback success for {user_id}")
-                        return text
+                text = _candidate_text(candidate)
+                if text and len(text) > 5:
+                    self.logger.info(f"✅ Fallback success for {user_id}")
+                    if _is_truncated_candidate(candidate):
+                        self.logger.info(f"Fallback output hit token limit for {user_id}; requesting continuation chunks.")
+                        return await self._continue_final_output(
+                            accumulated_text=text,
+                            system_instruction=system_with_context,
+                            generation_config=generation_config,
+                            model_alias=fallback_model_alias,
+                            user_id=user_id,
+                            stage="fallback_lite",
+                        )
+                    if _looks_semantically_incomplete(text):
+                        self.logger.info(f"Fallback output looks semantically incomplete for {user_id}; requesting continuation.")
+                        return await self._continue_final_output(
+                            accumulated_text=text,
+                            system_instruction=system_with_context,
+                            generation_config=generation_config,
+                            model_alias=fallback_model_alias,
+                            user_id=user_id,
+                            stage="fallback_lite_semantic",
+                        )
+                    return text
 
             except Exception as e:
                 error_str = str(e)

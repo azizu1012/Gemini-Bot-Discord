@@ -4,6 +4,7 @@ import uuid
 import json
 import asyncio
 import unicodedata
+from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
 from src.core.config import logger, Config
@@ -12,6 +13,12 @@ from src.database.repository import DatabaseRepository
 from src.core.api_router import get_api_router
 from src.core.gemini_api_manager import GeminiApiManager
 from src.core.gemini_pipeline import GeminiPipeline
+from src.core.api_config import (
+    DEFAULT_REASONING_MODEL_ALIAS,
+    DEFAULT_FINAL_MODEL_ALIAS,
+    DEFAULT_FALLBACK_MODEL_ALIAS,
+    VISION_MODEL_ALIAS,
+)
 from src.tools.tools import ToolsManager
 from src.managers.note_manager import NoteManager
 from src.managers.premium_manager import PremiumManager
@@ -22,6 +29,7 @@ from src.services.file_index_service import (
     should_use_last_index,
     build_index_context,
 )
+from src.services.search_subtask_client import SearchSubtaskClient
 from src.managers.cleanup_manager import CleanupManager
 from src.core.prompt_loader import build_identity_capability_prompt
 
@@ -60,7 +68,13 @@ class MessageHandler:
 
         # Tools and API setup
         self.note_mgr = NoteManager(self.db_repo)
-        self.tools_mgr = ToolsManager(note_mgr=self.note_mgr, db_repo=self.db_repo)
+        self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="worker")
+        self.search_subtask_client = SearchSubtaskClient(self.kafka_service)
+        self.tools_mgr = ToolsManager(
+            note_mgr=self.note_mgr,
+            db_repo=self.db_repo,
+            search_subtask_client=self.search_subtask_client,
+        )
         self.api_router = get_api_router()
         self.api_router.set_db_repo(self.db_repo)
         self._api_mgr: Optional[GeminiApiManager] = None
@@ -71,10 +85,13 @@ class MessageHandler:
         self.file_parser = FileParserService(cleanup_mgr=CleanupManager())
         self.file_chunk_dir = self.config.FILE_CHUNK_DIR
 
-        self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="worker")
 
-    async def _publish_outgoing(self, payload: Dict[str, Any], user_id: Optional[str]) -> None:
-        await self.kafka_service.publish("discord-outgoing", payload=payload, key=user_id)
+    async def _publish_outgoing(self, payload: Dict[str, Any], user_id: Optional[str]) -> bool:
+        ok = await self.kafka_service.publish("discord-outgoing", payload=payload, key=user_id)
+        if not ok:
+            action = payload.get("action") or payload.get("type") or "unknown"
+            raise RuntimeError(f"Failed to publish outgoing Kafka payload action={action} user={user_id}")
+        return ok
 
     async def _download_file(self, url: str) -> Optional[bytes]:
         try:
@@ -113,18 +130,29 @@ class MessageHandler:
 
     @property
     def pipeline(self) -> GeminiPipeline:
-        # Simplistic setup for pipeline - normally you'd pull from models
         if self._pipeline is None:
             self._pipeline = GeminiPipeline(
                 config=self.config,
                 api_mgr=self.api_mgr,
                 tools_mgr=self.tools_mgr,
                 identity_builder=self._build_identity_instruction,
-                reasoning_model_alias="gemini-flash-lite",
-                final_model_alias="gemini-flash-35",
-                fallback_model_alias="gemini-flash-lite",
+                reasoning_model_alias=DEFAULT_REASONING_MODEL_ALIAS,
+                final_model_alias=DEFAULT_FINAL_MODEL_ALIAS,
+                fallback_model_alias=DEFAULT_FALLBACK_MODEL_ALIAS,
             )
         return self._pipeline
+
+    async def _refresh_pipeline_model_aliases(self, force_vision_model: bool = False) -> None:
+        pipeline = self.pipeline
+        if force_vision_model:
+            pipeline.reasoning_model_alias = VISION_MODEL_ALIAS
+            pipeline.final_model_alias = VISION_MODEL_ALIAS
+            pipeline.fallback_model_alias = VISION_MODEL_ALIAS
+            return
+        selected = await self.api_router.get_selected_model_aliases()
+        pipeline.reasoning_model_alias = str(selected.get("reasoning") or DEFAULT_REASONING_MODEL_ALIAS)
+        pipeline.final_model_alias = str(selected.get("final") or DEFAULT_FINAL_MODEL_ALIAS)
+        pipeline.fallback_model_alias = str(selected.get("fallback") or DEFAULT_FALLBACK_MODEL_ALIAS)
 
     def _normalize_intent_text(self, text: str) -> str:
         lowered = (text or "").lower()
@@ -134,6 +162,41 @@ class MessageHandler:
         )
         normalized = re.sub(r"[^a-z0-9\s]", " ", no_diacritics)
         return re.sub(r"\s+", " ", normalized).strip()
+
+    def _detect_user_correction(self, text: str) -> Dict[str, Any]:
+        raw = (text or "").strip()
+        if not raw:
+            return {}
+
+        normalized = self._normalize_intent_text(raw)
+        markers = (
+            "bia",
+            "sai roi",
+            "khong phai",
+            "khong dung",
+            "nham",
+            "y toi la",
+            "dinh chinh",
+            "wrong",
+            "correction",
+        )
+        has_marker = any(marker in normalized for marker in markers)
+        has_emphatic_definition = bool(re.search(r"\b[a-z0-9]{2,12}\s+la\s+.+\bma\b", normalized))
+
+        correction_text = ""
+        match = re.search(r"\b([A-Za-z][A-Za-z0-9]{1,12})\s+(?:là|la|=)\s+([^\n\r?!.,]{2,120})", raw, re.IGNORECASE)
+        if match and (has_marker or has_emphatic_definition):
+            subject = match.group(1).strip().upper()
+            value = re.sub(r"\s+(?:mà|ma|đó|do)\s*$", "", match.group(2).strip(), flags=re.IGNORECASE)
+            correction_text = f"{subject} = {value}"
+
+        if not (has_marker or correction_text):
+            return {}
+
+        return {
+            "is_user_correction": True,
+            "active_user_correction": correction_text or raw[:300],
+        }
 
     def _is_identity_question(self, text: str) -> bool:
         normalized = self._normalize_intent_text(text)
@@ -195,8 +258,7 @@ class MessageHandler:
             lines.append(f"{i}. user={row.get('user_id')} | content={row.get('content')[:100]}")
         return "\n".join(lines)
 
-    def _split_text(self, text: str, limit: int = 1900) -> List[str]:
-        text = text.replace('@', '\\@')
+    def _split_text(self, text: str, limit: int = 1800) -> List[str]:
         chunks = []
         current_text = text.strip()
 
@@ -245,6 +307,10 @@ class MessageHandler:
             await self.shutdown()
 
     async def shutdown(self):
+        try:
+            await self.search_subtask_client.close()
+        except Exception:
+            pass
         await self.kafka_service.stop()
 
         try:
@@ -412,6 +478,7 @@ class MessageHandler:
 
             # 5. Intent Detection & Dynamic context builder
             bot_name = payload.get("bot_name", "Chad Gibiti")
+            correction_context = self._detect_user_correction(content)
             intent_cues = []
             if self._is_identity_question(content):
                 intent_cues.append(f"[SYSTEM NOTE: Identity query. Respond in 1-2 sentences as {bot_name}.]")
@@ -443,6 +510,7 @@ class MessageHandler:
                 "is_cross_user_presence_question": self._is_cross_user_presence_question(user_message),
                 "user_identity": user_identity,
                 "bot_name": bot_name,
+                **correction_context,
             }
 
             # 7. Get History & Call Gemini Pipeline
@@ -467,26 +535,33 @@ class MessageHandler:
                 user_parts.extend(downloaded_images)
             messages.append({"role": "user", "parts": user_parts})
 
+            await self._refresh_pipeline_model_aliases(force_vision_model=bool(downloaded_images))
             response_text = await self.pipeline.call_gemini_api(messages, user_id, privacy_context)
 
             # 8. Log reply and Split response chunks sequentially
             await self.db_repo.log_message_db(user_id, "assistant", response_text)
             self.cache_mgr.add_chat_message(user_id, "assistant", response_text)
 
+            allowed_mentions = self.tools_mgr.pop_allowed_mentions(user_id)
             chunks = self._split_text(response_text)
-            for i, chunk in enumerate(chunks):
-                reply_payload = {
-                    "action": "reply",
-                    "channel_id": payload.get('channel_id'),
-                    "user_id": user_id,
-                    "content": chunk,
-                    "reference_message_id": payload.get('message_id') if i == 0 else None
-                }
-                await self._publish_outgoing(reply_payload, user_id)
-                if i < len(chunks) - 1:
-                    await asyncio.sleep(1.0)  # Sequential delay for smooth Discord delivery
+            reply_group_id = str(uuid.uuid4())
+            chunk_items = [{"index": idx, "content": chunk} for idx, chunk in enumerate(chunks)]
+            reply_payload = {
+                "action": "reply_batch",
+                "reply_group_id": reply_group_id,
+                "channel_id": payload.get('channel_id'),
+                "user_id": user_id,
+                "chunks": chunks,
+                "chunk_items": chunk_items,
+                "chunk_total": len(chunks),
+                "mode_hint": "edit_then_batch",
+                "allow_user_mentions": allowed_mentions,
+                "reference_message_id": payload.get('message_id'),
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            await self._publish_outgoing(reply_payload, user_id)
 
-            self.logger.info(f"Published outgoing replies ({len(chunks)} chunks) to Kafka for user {user_id}")
+            self.logger.info(f"Published outgoing reply_batch ({len(chunks)} chunks) to Kafka for user {user_id}")
 
         except Exception as e:
             self.logger.error(f"Error processing message for {user_id}: {e}")
@@ -552,13 +627,105 @@ class MessageHandler:
             }, user_id)
             return
 
+        def _should_use_image_endpoint(model_id: str) -> bool:
+            model = str(model_id or "").strip().lower()
+            if model.startswith("gpt-image"):
+                return True
+            return model in {"grok-imagine-image", "grok-imagine-image-quality"}
+
+        def _extract_base64_from_text(text: str) -> Optional[bytes]:
+            if not text:
+                return None
+            try:
+                payload = json.loads(text)
+                if isinstance(payload, dict):
+                    b64_value = payload.get("image_base64") or payload.get("b64_json") or payload.get("image")
+                    if b64_value:
+                        return base64.b64decode(b64_value)
+            except Exception:
+                pass
+
+            data_url_match = re.search(r"data:image/[^;]+;base64,([A-Za-z0-9+/=\r\n]+)", text)
+            if data_url_match:
+                return base64.b64decode(data_url_match.group(1))
+
+            candidates = re.findall(r"[A-Za-z0-9+/=]{800,}", text)
+            if not candidates:
+                return None
+            candidate = max(candidates, key=len)
+            try:
+                return base64.b64decode(candidate)
+            except Exception:
+                return None
+
+        def _extract_base64_from_content(content: Any) -> Optional[bytes]:
+            if content is None:
+                return None
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        image_url = item.get("image_url") or {}
+                        url_value = image_url.get("url") if isinstance(image_url, dict) else None
+                        if url_value:
+                            extracted = _extract_base64_from_text(url_value)
+                            if extracted:
+                                return extracted
+                        text_value = item.get("text")
+                        if text_value:
+                            extracted = _extract_base64_from_text(str(text_value))
+                            if extracted:
+                                return extracted
+                    elif isinstance(item, str):
+                        extracted = _extract_base64_from_text(item)
+                        if extracted:
+                            return extracted
+                return None
+            if isinstance(content, dict):
+                text_value = content.get("text") or content.get("content")
+                return _extract_base64_from_text(str(text_value or ""))
+            return _extract_base64_from_text(str(content))
+
+        async def _generate_image_via_chat_completion(client: Any, model_id: str, prompt_text: str) -> Optional[bytes]:
+            system_prompt = (
+                "Bạn là mô hình tạo ảnh. Hãy trả về duy nhất dữ liệu base64 PNG (không markdown, không chú thích, "
+                "không thêm chữ). Nếu trả JSON, hãy dùng khóa image_base64."
+            )
+            response = await client.chat.completions.create(
+                model=model_id,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt_text},
+                ],
+                temperature=0.2,
+                max_tokens=4096,
+            )
+            msg = response.choices[0].message if response.choices else None
+            if not msg:
+                return None
+            return _extract_base64_from_content(getattr(msg, "content", None))
+
         max_attempts = 3
         success = False
         error_message = ""
         image_bytes = None
+        selected_models = await self.api_router.get_selected_model_aliases()
+        custom_image_model_id = selected_models.get("image_generator_model_id")
+        custom_image_alias = self.api_router.custom_model_alias(custom_image_model_id) if custom_image_model_id else None
+        image_model_for_log = custom_image_model_id or "imagen-3.0-generate-002"
 
         for attempt in range(1, max_attempts + 1):
-            api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash-35")
+            if custom_image_alias:
+                reservation = await self.api_router.get_next_key_for_model_reservation(custom_image_alias)
+                if not reservation:
+                    error_message = "Không có custom API key/model image generator khả dụng. Hãy chạy /health_check hoặc chọn lại /custom_api_config."
+                    self.logger.error("No custom API key/model available for image generation.")
+                    break
+                api_key = reservation.get("key")
+                final_alias = reservation.get("model_alias", custom_image_alias)
+                model_id = self.api_router.get_model_id(final_alias)
+            else:
+                api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash-35")
+
             if not api_key:
                 error_message = "Không có API keys khả dụng."
                 self.logger.error("No API keys available for image generation.")
@@ -582,7 +749,59 @@ class MessageHandler:
 
                 self.logger.info(f"Generating image on key ...{api_key[-4:]} with prompt: '{prompt}' (Attempt {attempt}/{max_attempts})")
 
-                client = self.api_mgr._get_or_create_gemini_client(api_key)
+                client = self.api_mgr._get_or_create_gemini_client(
+                    api_key,
+                    provider=(reservation or {}).get("provider", "gemini"),
+                    endpoint=(reservation or {}).get("endpoint"),
+                )
+
+                if custom_image_model_id:
+                    if type(client).__name__ != "AsyncOpenAI":
+                        error_message = "Custom image generator cần custom OpenAI-compatible key hợp lệ."
+                        self.logger.warning(error_message)
+                        break
+                    if _should_use_image_endpoint(custom_image_model_id):
+                        image_size = os.getenv("CUSTOM_IMAGE_SIZE", "1024x1024")
+                        try:
+                            response = await client.images.generate(
+                                model=custom_image_model_id,
+                                prompt=prompt,
+                                n=1,
+                                size=image_size,
+                                response_format="b64_json",
+                            )
+                        except TypeError:
+                            response = await client.images.generate(
+                                model=custom_image_model_id,
+                                prompt=prompt,
+                                n=1,
+                                size=image_size,
+                            )
+                        data_items = getattr(response, "data", None) or []
+                        first_item = data_items[0] if data_items else None
+                        b64_json = getattr(first_item, "b64_json", None) if first_item else None
+                        image_url = getattr(first_item, "url", None) if first_item else None
+                        if not b64_json and isinstance(first_item, dict):
+                            b64_json = first_item.get("b64_json")
+                            image_url = first_item.get("url")
+                        if b64_json:
+                            image_bytes = base64.b64decode(b64_json)
+                        elif image_url:
+                            image_bytes = await self._download_file(image_url)
+                    else:
+                        image_bytes = await _generate_image_via_chat_completion(
+                            client=client,
+                            model_id=custom_image_model_id,
+                            prompt_text=prompt,
+                        )
+
+                    if image_bytes:
+                        self.api_mgr._commit_selected_key(reservation)
+                        success = True
+                        break
+
+                    error_message = "Custom image API returned an empty response."
+                    continue
 
                 if type(client).__name__ == "AsyncOpenAI":
                     self.logger.warning("OpenAI custom endpoint client detected, skipping for image generation.")
@@ -624,7 +843,7 @@ class MessageHandler:
                     error=e,
                     user_id=user_id,
                     model_alias=final_alias,
-                    model_name="imagen-3.0-generate-002",
+                    model_name=image_model_for_log,
                     api_key=api_key,
                     attempt=attempt,
                     max_attempts=max_attempts
@@ -675,7 +894,7 @@ class MessageHandler:
                 "file_base64": base64_image_str,
                 "file_name": local_filename,
                 "embed_title": f"🎨 {prompt[:200]}",
-                "embed_footer": "Tạo bởi Gemini Imagen 3"
+                "embed_footer": f"Tạo bởi {custom_image_model_id}" if custom_image_model_id else "Tạo bởi Gemini Imagen 3"
             }, user_id)
         else:
             await self._publish_outgoing({

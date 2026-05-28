@@ -7,7 +7,7 @@ import time
 import unicodedata
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Optional, Set, Tuple
 import aiofiles
 import requests
 import sympy as sp
@@ -36,11 +36,10 @@ from src.core.config import (
     TAVILY_API_KEY,
     EXA_API_KEY,
     GEMINI_API_KEYS,
-    MODEL_NAME,
 )
 import src.core.config as config
 from src.core.api_router import get_api_router
-from src.core.api_config import AVAILABLE_MODELS
+from src.core.api_config import VISION_MODEL_ALIAS
 
 class ToolsManager:
     """Manager for all AI tools and external API integrations."""
@@ -232,11 +231,18 @@ class ToolsManager:
     }
 
 
-    def __init__(self, note_mgr=None, db_repo=None):
+    def __init__(self, note_mgr=None, db_repo=None, search_subtask_client=None, enable_search_subtasks: Optional[bool] = None):
         self.logger = logger
         self.api_router = get_api_router()
         self.note_mgr = note_mgr
         self.db_repo = db_repo
+        self.search_subtask_client = search_subtask_client
+        if enable_search_subtasks is None:
+            self.search_subtasks_enabled = os.getenv("SEARCH_SUBTASKS_ENABLED", "false").lower() == "true"
+        else:
+            self.search_subtasks_enabled = bool(enable_search_subtasks)
+        self.search_subtask_timeout_seconds = int(os.getenv("SEARCH_SUBTASK_TIMEOUT_SEC", "18"))
+        self._allowed_mentions: Dict[str, Set[str]] = {}
         self.web_search_cache = {}
         self.image_recognition_cache = {}
         self.weather_lock = asyncio.Lock()
@@ -279,22 +285,39 @@ class ToolsManager:
         else:
             self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
 
+        # Precompiled regex patterns for date extraction (IGNORECASE enabled for English/Vietnamese tokens)
+        self._date_min_pattern = re.compile(r'\b(\d+)\s*(?:phút|phút trước|minute|minutes|min|mins)\b', re.IGNORECASE)
+        self._date_hour_pattern = re.compile(r'\b(\d+)\s*(?:giờ|giờ trước|hour|hours|hr|hrs)\b', re.IGNORECASE)
+        self._date_day_pattern = re.compile(r'\b(\d+)\s*(?:ngày|ngày trước|day|days)\b', re.IGNORECASE)
+        self._date_week_pattern = re.compile(r'\b(\d+)\s*(?:tuần|tuần trước|week|weeks)\b', re.IGNORECASE)
+        self._date_month_pattern = re.compile(r'\b(\d+)\s*(?:tháng|tháng trước|month|months)\b', re.IGNORECASE)
+        self._date_year_pattern = re.compile(r'\b(\d+)\s*(?:năm|năm trước|year|years|yr|yrs)\b', re.IGNORECASE)
+        self._date_today_pattern = re.compile(r'\b(?:hôm nay|today)\b', re.IGNORECASE)
+        self._date_yesterday_pattern = re.compile(r'\b(?:hôm qua|yesterday)\b', re.IGNORECASE)
+
+        self._date_yyyy_mm_dd_pattern = re.compile(r'\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b', re.IGNORECASE)
+        self._date_dd_mm_yyyy_pattern = re.compile(r'\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b', re.IGNORECASE)
+        self._date_month_day_pattern = re.compile(r'\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b', re.IGNORECASE)
+        self._date_day_month_pattern = re.compile(r'\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b', re.IGNORECASE)
+        self._date_year_only_pattern = re.compile(r'\b(20\d{2})\b', re.IGNORECASE)
+
+    def _record_allowed_mention(self, caller_user_id: str, target_user_id: str) -> None:
+        caller_id = str(caller_user_id or "").strip()
+        target_id = str(target_user_id or "").strip()
+        if not caller_id or not target_id:
+            return
+        bucket = self._allowed_mentions.setdefault(caller_id, set())
+        bucket.add(target_id)
+
+    def pop_allowed_mentions(self, caller_user_id: str) -> List[str]:
+        caller_id = str(caller_user_id or "").strip()
+        if not caller_id:
+            return []
+        return sorted(self._allowed_mentions.pop(caller_id, set()))
+
     async def _resolve_router_model_alias_for_vision(self) -> str:
-        """Map configured vision model_id to router alias for shared key/quota accounting."""
-        # Use FINAL_MODEL_ALIAS (default gemini-flash-35) for vision tasks
-        # consistent with message_handler where Lite is for reasoning only.
-        final_alias = os.getenv("FINAL_MODEL_ALIAS", "gemini-flash-35").strip()
-
-        # If the final_alias is valid, ensure we can route to it or its peer
-        if True:
-            # We don't want to actually reserve the key here, we just want to verify
-            # if final_alias or its priority peer (like flash-30) is available.
-            # Using get_next_key_for_model_reservation handles checking priority fallback.
-            reservation = await self.api_router.get_next_key_for_model_reservation(final_alias)
-            if reservation:
-                return reservation["model_alias"]
-
-        return final_alias
+        """Use Gemini Flash via Gen AI SDK for all image recognition calls."""
+        return VISION_MODEL_ALIAS
 
     def get_all_tools(self, is_admin: bool = False):
         """Return all tool definitions for Gemini."""
@@ -706,6 +729,148 @@ class ToolsManager:
 
         return ".".join(labels[-2:])
 
+    def _extract_date(self, text: str) -> Optional[datetime]:
+        if not text:
+            return None
+        try:
+            text_lower = text.lower().strip()
+            now = datetime.now()
+
+            # 1. Quét các từ khóa mốc thời gian tương đối cụ thể trước (hôm nay, hôm qua)
+            if self._date_today_pattern.search(text_lower):
+                return now
+            if self._date_yesterday_pattern.search(text_lower):
+                return now - timedelta(days=1)
+
+            # 2. Quét các mốc thời gian tương đối từ hẹp đến rộng: Phút -> Giờ -> Ngày -> Tuần -> Tháng -> Năm
+            # Phút / Mins
+            m = self._date_min_pattern.search(text_lower)
+            if m:
+                return now
+
+            # Giờ / Hours
+            m = self._date_hour_pattern.search(text_lower)
+            if m:
+                return now
+
+            # Ngày / Days
+            m = self._date_day_pattern.search(text_lower)
+            if m:
+                return now - timedelta(days=int(m.group(1)))
+
+            # Tuần / Weeks
+            m = self._date_week_pattern.search(text_lower)
+            if m:
+                return now - timedelta(days=int(m.group(1)) * 7)
+
+            # Tháng / Months (Quy đổi 1 tháng = 30 ngày)
+            m = self._date_month_pattern.search(text_lower)
+            if m:
+                return now - timedelta(days=int(m.group(1)) * 30)
+
+            # Năm / Years
+            m = self._date_year_pattern.search(text_lower)
+            if m:
+                return now - timedelta(days=int(m.group(1)) * 365)
+
+            # 3. Quét định dạng thời gian tuyệt đối YYYY-MM-DD
+            m = self._date_yyyy_mm_dd_pattern.search(text_lower)
+            if m:
+                try:
+                    return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+                except ValueError:
+                    pass
+
+            # 4. Quét định dạng tuyệt đối DD/MM/YYYY (hoặc MM/DD/YYYY fallback)
+            m = self._date_dd_mm_yyyy_pattern.search(text_lower)
+            if m:
+                try:
+                    return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+                except ValueError:
+                    try:
+                        return datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+                    except ValueError:
+                        pass
+
+            # 5. Quét định dạng chữ tiếng Anh: Month DD, YYYY hoặc DD Month YYYY
+            months = {
+                "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+                "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+                "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
+                "nov": 11, "november": 11, "dec": 12, "december": 12
+            }
+
+            m = self._date_month_day_pattern.search(text_lower)
+            if m:
+                month_val = months[m.group(1)]
+                day_val = int(m.group(2))
+                text_after = text_lower[m.end():m.end() + 15]
+                year_match = self._date_year_only_pattern.search(text_after)
+                year_val = int(year_match.group(1)) if year_match else now.year
+                try:
+                    return datetime(year_val, month_val, day_val)
+                except ValueError:
+                    pass
+
+            m = self._date_day_month_pattern.search(text_lower)
+            if m:
+                day_val = int(m.group(1))
+                month_val = months[m.group(2)]
+                text_after = text_lower[m.end():m.end() + 15]
+                year_match = self._date_year_only_pattern.search(text_after)
+                year_val = int(year_match.group(1)) if year_match else now.year
+                try:
+                    return datetime(year_val, month_val, day_val)
+                except ValueError:
+                    pass
+
+            # 6. Fallback chỉ quét thấy năm YYYY
+            m = self._date_year_only_pattern.search(text_lower)
+            if m:
+                return datetime(int(m.group(1)), 6, 1)
+
+        except Exception as e:
+            logger.warning(f"Error parsing date in _extract_date: {e}")
+
+        return None
+
+    def _calculate_time_decay_penalty(self, topic: str, pub_date: Optional[datetime], is_time_sensitive: bool) -> float:
+        if not is_time_sensitive:
+            return 0.0
+        try:
+            if not pub_date:
+                # Phạt nhẹ nếu không tìm thấy ngày cho câu hỏi nhạy thời gian
+                return -0.6
+
+            now = datetime.now()
+            # Tính khoảng cách ngày D (sử dụng naive datetime)
+            delta = now - pub_date
+            D = delta.days + (delta.seconds / 86400.0)
+
+            if D < 0:
+                # Ngày tương lai (leaks, upcoming events/banners) -> Phạt = 0
+                return 0.0
+
+            # Grace Window theo chủ đề
+            grace_window = 7.0
+            if topic == "gaming":
+                grace_window = 21.0
+            elif topic in {"finance", "tech"}:
+                grace_window = 3.0
+            elif topic in {"movies_tv", "anime_manga"}:
+                grace_window = 14.0
+            elif topic == "weather":
+                grace_window = 1.0
+
+            excess_days = max(0.0, D - grace_window)
+            decay_penalty = -0.1 * excess_days
+            # Khóa biên hình phạt (Penalty Cap) tối đa là -1.5
+            return round(max(-1.5, decay_penalty), 3)
+
+        except Exception as e:
+            logger.warning(f"Error calculating time decay penalty: {e}")
+            return 0.0
+
     def _normalize_query_tokens(self, text: str) -> List[str]:
         normalized = unicodedata.normalize("NFKD", (text or "").lower())
         normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
@@ -878,6 +1043,30 @@ class ToolsManager:
         ]
         return any(m in q for m in markers)
 
+    def _contains_year(self, query: str) -> bool:
+        return bool(re.search(r"\b(20\d{2})\b", query or ""))
+
+    def _time_sensitive_timelimit(self, query: str) -> Optional[str]:
+        q = self._normalize_text_for_match(query)
+        urgent_markers = ["today", "now", "hom nay", "vua", "latest", "current", "update", "patch", "banner"]
+        if any(m in q for m in urgent_markers):
+            return "m"
+        return "w"
+
+    def _transform_temporal_query(self, query: str) -> Tuple[str, Optional[str]]:
+        clean = (query or "").strip()
+        if not clean:
+            return clean, None
+
+        time_sensitive = self._is_time_sensitive_query(clean)
+        timelimit = self._time_sensitive_timelimit(clean) if time_sensitive else None
+
+        if time_sensitive and not self._contains_year(clean):
+            current_year = str(datetime.now().year)
+            clean = f"{clean} {current_year}".strip()
+
+        return clean, timelimit
+
     def _required_quality_sources(self, query: str) -> int:
         return self.time_sensitive_min_quality_sources if self._is_time_sensitive_query(query) else self.min_quality_sources
 
@@ -886,7 +1075,7 @@ class ToolsManager:
         if not base:
             return []
 
-        parts = re.split(r"\s*(?:\n+|;|\?|\.)\s*", base, flags=re.IGNORECASE)
+        parts = re.split(r"\s*(?:\n+|;|\?|\.(?=\s)|,|\band\b|\bvà\b|\bva\b)\s*", base, flags=re.IGNORECASE)
         intents = [p.strip() for p in parts if len(p.strip()) > 2]
         if not intents:
             return [base]
@@ -954,6 +1143,85 @@ class ToolsManager:
             score += 0.35
 
         return score
+
+    def _lightweight_rerank(self, topic: str, query: str, records: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        if not records:
+            return []
+
+        # 1. Consensus / Information overlap
+        record_tokens = []
+        for rec in records:
+            text = f"{rec.get('title', '')} {rec.get('snippet', '')}".lower()
+            tokens = set(self._normalize_query_tokens(text))
+            record_tokens.append(tokens)
+
+        consensus_scores = [0.0] * len(records)
+        for i in range(len(records)):
+            for j in range(len(records)):
+                if i != j:
+                    overlap = len(record_tokens[i].intersection(record_tokens[j]))
+                    if overlap > 3:
+                        consensus_scores[i] += min(1.0, overlap * 0.1)
+
+        # 2. Freshness Boost
+        current_year = str(datetime.now().year)
+        prev_year = str(datetime.now().year - 1)
+        freshness_markers = ["mới nhất", "cập nhật", "hôm nay", "vừa qua", "mới đây", "ngày trước", "giờ trước", "latest", "update", "yesterday", "ago"]
+
+        # 3. Domain duplication tracking
+        domain_counts = {}
+
+        reranked = []
+        for idx, rec in enumerate(records):
+            base_score = float(rec.get("score", "0"))
+
+            # (a) Consensus boost
+            c_boost = min(1.5, consensus_scores[idx] * 0.2)
+
+            # (b) Freshness boost
+            is_time_sensitive = self._is_time_sensitive_query(query)
+            f_boost = 0.0
+            decay_penalty = 0.0
+            title_snippet = f"{rec.get('title', '')} {rec.get('snippet', '')}".lower()
+
+            if is_time_sensitive:
+                boost_curr = 1.2
+                boost_prev = 0.6
+                boost_marker = 0.5
+            else:
+                boost_curr = 0.8
+                boost_prev = 0.4
+                boost_marker = 0.3
+
+            if current_year in title_snippet:
+                f_boost += boost_curr
+            elif prev_year in title_snippet:
+                f_boost += boost_prev
+            if any(marker in title_snippet for marker in freshness_markers):
+                f_boost += boost_marker
+
+            # (c) Time-decay penalty (chỉ chạy khi is_time_sensitive=True)
+            if is_time_sensitive:
+                # Trích xuất ngày từ 40 ký tự đầu của snippet, nếu None quét nốt 40 ký tự đầu của title (Fallback check)
+                pub_date = self._extract_date(rec.get("snippet", "")[:40])
+                if not pub_date:
+                    pub_date = self._extract_date(rec.get("title", "")[:40])
+                decay_penalty = self._calculate_time_decay_penalty(topic, pub_date, is_time_sensitive)
+
+            # (d) Penalize domain duplication
+            d_penalty = 0.0
+            domain = (rec.get("domain") or "").strip().lower()
+            org_domain = self._organization_domain(domain) or domain
+            if org_domain:
+                domain_counts[org_domain] = domain_counts.get(org_domain, 0) + 1
+                if domain_counts[org_domain] > 1:
+                    d_penalty = -0.5 * (domain_counts[org_domain] - 1)
+
+            final_score = base_score + c_boost + f_boost + decay_penalty + d_penalty
+            rec["score"] = str(round(final_score, 3))
+            reranked.append(rec)
+
+        return sorted(reranked, key=lambda x: float(x.get("score", "0")), reverse=True)
 
     def _format_source_line(self, rec: Dict[str, str]) -> str:
         title = rec.get("title") or "Không có tiêu đề"
@@ -1335,11 +1603,19 @@ class ToolsManager:
         self._set_deep_read_cache(url, "", ttl_seconds=self.search_empty_evidence_cache_ttl_seconds)
         return ""
 
-    async def _search_duckduckgo_records(self, query: str, index: int = 0) -> List[Dict[str, str]]:
+    async def _search_duckduckgo_records(
+        self,
+        query: str,
+        index: int = 0,
+        timelimit: Optional[str] = None,
+        query_effective: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
         start_ts = datetime.now().timestamp()
         try:
             def _do_search():
                 with DDGS() as ddgs:
+                    if timelimit:
+                        return list(ddgs.text(query, max_results=5, timelimit=timelimit))
                     return list(ddgs.text(query, max_results=5))
 
             results = await asyncio.to_thread(_do_search)
@@ -1359,6 +1635,7 @@ class ToolsManager:
                     "normalized_url": normalized_url,
                     "domain": domain,
                     "query": query,
+                    "query_effective": query_effective or query,
                     "query_index": str(index),
                 })
 
@@ -1602,10 +1879,12 @@ class ToolsManager:
                 if snippet:
                     deep_lines.append(f"- {title} ([đọc nội dung](<{url}>)): {snippet}")
 
+        unique_domains = {rec.get("domain") or "" for rec in display_records if rec.get("domain")}
         parts = [
             f"### 🔍 [Chủ đề: {topic.upper()}] Kết quả cho '{query}':",
             f"- Mode: {self.search_web_mode}",
             f"- Top results: {len(display_records)}",
+            f"- Unique domains: {len(unique_domains)}",
             f"- Grounded reads: {self.search_grounded_top_links if self.search_web_mode == 'grounded' else 0}",
             f"- Required quality sources: {required_sources}",
             f"- Quality sources found: {len(quality_domains)}",
@@ -1635,10 +1914,11 @@ class ToolsManager:
         self.logger.info(f"Classified: {selected_topic.upper()}. Searching for: '{q_sub}'")
         self.logger.info(f"Primary query: Q1='{q1}'")
 
-        primary_queries = [q1]
+        transformed_query, timelimit = self._transform_temporal_query(q1)
+        primary_queries = [transformed_query or q1]
 
         primary_tasks = [
-            asyncio.create_task(self._search_duckduckgo_records(p_query, idx))
+            asyncio.create_task(self._search_duckduckgo_records(p_query, idx, timelimit=timelimit, query_effective=transformed_query))
             for idx, p_query in enumerate(primary_queries)
         ]
         primary_results = await asyncio.gather(*primary_tasks, return_exceptions=True)
@@ -1666,7 +1946,8 @@ class ToolsManager:
             rec["score"] = str(self._score_record(selected_topic, q_sub, rec))
             scored.append(rec)
 
-        ranked = sorted(scored, key=lambda x: float(x.get("score", "0")), reverse=True)
+        # Áp dụng lightweight reranking cho danh sách kết quả của từng intent
+        ranked = self._lightweight_rerank(selected_topic, q_sub, scored)
 
         if self.search_web_mode == "grounded":
             top_records = ranked[:self.search_grounded_top_links]
@@ -1695,22 +1976,19 @@ class ToolsManager:
         if not intents:
             return ""
 
-        batch_size = self._determine_batch_size(intents)
         if len(intents) > 1:
-            self.logger.info(f"Subquery fanout enabled with adaptive batching: intents={len(intents)} batch_size={batch_size}")
+            self.logger.info(f"Subquery fanout enabled. Running {len(intents)} search intents fully in parallel.")
+
+        tasks = [self._search_single_intent(intent, force_fallback) for intent in intents]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         final_sections = []
-        for start in range(0, len(intents), batch_size):
-            batch = intents[start:start + batch_size]
-            tasks = [self._search_single_intent(intent, force_fallback) for intent in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            for intent, res in zip(batch, results):
-                if isinstance(res, Exception):
-                    self.logger.error(f"Search intent error for '{intent[:60]}': {res}")
-                    final_sections.append(f"### 🔍 [Chủ đề: GENERAL] Kết quả cho '{intent}':\n(Không thể truy xuất dữ liệu cho intent này.)")
-                elif res:
-                    final_sections.append(res)
+        for intent, res in zip(intents, results):
+            if isinstance(res, Exception):
+                self.logger.error(f"Search intent error for '{intent[:60]}': {res}")
+                final_sections.append(f"### 🔍 [Chủ đề: GENERAL] Kết quả cho '{intent}':\n(Không thể truy xuất dữ liệu cho intent này.)")
+            elif res:
+                final_sections.append(res)
 
         return "\n\n".join(final_sections).strip() if final_sections else ""
 
@@ -1798,7 +2076,25 @@ class ToolsManager:
         try:
             if name == "web_search":
                 query = args.get("query", "")
-                result = await self.run_search_apis(query, "general")
+                result = ""
+                if self.search_subtasks_enabled and self.search_subtask_client:
+                    # Tính toán số lượng intent động dựa trên câu query để co giãn timeout
+                    intents = self._split_multi_intents(query)
+                    num_intents = len(intents) if intents else 1
+                    dynamic_timeout = max(self.search_subtask_timeout_seconds, num_intents * 8)
+                    self.logger.info(f"Dynamic timeout calculated: {dynamic_timeout}s for {num_intents} intents.")
+
+                    subtask_result = await self.search_subtask_client.request_search(
+                        user_id=user_id,
+                        query=query,
+                        mode="general",
+                        timeout=dynamic_timeout,
+                    )
+                    if subtask_result:
+                        result = subtask_result
+
+                if not result:
+                    result = await self.run_search_apis(query, "general")
                 try:
                     if self.db_repo is not None:
                         await self.db_repo.log_web_search(user_id, query, str(result)[:2000])
@@ -1868,7 +2164,8 @@ class ToolsManager:
                 if action == "add":
                     if role == "moderator":
                         await self.db_repo.add_moderator_user(target_user_id)
-                        return f"🎉 Thăng chức thành công người dùng {target_user_id} làm Moderator!"
+                        self._record_allowed_mention(user_id, target_user_id)
+                        return f"🎉 Thăng chức thành công người dùng <@{target_user_id}> làm Moderator!"
                     elif role == "admin":
                         await self.db_repo.add_admin_user(target_user_id)
                         return f"👑 Thăng chức thành công người dùng {target_user_id} làm Admin!"
