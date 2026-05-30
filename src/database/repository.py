@@ -11,13 +11,26 @@ from src.core.config import logger
 
 class DatabaseRepository:
     """Direct asyncpg repository for all database operations."""
+    _instance: Optional['DatabaseRepository'] = None
 
-    def __init__(self, db_url: str = os.getenv("DATABASE_URL", "postgresql://localhost:5432/azuris")):
-        self.db_url = db_url
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super(DatabaseRepository, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, db_url: Optional[str] = None):
+        if getattr(self, "_initialized", False):
+            if db_url and not self.pool:
+                self.db_url = db_url
+            return
+
+        self.db_url = db_url or os.getenv("DATABASE_URL", "postgresql://localhost:5432/azuris")
         self.logger = logger
         self.pool: Optional[asyncpg.Pool] = None
         self._init_lock = asyncio.Lock()
         self._schema_ready = False
+        self._initialized = True
 
     async def init_db(self) -> None:
         if self.pool is not None and self._schema_ready:
@@ -316,6 +329,8 @@ class DatabaseRepository:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_metadata_gin ON user_notes USING gin (metadata)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_keywords ON rag_chunks USING GIN (keywords)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_summary_trgm ON rag_chunks USING GIN (chunk_summary gin_trgm_ops)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_web_history_user_time ON web_history (user_id, timestamp DESC)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_logs_user_time ON usage_logs (user_id, timestamp DESC)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_custom_api_models_alive ON custom_api_models (provider, is_alive, model_id)")
 
             await self.sync_env_api_keys(conn=conn)
@@ -1077,7 +1092,7 @@ class DatabaseRepository:
                 """
                 SELECT note_id, content, metadata, created_at
                 FROM user_notes
-                WHERE user_id = $1 AND metadata->>'filename' = $2
+                WHERE user_id = $1 AND metadata @> jsonb_build_object('filename', $2::text)
                 LIMIT 1
                 """,
                 user_id,
