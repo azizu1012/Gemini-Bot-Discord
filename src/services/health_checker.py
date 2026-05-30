@@ -1,12 +1,13 @@
 import asyncio
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 import aiohttp
 
 from src.core.config import get_config
 from src.core.api_router import get_api_router
+from src.core.custom_endpoint import custom_models_url, normalize_custom_endpoint
 from src.core.gemini_api_manager import GeminiApiManager
 from src.database.repository import DatabaseRepository
 
@@ -33,29 +34,84 @@ class HealthCheckerService:
         self.key_status: Dict[str, Dict[str, Any]] = {}
         self.admin_user = None
 
-    async def _ping_openai_key(self, api_key: str, endpoint: str) -> bool:
-        """Ping a specific OpenAI-compatible key to check if it's alive."""
+    async def _fetch_openai_models(self, api_key: str, endpoint: str) -> Dict[str, Any]:
+        """Fetch /v1/models for a specific OpenAI-compatible key."""
         if not endpoint:
-            return False
+            return {"alive": False, "models": [], "scan_success": False, "error": "missing_endpoint"}
 
-        base_url = endpoint
-        if not base_url.endswith("/"):
-            base_url += "/"
-        if not base_url.endswith("v1/"):
-            base_url += "v1/"
+        try:
+            normalized_endpoint = normalize_custom_endpoint(endpoint)
+        except ValueError as endpoint_error:
+            return {"alive": False, "models": [], "scan_success": False, "error": str(endpoint_error)}
 
-        url = f"{base_url}models"
-        headers = {
-            "Authorization": f"Bearer {api_key}"
-        }
+        url = custom_models_url(normalized_endpoint)
+        headers = {"Authorization": f"Bearer {api_key}"}
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers, timeout=10) as response:
-                    return response.status == 200
+                    if response.status != 200:
+                        body = await response.text()
+                        return {
+                            "alive": False,
+                            "models": [],
+                            "scan_success": False,
+                            "error": f"HTTP {response.status}: {body[:180]}",
+                        }
+                    try:
+                        payload = await response.json(content_type=None)
+                    except Exception as json_error:
+                        return {
+                            "alive": True,
+                            "models": [],
+                            "scan_success": False,
+                            "error": f"invalid_models_json: {json_error}",
+                        }
+
+                    data = payload.get("data", []) if isinstance(payload, dict) else []
+                    models: List[Dict[str, Any]] = []
+                    for item in data:
+                        if isinstance(item, dict):
+                            model_id = str(item.get("id") or item.get("model") or item.get("name") or "").strip()
+                            if model_id:
+                                models.append(item)
+                        else:
+                            model_id = str(item or "").strip()
+                            if model_id:
+                                models.append({"id": model_id})
+                    return {"alive": True, "models": models, "scan_success": True, "error": ""}
         except Exception as e:
             self.logger.warning(f"Health ping failed for OpenAI key {f'...{api_key[-4:]}'}: {e}")
-            return False
+            return {"alive": False, "models": [], "scan_success": False, "error": str(e)}
+
+    async def scan_openai_models(self, api_key: str, endpoint: str) -> Dict[str, Any]:
+        return await self._fetch_openai_models(api_key, endpoint)
+
+    async def _ping_openai_key(self, api_key: str, endpoint: str) -> bool:
+        result = await self._fetch_openai_models(api_key, endpoint)
+        return bool(result.get("alive"))
+
+    async def _ping_openai_model(self, api_key: str, endpoint: str, model_id: str) -> Dict[str, Any]:
+        if not model_id:
+            return {"alive": False, "error": "missing_model"}
+        try:
+            normalized_endpoint = normalize_custom_endpoint(endpoint)
+        except ValueError as endpoint_error:
+            return {"alive": False, "error": str(endpoint_error)}
+
+        try:
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=api_key, base_url=normalized_endpoint)
+            await client.chat.completions.create(
+                model=model_id,
+                messages=[{"role": "user", "content": "ping"}],
+                temperature=0.0,
+                max_tokens=4,
+            )
+            return {"alive": True, "error": ""}
+        except Exception as e:
+            return {"alive": False, "error": str(e)}
 
     async def _generate_recovery_report(self, key_name: str, provider: str, downtime_start: float, uptime_time: float, downtime_str: str) -> str:
         """Generate a summary recovery report using LLM."""
@@ -84,18 +140,63 @@ class HealthCheckerService:
                 f"Mọi tiến trình xử lý liên quan đến khóa này đã được định tuyến trở lại bình thường."
             )
 
-    async def run_health_check_cycle(self, force_send_alerts: bool = True) -> List[str]:
-        """Run a single check cycle over all API keys in database pool and return logs if status changed."""
-        changes_detected = []
+    async def run_health_check_cycle(
+        self,
+        force_send_alerts: bool = True,
+        full_key_scan: bool = False,
+        selected_model_ids: Optional[List[str]] = None,
+        ping_selected_models: bool = True,
+    ) -> Dict[str, Any]:
+        """Run a single check cycle over API keys and return a structured report."""
+        changes_detected: List[str] = []
+        key_checks: List[Dict[str, Any]] = []
+        model_ping_reports: List[Dict[str, Any]] = []
+        alive_key_count = 0
+        dead_key_count = 0
+        model_payload_by_id: Dict[str, Dict[str, Any]] = {}
+        seen_model_ids = set()
+        model_scan_success = False
+        last_scan_error = ""
+        active_key_id = None
+        endpoint_preset = "manual"
+        selected_model_ids = [str(m).strip() for m in (selected_model_ids or []) if str(m).strip()]
+        selected_model_ids = list(dict.fromkeys(selected_model_ids))
 
-        # Kiểm tra tính hợp lệ của Custom API Endpoint để tránh phát ra cảnh báo giả
-        endpoint = getattr(self.config, 'OPENAI_CUSTOM_ENDPOINT', '').strip()
-        if not endpoint or not (endpoint.startswith("http://") or endpoint.startswith("https://")):
-            self.logger.warning(
-                f"[HealthChecker] Custom API Endpoint rỗng hoặc không hợp lệ ('{endpoint}'). "
-                f"Tạm dừng chu kỳ ping các Custom API key để tránh phát ra cảnh báo giả."
-            )
-            return changes_detected
+        report: Dict[str, Any] = {
+            "changes": changes_detected,
+            "key_checks": key_checks,
+            "model_scan": {},
+            "model_ping": model_ping_reports,
+        }
+
+        try:
+            provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
+        except Exception as e:
+            self.logger.warning(f"[HealthChecker] Không đọc được custom provider config từ DB: {e}")
+            provider_config = None
+
+        if provider_config is not None:
+            endpoint = str(provider_config.get("normalized_base_url") or "").strip()
+            active_key_id = provider_config.get("active_key_id")
+            endpoint_preset = str(provider_config.get("endpoint_preset") or "manual").strip().lower()
+            if not provider_config.get("is_enabled"):
+                report["model_scan"] = {"error": "custom_provider_disabled"}
+                return report
+            if not endpoint or active_key_id is None:
+                last_scan_error = "custom_provider_config_incomplete"
+                await self.db_repo.update_custom_provider_scan_status("openai", False, last_scan_error)
+                report["model_scan"] = {"error": last_scan_error}
+                return report
+        else:
+            try:
+                endpoint = normalize_custom_endpoint(getattr(self.config, 'OPENAI_CUSTOM_ENDPOINT', '').strip())
+            except ValueError as endpoint_error:
+                self.logger.warning(
+                    f"[HealthChecker] Custom API Endpoint rỗng hoặc không hợp lệ ({endpoint_error}). "
+                    f"Tạm dừng chu kỳ ping các Custom API key để tránh phát ra cảnh báo giả."
+                )
+                report["model_scan"] = {"error": "invalid_custom_endpoint"}
+                return report
 
         try:
             # Lấy tất cả các keys từ database pool
@@ -115,7 +216,8 @@ class HealthCheckerService:
                     })
 
         if not db_keys:
-            return changes_detected
+            report["model_scan"] = {"error": "no_keys"}
+            return report
 
         for entry in db_keys:
             api_key = entry.get("api_key")
@@ -130,11 +232,58 @@ class HealthCheckerService:
             # Chỉ ping các keys đang hoạt động (không bị vô hiệu hóa hẳn)
             if not is_active:
                 continue
+            if not full_key_scan and active_key_id is not None and entry.get("key_id") != active_key_id:
+                continue
 
             key_name = f'...{api_key[-4:]}'
 
             # Ping tương ứng theo loại provider (ở đây chắc chắn là openai do đã lọc ở trên)
-            is_alive = await self._ping_openai_key(api_key, self.config.OPENAI_CUSTOM_ENDPOINT)
+            fetch_result = await self._fetch_openai_models(api_key, endpoint)
+            fetch_error = str(fetch_result.get("error") or "")[:500]
+            if fetch_error:
+                last_scan_error = fetch_error
+            is_alive = bool(fetch_result.get("alive"))
+            if is_alive:
+                alive_key_count += 1
+                if fetch_result.get("scan_success"):
+                    model_scan_success = True
+                    for model in fetch_result.get("models", []):
+                        model_id = str(model.get("id") or model.get("model") or model.get("name") or "").strip()
+                        if model_id:
+                            seen_model_ids.add(model_id)
+                            if model_id not in model_payload_by_id:
+                                model_payload_by_id[model_id] = model
+            else:
+                dead_key_count += 1
+
+            key_checks.append({
+                "key": key_name,
+                "provider": provider,
+                "alive": is_alive,
+                "error": fetch_error if not is_alive else "",
+            })
+
+            if ping_selected_models and is_alive:
+                ping_models: List[str] = []
+                if selected_model_ids:
+                    ping_models = selected_model_ids if not full_key_scan else selected_model_ids[:1]
+                if not ping_models and fetch_result.get("models"):
+                    first_model = fetch_result.get("models", [])[0]
+                    first_model_id = str(first_model.get("id") or first_model.get("model") or first_model.get("name") or "").strip()
+                    if first_model_id:
+                        ping_models = [first_model_id]
+
+                if endpoint_preset in {"lm_studio", "ollama"} and not selected_model_ids:
+                    ping_models = []
+
+                for model_id in ping_models:
+                    ping_result = await self._ping_openai_model(api_key, endpoint, model_id)
+                    model_ping_reports.append({
+                        "key": key_name,
+                        "model_id": model_id,
+                        "alive": bool(ping_result.get("alive")),
+                        "error": str(ping_result.get("error") or "")[:500],
+                    })
 
             prev_info = self.key_status.get(api_key)
             prev_status = prev_info.get("status", "unknown") if prev_info else "unknown"
@@ -260,7 +409,78 @@ class HealthCheckerService:
                 if prev_info:
                     self.key_status[api_key]["last_check"] = now_ts
 
-        return changes_detected
+        scanned_model_payloads = list(model_payload_by_id.values())
+
+        if active_key_id is not None and not model_scan_success and alive_key_count == 0 and dead_key_count == 0:
+            last_scan_error = "active_custom_key_not_found_or_inactive"
+            await self.db_repo.update_custom_provider_scan_status("openai", False, last_scan_error)
+            changes_detected.append("[MODEL SCAN] Không tìm thấy custom API key active đã lưu trong provider config.")
+            report["model_scan"] = {
+                "success": False,
+                "error": last_scan_error,
+                "alive_keys": alive_key_count,
+                "dead_keys": dead_key_count,
+                "models_alive": len(seen_model_ids),
+            }
+
+        if model_scan_success:
+            checked_at = datetime.now(timezone.utc)
+            try:
+                upsert_result = await self.db_repo.upsert_custom_api_models(
+                    provider="openai",
+                    models=scanned_model_payloads,
+                    checked_at=checked_at,
+                )
+                dead_models = await self.db_repo.mark_missing_custom_api_models_dead(
+                    provider="openai",
+                    seen_model_ids=sorted(seen_model_ids),
+                    checked_at=checked_at,
+                )
+                await self.db_repo.update_custom_provider_scan_status("openai", True, "")
+                await self.router.refresh_custom_models_from_db(force=True)
+                await self.router.refresh_custom_provider_config(force=True)
+                changes_detected.append(
+                    "[MODEL SCAN] "
+                    f"Custom API keys sống/chết: {alive_key_count}/{dead_key_count}; "
+                    f"models alive: {len(seen_model_ids)}; "
+                    f"upserted: {upsert_result.get('upserted', 0)}; "
+                    f"vừa mark dead: {len(dead_models)}"
+                )
+                report["model_scan"] = {
+                    "success": True,
+                    "alive_keys": alive_key_count,
+                    "dead_keys": dead_key_count,
+                    "models_alive": len(seen_model_ids),
+                    "upserted": upsert_result.get("upserted", 0),
+                    "marked_dead": len(dead_models),
+                }
+            except Exception as e:
+                self.logger.error(f"Error saving custom API model scan: {e}")
+                await self.db_repo.update_custom_provider_scan_status("openai", False, str(e))
+                changes_detected.append(f"[MODEL SCAN ERROR] Không lưu được danh sách model: {e}")
+                report["model_scan"] = {
+                    "success": False,
+                    "error": str(e),
+                    "alive_keys": alive_key_count,
+                    "dead_keys": dead_key_count,
+                    "models_alive": len(seen_model_ids),
+                }
+        elif alive_key_count or dead_key_count:
+            await self.db_repo.update_custom_provider_scan_status("openai", False, last_scan_error or "invalid_models_response")
+            changes_detected.append(
+                "[MODEL SCAN] "
+                f"Custom API keys sống/chết: {alive_key_count}/{dead_key_count}; "
+                "không có response /v1/models hợp lệ để cập nhật DB."
+            )
+            report["model_scan"] = {
+                "success": False,
+                "error": last_scan_error or "invalid_models_response",
+                "alive_keys": alive_key_count,
+                "dead_keys": dead_key_count,
+                "models_alive": len(seen_model_ids),
+            }
+
+        return report
 
     async def _background_task(self, interval_seconds: int = 1800, admin_user: object = None):
         """Background loop to periodically check keys."""
@@ -270,7 +490,7 @@ class HealthCheckerService:
 
         # Lần chạy đầu tiên khi khởi động bot: chỉ nạp trạng thái ban đầu của keys, không spam cảnh báo down
         try:
-            await self.run_health_check_cycle(force_send_alerts=False)
+            await self.run_health_check_cycle(force_send_alerts=False, ping_selected_models=False)
         except Exception as e:
             self.logger.error(f"Error in initial health check: {e}")
 
@@ -280,7 +500,7 @@ class HealthCheckerService:
                 await asyncio.sleep(interval_seconds)
                 if not self.is_running:
                     break
-                await self.run_health_check_cycle(force_send_alerts=True)
+                await self.run_health_check_cycle(force_send_alerts=True, ping_selected_models=False)
             except Exception as e:
                 self.logger.error(f"Error in health check cycle: {e}")
 

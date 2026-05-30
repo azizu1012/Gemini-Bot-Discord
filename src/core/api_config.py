@@ -37,43 +37,10 @@ AVAILABLE_MODELS = {
         "tpm": int(os.getenv('GEMINI_FLASH_LITE_TPM', '250000')),
         "rpd": int(os.getenv('GEMINI_FLASH_LITE_RPD', '500')),
     },
-    # Custom Endpoint OpenAI Compatible Models
-    "custom-flash-high": {
-        "display": "Custom Flash High",
-        "priority": 0, # Highest priority so it gets picked first if available
-        "model_id": "gemini-3.5-flash-high",
-        "rpm": 60,
-        "tpm": 1000000,
-        "rpd": 5000,
-    },
-    "custom-flash-low": {
-        "display": "Custom Flash Low",
-        "priority": 0,
-        "model_id": "gemini-3.5-flash-low",
-        "rpm": 60,
-        "tpm": 1000000,
-        "rpd": 5000,
-    },
-    "custom-flash-lite": {
-        "display": "Custom Flash Lite",
-        "priority": 1, # Used for reasoning
-        "model_id": "gemini-3.1-flash-lite",
-        "rpm": 60,
-        "tpm": 1000000,
-        "rpd": 5000,
-    },
-    "custom-pro-image": {
-        "display": "Custom Pro Image",
-        "priority": 0,
-        "model_id": "gemini-3.1-pro-image",
-        "rpm": 10,
-        "tpm": 100000,
-        "rpd": 500,
-    }
 }
 
 # Priority list (sorted) - Router sẽ thử từ trên xuống
-MODEL_PRIORITY = ["custom-flash-high", "custom-flash-low", "gemini-flash-35", "gemini-flash-30", "custom-flash-lite", "gemini-flash-lite"]
+MODEL_PRIORITY = ["gemini-flash-35", "gemini-flash-30", "gemini-flash-lite"]
 
 
 # ============================================================================
@@ -89,6 +56,15 @@ ROUTER_COUNTER_LOG_ENABLED = os.getenv('ROUTER_COUNTER_LOG_ENABLED', 'true').low
 GEMINI_LIMITER_MAX_OUTPUT_TOKENS = int(os.getenv('GEMINI_LIMITER_MAX_OUTPUT_TOKENS', '2000'))
 GEMINI_LIMITER_FIXED_OVERHEAD = int(os.getenv('GEMINI_LIMITER_FIXED_OVERHEAD', '80'))
 GEMINI_LIMITER_SAFETY_FACTOR = float(os.getenv('GEMINI_LIMITER_SAFETY_FACTOR', '1.25'))
+
+CUSTOM_API_DEFAULT_RPM = int(os.getenv('CUSTOM_API_DEFAULT_RPM', '1000000'))
+CUSTOM_API_DEFAULT_TPM = int(os.getenv('CUSTOM_API_DEFAULT_TPM', '100000000'))
+CUSTOM_API_DEFAULT_RPD = int(os.getenv('CUSTOM_API_DEFAULT_RPD', '10000000'))
+
+DEFAULT_REASONING_MODEL_ALIAS = os.getenv('REASONING_MODEL_ALIAS', 'gemini-flash-lite').strip() or 'gemini-flash-lite'
+DEFAULT_FINAL_MODEL_ALIAS = os.getenv('FINAL_MODEL_ALIAS', 'gemini-flash-35').strip() or 'gemini-flash-35'
+DEFAULT_FALLBACK_MODEL_ALIAS = os.getenv('FALLBACK_MODEL_ALIAS', DEFAULT_REASONING_MODEL_ALIAS).strip() or DEFAULT_REASONING_MODEL_ALIAS
+VISION_MODEL_ALIAS = 'gemini-flash-35'
 
 # ============================================================================
 # PROXY/RELAY SETTINGS

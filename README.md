@@ -62,6 +62,7 @@ powershell -ExecutionPolicy Bypass -File .\stop_infra.ps1
 ### Điểm mới quan trọng
 
 - `install_services.sh` (Linux) và `install_services.ps1` (Windows local) cài runtime **project-local** vào `LOCAL_RUNTIME_ROOT` (mặc định `src/.runtime`).
+- Trên Linux, nếu nguồn PostgreSQL binaries từ EnterpriseDB trả 403 hoặc hết hiệu lực, `install_services.sh` tự fallback theo thứ tự: dùng PostgreSQL đã có trên host với data directory project-local, rồi build PostgreSQL từ source chính thức vào runtime local nếu máy có C compiler và `make`.
 - Script sẽ tự động tạo/cập nhật trực tiếp `.env` (không tạo `.env.bak`).
 - Có thể đổi vị trí runtime bằng `LOCAL_RUNTIME_ROOT` trước khi chạy bootstrap/launcher.
 - Bạn **không cần chèn tay** `DATABASE_URL`/`KAFKA_BOOTSTRAP_SERVERS` nữa.
@@ -166,12 +167,16 @@ Chi tiết biến môi trường: xem `.env.example`.
 - `run_bot.sh`: launcher Linux/PM2 (`--pm2`, `--pm2-fresh`, `--server`)
 - `stop_infra.sh` / `stop_infra.ps1`: deterministic teardown cho Kafka/Zookeeper/PostgreSQL trước khi relaunch
 - `src/handlers/message_handler.py`: Kafka distributed worker, atomic upsert `is_busy` locking, routing, context building, intent detection
-- `src/core/gemini_api_manager.py`: API key pool, throttle, client pool
+- `src/core/api_config.py`: cấu hình alias Gemini tĩnh, default reasoning/final/fallback và quota mặc định rất cao cho custom API.
+- `src/core/api_router.py`: resolve model alias, cache model custom discovered từ DB, đọc provider config DB-first và fallback env legacy khi DB chưa có cấu hình.
+- `src/core/custom_endpoint.py`: chuẩn hóa endpoint custom API, quản lý preset Manual/LM Studio/Ollama và tự append `/v1` khi Admin nhập link gốc.
+- `src/core/gemini_api_manager.py`: API key pool, throttle, client pool phân biệt provider/endpoint cho OpenAI-compatible client.
 - `src/core/gemini_pipeline.py`: reasoning loop, final synthesis, fallback
-- `src/handlers/bot_core.py`: Kafka publisher (`discord-incoming`), vòng đời bot, slash commands, admin interactions
+- `src/handlers/bot_core.py`: Kafka publisher (`discord-incoming`), vòng đời bot, slash commands, admin interactions, Select chọn endpoint mode trước Modal nhập endpoint/API key và UI `/custom_api_config` chọn model.
 - `src/services/file_index_service.py`: LLM-powered file indexing pipeline
-- `src/tools/tools.py`: registry/dispatch tool calls cho model + search pipeline
-- `src/database/repository.py`: PostgreSQL repository via `asyncpg`, connection pooling, array containment (`@>`) & trigram (`<->`) matching.
+- `src/services/health_checker.py`: ping custom API key active từ DB provider config, quét `/v1/models`, cập nhật DB model sống/chết
+- `src/tools/tools.py`: registry/dispatch tool calls cho model + search pipeline; `image_recognition` luôn dùng Gemini Flash qua Gen AI SDK
+- `src/database/repository.py`: PostgreSQL repository via `asyncpg`, connection pooling, array containment (`@>`) & trigram (`<->`) matching, schema `custom_api_provider_config` có `endpoint_preset`, `custom_api_models` và `bot_model_config`.
 - `src/managers/note_manager.py`: logic phân loại note, policy scope, promote global
 - `src/core/prompt_loader.py`: LRU-cached prompt loading từ `src/instructions/`
 
@@ -194,15 +199,17 @@ Các file prompt chính:
 - `identity_capability_prompt.txt` — template identity + role contract + tool capabilities
 - `lite_reasoning_prompt.txt` — prompt cho tier-1 reasoning model
 - `fallback_system_prompt.txt` — prompt cho fallback synthesis
-- `three_block_context_prompt.txt` — template 3-block context
+- `retrieval_prompts.txt` — các prompt retrieval được `prompt_loader` tách theo key
 - `file_index_reasoning_prompt.txt` — prompt cho file indexing reasoning
 - `file_index_validation_prompt.txt` — prompt cho file index validation
 
-Model alias có thể override qua env:
+Model alias Gemini tĩnh có thể override qua env:
 
-- `REASONING_MODEL_ALIAS` — model cho reasoning loop (default: flash-lite)
-- `FINAL_MODEL_ALIAS` — model cho final synthesis (default: flash)
-- `FALLBACK_MODEL_ALIAS` — model cho fallback (default: same as reasoning)
+- `REASONING_MODEL_ALIAS` — alias cho reasoning loop (default: `gemini-flash-lite`)
+- `FINAL_MODEL_ALIAS` — alias cho final synthesis (default: `gemini-flash-35`)
+- `FALLBACK_MODEL_ALIAS` — alias cho fallback, luôn nên giữ Gemini để chống brick (default: same as reasoning)
+
+Custom OpenAI-compatible models không còn hardcode trong `api_config.py`. `/custom_api_config` mở Select cho Moderator/Admin chọn một trong 3 endpoint mode trước khi nhập chi tiết: nhập tay endpoint cho provider production OpenAI-compatible bất kỳ, preset LM Studio local mặc định `http://127.0.0.1:1234/`, hoặc preset Ollama local mặc định `http://127.0.0.1:11434/`. Sau đó Modal nhận endpoint/API key, bot normalize endpoint sang `/v1`, scan `/v1/models`, lưu provider/key active vào `custom_api_provider_config` + `api_key_pool`, rồi mở UI chọn model reasoning, final output và image generator. Endpoint nhập tay vẫn yêu cầu API key và giữ payload OpenAI-compatible chuẩn; LM Studio/Ollama chỉ là preset local, có thể bỏ trống API key để bot dùng dummy key nội bộ cho OpenAI SDK. `OPENAI_CUSTOM_ENDPOINT`/`OPENAI_API_KEY` chỉ còn là fallback legacy khi DB chưa có provider config. Trường image generator là tùy chọn; nếu bỏ trống, `/imagine` tiếp tục dùng Gemini Imagen mặc định.
 
 ## Search & cache runtime (production)
 
@@ -227,25 +234,33 @@ Hệ thống theo hướng **DB-first + hybrid scope**:
 
 ## Tool inventory
 
-Hiện có 6 tools:
+Hiện có 8 tools:
 
 - `web_search`
 - `get_weather`
 - `calculate`
 - `save_note`
 - `retrieve_notes`
+- `delete_note`
 - `image_recognition`
+- `manage_user_role` — chỉ lộ schema cho Admin; dùng để add/remove `admin`, `moderator`, `premium`
 
 ## Slash commands đáng chú ý
 
 Core/admin:
 
+- `/ping`
 - `/reset-chat`
 - `/premium`
+- `/moderator`
 - `/reset-all`
 - `/message_to`
 - `/global-notes`
 - `/global-note-demote`
+- `/health_check` — ping custom API key active trong DB và quét model sống từ `/v1/models`
+- `/enable_custom_api` — bật/tắt provider config đã lưu trong DB, không xóa endpoint/key/model config
+- `/custom_api_config` — chọn endpoint mode Manual/LM Studio/Ollama, nhập endpoint/API key nếu cần, scan model rồi chọn reasoning, final output và image generator tùy chọn
+- `/imagine` — tạo ảnh; nếu image generator custom bỏ trống thì dùng Gemini Imagen mặc định
 - `/donate` — hiện QR ủng hộ (Ko-fi / PayPal), ảnh mã hóa Fernet, tự xóa sau 2 phút
 
 Voice room:
@@ -271,8 +286,14 @@ Voice room:
 
 ## Custom API Health Checker
 
-Tính năng tự động kiểm tra sức khoẻ (health check) của OpenAI Custom Endpoint chạy ngầm. Tính năng này:
+Tính năng tự động kiểm tra sức khoẻ của OpenAI-compatible Custom Endpoint chạy ngầm và kiêm luôn model discovery. Tính năng này:
 
 1. Nằm trong thư mục `src/services/health_checker.py`.
-2. Có thể được trigger thủ công bằng slash command `/health_check` dành cho Admin.
-3. Khi keys chết (die), tự động sử dụng LLM để tóm tắt và gửi report cho Admin theo mốc timestamp.
+2. Có thể được trigger thủ công bằng slash command `/health_check` dành cho Moderator/Admin.
+3. Chỉ ping provider `openai`, bỏ qua Gemini keys để không tốn quota.
+4. Ưu tiên endpoint/key active trong `custom_api_provider_config`; env `OPENAI_CUSTOM_ENDPOINT`/`OPENAI_API_KEY` chỉ là fallback legacy khi DB chưa có config.
+5. Ghi nhận `endpoint_preset` để phân biệt endpoint nhập tay với preset LM Studio/Ollama local mà không tự bẻ payload OpenAI-compatible chuẩn.
+6. Với endpoint mode `manual`, `/health_check` có thể full scan key OpenAI-compatible; với `lm_studio`/`ollama`, chỉ ping model đang chọn.
+7. Với key sống, gọi `/v1/models`, upsert model thấy được vào `custom_api_models`, và mark model không còn thấy trong scan thành dead thay vì xóa.
+8. Khi keys chết hoặc phục hồi, tự động gửi report cho Admin theo mốc timestamp; khi phục hồi có thể dùng LLM tạo báo cáo tiếng Việt.
+9. Nhận diện ảnh luôn đi qua Google Gen AI SDK với alias `gemini-flash-35`, không dùng Lite hoặc custom endpoint.

@@ -2,6 +2,9 @@ import asyncio
 import time
 import random
 import traceback
+import re
+import unicodedata
+from urllib.parse import urlsplit
 import threading
 from typing import Any, Optional, Dict, List, Tuple
 
@@ -9,6 +12,7 @@ from google import genai
 
 from src.core.config import logger
 from src.core.api_router import get_api_router
+from src.core.custom_endpoint import normalize_custom_endpoint
 
 class CustomFunctionCall:
     def __init__(self, name, args, id=None):
@@ -26,12 +30,13 @@ class CustomAPIWrapperContent:
         self.parts = parts
 
 class CustomAPIWrapperCandidate:
-    def __init__(self, parts):
+    def __init__(self, parts, finish_reason=None):
         self.content = CustomAPIWrapperContent(parts)
+        self.finish_reason = finish_reason
 
 class CustomAPIWrapperResponse:
-    def __init__(self, parts):
-        self.candidates = [CustomAPIWrapperCandidate(parts)]
+    def __init__(self, parts, finish_reason=None):
+        self.candidates = [CustomAPIWrapperCandidate(parts, finish_reason=finish_reason)]
         
     @property
     def text(self):
@@ -63,12 +68,16 @@ class GeminiApiManager:
         self.key_lock = threading.Lock()
         self.api_key_request_history: Dict[str, List[float]] = {}
         self.api_key_history_lock = threading.Lock()
-        self._gemini_clients: Dict[str, Any] = {}
+        self._gemini_clients: Dict[Any, Any] = {}
         self._gemini_clients_lock = threading.Lock()
 
     # --- Key selection ---
 
-    async def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, str]]]:
+    async def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        if preferred_model_alias and not self.api_router.is_custom_model_alias(preferred_model_alias):
+            if not self.api_router._allow_provider_request("gemini"):
+                self.logger.warning("Gemini circuit breaker OPEN; no gemini key will be reserved.")
+                return None, None, None, None
         if preferred_model_alias:
             reservation = await self.api_router.get_next_key_for_model_reservation(preferred_model_alias)
         else:
@@ -97,7 +106,7 @@ class GeminiApiManager:
             fallback_alias = preferred_model_alias or self.api_router.get_preferred_model()
 
             # Prevent custom models from being used with standard Gemini keys during legacy fallback
-            if fallback_alias and fallback_alias.startswith('custom-'):
+            if self.api_router.is_custom_model_alias(fallback_alias):
                 fallback_alias = "gemini-flash-35"
 
             legacy_reservation = {
@@ -105,6 +114,7 @@ class GeminiApiManager:
                 "model_alias": fallback_alias,
                 "pool": "legacy",
                 "counter_key": chosen_key,
+                "provider": "gemini",
             }
             return chosen_key, self.api_router.get_model_id(fallback_alias), fallback_alias, legacy_reservation
 
@@ -115,7 +125,7 @@ class GeminiApiManager:
         duration: int = 60,
         reason: str = "rate_limit",
         permanently_exhaust: bool = False,
-        reservation: Optional[Dict[str, str]] = None,
+        reservation: Optional[Dict[str, Any]] = None,
     ):
         # 503 Unavailable is a transient Google server error, not a quota limit.
         # We enforce a short delay, but do not exhaust/affect router quota for this key.
@@ -131,6 +141,10 @@ class GeminiApiManager:
             else:
                 self.api_router.mark_key_cooldown(key, model, duration, pool=pool, counter_key=counter_key)
 
+        provider = (reservation or {}).get("provider", "gemini")
+        if provider == "gemini" and reason in {"rate_limit", "unavailable", "empty_candidate", "quota"}:
+            self.api_router.record_provider_failure("gemini", reason)
+
         with self.key_lock:
             if key in self.key_status:
                 self.key_status[key]['frozen_until'] = time.time() + duration
@@ -142,12 +156,14 @@ class GeminiApiManager:
         else:
             self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to rate limit/quota.")
 
-    def _commit_selected_key(self, reservation: Optional[Dict[str, str]]) -> None:
+    def _commit_selected_key(self, reservation: Optional[Dict[str, Any]]) -> None:
         if not reservation:
             return
         if reservation.get("pool") == "legacy":
             return
         self.api_router.commit_key_usage(reservation)
+        if reservation.get("provider") == "gemini":
+            self.api_router.record_provider_success("gemini")
 
     # --- Error classification ---
 
@@ -183,40 +199,58 @@ class GeminiApiManager:
             "api_key_invalid",
             "api key invalid",
             "invalid api key",
+            "invalid_api_key",
             "api key not found",
             "key not found",
             "invalid argument: api key",
             "provided api key is invalid",
+            "authenticationerror",
+            "authentication error",
+            "error code: 401",
+            "401",
+            "unauthorized",
+            "malformed lm studio api token",
+            "lm studio api token",
+            "incorrect api key",
+            "invalid api_key",
         ]
         return any(token in lowered for token in strict_invalid_markers)
 
     # --- Client pool ---
 
-    def _get_or_create_gemini_client(self, api_key: str):
+    def _get_or_create_gemini_client(
+        self,
+        api_key: str,
+        provider: str = "gemini",
+        endpoint: Optional[str] = None,
+    ):
+        provider = str(provider or "gemini").strip().lower()
+        if provider == "openai":
+            raw_endpoint = str(endpoint or getattr(self.config, "OPENAI_CUSTOM_ENDPOINT", "") or "").strip()
+            normalized_endpoint = normalize_custom_endpoint(raw_endpoint)
+            cache_key = ("openai", normalized_endpoint, api_key)
+        else:
+            normalized_endpoint = ""
+            cache_key = ("gemini", api_key)
+
         with self._gemini_clients_lock:
-            existing = self._gemini_clients.get(api_key)
+            existing = self._gemini_clients.get(cache_key)
             if existing is not None:
                 return existing
-            
-            # Check if this is an OpenAI API Key
-            if api_key.startswith("sk-") and self.config.OPENAI_CUSTOM_ENDPOINT:
-                # Use custom endpoint for OpenAI
+
+            if provider == "openai":
                 self.logger.info(f"🔄 Chuyển sang sử dụng custom API (OpenAI endpoint) với key: ...{api_key[-4:]}")
                 from openai import AsyncOpenAI
 
-                endpoint = self.config.OPENAI_CUSTOM_ENDPOINT.rstrip("/")
-                if not endpoint.endswith("/v1") and not endpoint.endswith("v1"):
-                    endpoint = f"{endpoint}/v1"
-
                 client = AsyncOpenAI(
                     api_key=api_key,
-                    base_url=endpoint
+                    base_url=normalized_endpoint,
                 )
-                self._gemini_clients[api_key] = client
+                self._gemini_clients[cache_key] = client
                 return client
-                
+
             client = genai.Client(api_key=api_key)
-            self._gemini_clients[api_key] = client
+            self._gemini_clients[cache_key] = client
             return client
 
     @staticmethod
@@ -255,6 +289,14 @@ class GeminiApiManager:
         )
         self.logger.error(traceback.format_exc())
 
+    async def _close_client(self, client: Any) -> None:
+        close_method = getattr(client, "close", None)
+        if not close_method:
+            return
+        result = close_method()
+        if asyncio.iscoroutine(result):
+            await result
+
     async def close_gemini_clients(self) -> None:
         clients_to_close: List[Any] = []
         with self._gemini_clients_lock:
@@ -264,9 +306,25 @@ class GeminiApiManager:
 
         for client in clients_to_close:
             try:
-                await asyncio.to_thread(client.close)
+                await self._close_client(client)
             except Exception as close_error:
                 self.logger.warning(f"Gemini client close warning: {close_error}")
+
+    async def clear_custom_api_clients(self) -> None:
+        clients_to_close: List[Any] = []
+        with self._gemini_clients_lock:
+            custom_keys = [
+                cache_key for cache_key in self._gemini_clients
+                if isinstance(cache_key, tuple) and cache_key and cache_key[0] == "openai"
+            ]
+            for cache_key in custom_keys:
+                clients_to_close.append(self._gemini_clients.pop(cache_key))
+
+        for client in clients_to_close:
+            try:
+                await self._close_client(client)
+            except Exception as close_error:
+                self.logger.warning(f"Custom API client close warning: {close_error}")
 
     # --- Throttling ---
 
@@ -311,6 +369,71 @@ class GeminiApiManager:
                     chunks.append(text)
         return "\n".join(chunks)
 
+    @staticmethod
+    def _local_endpoint_port(endpoint_value: str) -> Optional[int]:
+        raw_endpoint = str(endpoint_value or "").strip().lower()
+        if not raw_endpoint:
+            return None
+        try:
+            parts = urlsplit(raw_endpoint)
+        except Exception:
+            return None
+        host = (parts.hostname or "").lower()
+        if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
+            return None
+        return parts.port
+
+    @classmethod
+    def _is_lm_studio_endpoint(cls, provider: str, endpoint: Optional[str], endpoint_preset: Optional[str]) -> bool:
+        provider_value = str(provider or "gemini").strip().lower()
+        endpoint_preset_value = str(endpoint_preset or "").strip().lower()
+        return provider_value == "openai" and (
+            endpoint_preset_value == "lm_studio" or cls._local_endpoint_port(endpoint or "") == 1234
+        )
+
+    @classmethod
+    def _is_local_openai_endpoint(cls, provider: str, endpoint: Optional[str], endpoint_preset: Optional[str]) -> bool:
+        provider_value = str(provider or "gemini").strip().lower()
+        endpoint_preset_value = str(endpoint_preset or "").strip().lower()
+        return provider_value == "openai" and (
+            endpoint_preset_value in {"lm_studio", "ollama"} or cls._local_endpoint_port(endpoint or "") in {1234, 11434}
+        )
+
+    @staticmethod
+    def _has_lm_studio_correction_signal(text: str) -> bool:
+        lowered = str(text or "").lower()
+        no_diacritics = "".join(
+            ch for ch in unicodedata.normalize("NFD", lowered)
+            if unicodedata.category(ch) != "Mn"
+        )
+        normalized = re.sub(r"[^a-z0-9\s=]", " ", no_diacritics)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        markers = (
+            "latest user correction",
+            "lm studio user correction",
+            "bia",
+            "sai roi",
+            "khong phai",
+            "khong dung",
+            "nham",
+            "y toi la",
+            "dinh chinh",
+            "wrong",
+            "correction",
+        )
+        if any(marker in normalized for marker in markers):
+            return True
+        return bool(re.search(r"\b[a-z0-9]{2,12}\s+la\s+.+\bma\b", normalized))
+
+    @staticmethod
+    def _lm_studio_correction_guard() -> str:
+        return (
+            "[LM STUDIO LOCAL CORRECTION GUARD]\n"
+            "Tin nhắn user mới nhất có dấu hiệu sửa lỗi hoặc phủ định. "
+            "Ưu tiên correction mới nhất hơn lịch sử/assistant cũ. "
+            "Không lặp lại fact đã bị user bác bỏ; nếu không chắc, nói không chắc hoặc hỏi lại."
+        )
+
     async def _acquire_gemini_quota(
         self,
         messages: List[Dict[str, Any]],
@@ -332,6 +455,9 @@ class GeminiApiManager:
         generation_config: Dict[str, Any],
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
+        provider: str = "gemini",
+        endpoint: Optional[str] = None,
+        endpoint_preset: Optional[str] = None,
     ):
         request_config = dict(generation_config)
         request_config["system_instruction"] = system_instruction
@@ -339,7 +465,7 @@ class GeminiApiManager:
         if tools:
             request_config["tools"] = tools
 
-        client = self._get_or_create_gemini_client(api_key)
+        client = self._get_or_create_gemini_client(api_key, provider=provider, endpoint=endpoint)
 
         if type(client).__name__ == "AsyncOpenAI":
             # Map Gemini format to OpenAI format
@@ -402,6 +528,39 @@ class GeminiApiManager:
                 else:
                     openai_messages.append({"role": "user", "content": str(msg)})
 
+            is_lm_studio_endpoint = self._is_lm_studio_endpoint(provider, endpoint, endpoint_preset)
+            is_local_endpoint = self._is_local_openai_endpoint(provider, endpoint, endpoint_preset)
+            if is_local_endpoint:
+                flattened = self._flatten_prompt_text(messages)
+                combined = f"{system_instruction}\n\n{flattened}" if flattened else system_instruction
+                combined = (combined or "").strip() or "Tiếp tục."
+                if is_lm_studio_endpoint and self._has_lm_studio_correction_signal(combined):
+                    combined = f"{self._lm_studio_correction_guard()}\n\n{combined}"
+                if is_lm_studio_endpoint and tools:
+                    combined += (
+                        "\n\n[CẦU NỐI TOOL CHO LM STUDIO]\n"
+                        "Không dùng native OpenAI tools trong request LM Studio này. "
+                        "Nếu cần công cụ, chỉ trả về đúng một dòng theo mẫu `TOOL_CALL: tên_tool(tham_số=\"giá trị\")` và không thêm chữ khác.\n"
+                        "Mẫu hợp lệ: `TOOL_CALL: web_search(query=\"từ khóa cần tìm\")`, "
+                        "`TOOL_CALL: get_weather(city=\"Hanoi\")`, "
+                        "`TOOL_CALL: calculate(equation=\"2+2\")`, "
+                        "`TOOL_CALL: retrieve_notes(query=\"chủ đề\")`, "
+                        "`TOOL_CALL: save_note(note_content=\"nội dung\", source=\"chat_inference\")`, "
+                        "`TOOL_CALL: delete_note(note_id=\"id\")`, "
+                        "`TOOL_CALL: image_recognition(image_url=\"url\", question=\"câu hỏi\")`.\n"
+                        "Khi đã có kết quả công cụ trong hội thoại, hãy dùng kết quả đó để kết luận và không gọi lại cùng công cụ nếu không cần."
+                    )
+                openai_messages = [{"role": "user", "content": combined}]
+            else:
+                non_system_msgs = [m for m in openai_messages if m.get("role") != "system"]
+                has_user_msg = any(
+                    m.get("role") == "user" and m.get("content") not in (None, "", [])
+                    for m in non_system_msgs
+                )
+                last_role = non_system_msgs[-1].get("role") if non_system_msgs else "system"
+                if not has_user_msg or last_role == "tool":
+                    openai_messages.append({"role": "user", "content": "Tiếp tục."})
+
             # Map Gemini tools to OpenAI tools
             openai_tools = None
             if tools:
@@ -441,12 +600,14 @@ class GeminiApiManager:
                 "max_tokens": generation_config.get("max_output_tokens", 2000),
                 "top_p": generation_config.get("top_p", 0.95),
             }
-            if openai_tools:
+            if openai_tools and not is_lm_studio_endpoint:
                 create_kwargs["tools"] = openai_tools
 
             response = await client.chat.completions.create(**create_kwargs)
             
-            msg = response.choices[0].message
+            choice = response.choices[0]
+            msg = choice.message
+            finish_reason = getattr(choice, "finish_reason", None)
             parts = []
 
             if msg.content:
@@ -472,7 +633,7 @@ class GeminiApiManager:
             if not parts:
                 parts.append(CustomAPIWrapperPart(text=""))
 
-            return CustomAPIWrapperResponse(parts=parts)
+            return CustomAPIWrapperResponse(parts=parts, finish_reason=finish_reason)
             
         else:
             from google.genai import types
@@ -565,7 +726,10 @@ class GeminiApiManager:
                     system_instruction="You are a helpful assistant.",
                     generation_config=generation_config,
                     messages=messages,
-                    tools=None
+                    tools=None,
+                    provider=(reservation or {}).get("provider", "gemini"),
+                    endpoint=(reservation or {}).get("endpoint"),
+                    endpoint_preset=(reservation or {}).get("endpoint_preset"),
                 )
                 
                 self._commit_selected_key(reservation)

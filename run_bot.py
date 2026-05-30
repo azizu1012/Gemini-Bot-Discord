@@ -53,6 +53,7 @@ from src.core.config import get_config, logger
 from src.core.preflight import emit_startup_banner, run_preflight_checks
 from src.handlers.bot_core import BotCore
 from src.handlers.message_handler import MessageHandler
+from src.services.search_subtask_worker import SearchSubtaskWorker
 
 
 def _mask_token(token: str) -> str:
@@ -84,6 +85,8 @@ async def run_bot_only(config):
     bot_core = None
     message_handler = None
     worker_task = None
+    search_worker = None
+    search_task = None
 
     try:
         bot_core = BotCore(config)
@@ -94,6 +97,11 @@ async def run_bot_only(config):
 
         logger.info("Starting background worker for MessageHandler")
         worker_task = asyncio.create_task(message_handler.start_worker())
+
+        if os.getenv("SEARCH_SUBTASKS_ENABLED", "false").lower() == "true":
+            search_worker = SearchSubtaskWorker(config)
+            logger.info("Starting SearchSubtaskWorker")
+            search_task = asyncio.create_task(search_worker.start_worker())
 
         logger.info("Starting Chad Gibiti Discord bot")
         await bot_core.start(config.TOKEN)
@@ -111,6 +119,16 @@ async def run_bot_only(config):
                 await worker_task
             except asyncio.CancelledError:
                 pass
+
+        if search_task is not None and not search_task.done():
+            search_task.cancel()
+            try:
+                await search_task
+            except asyncio.CancelledError:
+                pass
+
+        if search_worker is not None:
+            await search_worker.shutdown()
 
         if message_handler is not None:
             await message_handler.shutdown()

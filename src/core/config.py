@@ -164,8 +164,17 @@ class Config:
         self.REASONING_MAX_LOOPS = self._get_int("REASONING_MAX_LOOPS", 3, min_value=1, max_value=6)
         self.FINAL_MAX_API_RETRIES = self._get_int("FINAL_MAX_API_RETRIES", 3, min_value=1, max_value=6)
         self.FALLBACK_MAX_API_RETRIES = self._get_int("FALLBACK_MAX_API_RETRIES", 2, min_value=1, max_value=5)
+        self.FINAL_MAX_OUTPUT_TOKENS = self._get_int("FINAL_MAX_OUTPUT_TOKENS", 8192, min_value=512, max_value=65536)
+        self.FALLBACK_MAX_OUTPUT_TOKENS = self._get_int("FALLBACK_MAX_OUTPUT_TOKENS", self.FINAL_MAX_OUTPUT_TOKENS, min_value=512, max_value=65536)
+        self.FINAL_CONTINUATION_MAX_CALLS = self._get_int("FINAL_CONTINUATION_MAX_CALLS", 5, min_value=1, max_value=8)
         self.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = self._get_bool("SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS", True)
         self.SEARCH_ALLOW_PARTIAL_ANSWER = self._get_bool("SEARCH_ALLOW_PARTIAL_ANSWER", True)
+
+        # --- GEMINI CIRCUIT BREAKER ---
+        self.GEMINI_CIRCUIT_ENABLED = self._get_bool("GEMINI_CIRCUIT_ENABLED", True)
+        self.GEMINI_CIRCUIT_FAILURE_THRESHOLD = self._get_int("GEMINI_CIRCUIT_FAILURE_THRESHOLD", 5, min_value=1, max_value=50)
+        self.GEMINI_CIRCUIT_WINDOW_SECONDS = self._get_int("GEMINI_CIRCUIT_WINDOW_SECONDS", 10, min_value=2, max_value=300)
+        self.GEMINI_CIRCUIT_OPEN_SECONDS = self._get_int("GEMINI_CIRCUIT_OPEN_SECONDS", 30, min_value=5, max_value=600)
 
         # --- GEMINI SAFETY SETTINGS ---
         self.SAFETY_SETTINGS = [
@@ -176,7 +185,10 @@ class Config:
         ]
 
         # --- MIN FREE SPACE ---
-        self.MIN_FREE_SPACE_MB = 100
+        self.MIN_FREE_SPACE_MB = self._get_int("MIN_FREE_SPACE_MB", 100)
+
+        # --- SEARCH TUNING ---
+        self.MAX_SEARCH_CALLS_PER_TURN = self._get_int("MAX_SEARCH_CALLS_PER_TURN", 5, min_value=1, max_value=20)
 
     def _resolve_runtime_path(self, env_name: str, default_relative_path: str) -> str:
         raw_path = (os.getenv(env_name) or "").strip()
@@ -280,6 +292,7 @@ LOCKED_CHANNELS_FILE = config.LOCKED_CHANNELS_FILE
 ENFORCED_NAMES_FILE = config.ENFORCED_NAMES_FILE
 VOICE_LOCK_LOG_FILE = config.VOICE_LOCK_LOG_FILE
 MIN_FREE_SPACE_MB = config.MIN_FREE_SPACE_MB
+MAX_SEARCH_CALLS_PER_TURN = config.MAX_SEARCH_CALLS_PER_TURN
 DEFAULT_RATE_LIMIT = config.DEFAULT_RATE_LIMIT
 PREMIUM_RATE_LIMIT = config.PREMIUM_RATE_LIMIT
 DEFAULT_DM_LIMIT = config.DEFAULT_DM_LIMIT
@@ -290,6 +303,9 @@ REASONING_MAX_API_RETRIES = config.REASONING_MAX_API_RETRIES
 REASONING_MAX_LOOPS = config.REASONING_MAX_LOOPS
 FINAL_MAX_API_RETRIES = config.FINAL_MAX_API_RETRIES
 FALLBACK_MAX_API_RETRIES = config.FALLBACK_MAX_API_RETRIES
+FINAL_MAX_OUTPUT_TOKENS = config.FINAL_MAX_OUTPUT_TOKENS
+FALLBACK_MAX_OUTPUT_TOKENS = config.FALLBACK_MAX_OUTPUT_TOKENS
+FINAL_CONTINUATION_MAX_CALLS = config.FINAL_CONTINUATION_MAX_CALLS
 SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = config.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS
 SEARCH_ALLOW_PARTIAL_ANSWER = config.SEARCH_ALLOW_PARTIAL_ANSWER
 PROJECT_ROOT = str(config.PROJECT_ROOT)

@@ -3,8 +3,14 @@ Azuris_refactor_code_base/
 ├── AGENT_HANDOFF_PROJECT_CONTEXT.md
 ├── PROJECT_INFO.txt
 ├── Project_structure.txt
+├── GEMINI.md
+├── CLAUDE.md
 ├── requirements.txt
+├── .env
 ├── .env.example
+├── .gitignore
+├── .claude/
+├── .vscode/
 ├── main.py
 ├── run_bot.py
 ├── run_bot.sh
@@ -15,13 +21,13 @@ Azuris_refactor_code_base/
 ├── install_services.ps1
 ├── ecosystem.config.js
 ├── src/
-│   ├── api_gateway/
-│   │   └── server.py
 │   ├── core/
+│   │   ├── __init__.py
 │   │   ├── api_config.py
 │   │   ├── api_proxy.py
 │   │   ├── api_router.py
 │   │   ├── config.py
+│   │   ├── custom_endpoint.py
 │   │   ├── gemini_api_manager.py
 │   │   ├── gemini_pipeline.py
 │   │   ├── gemini_rate_limiter.py
@@ -29,43 +35,51 @@ Azuris_refactor_code_base/
 │   │   ├── preflight.py
 │   │   └── prompt_loader.py
 │   ├── database/
+│   │   ├── __init__.py
 │   │   └── repository.py
 │   ├── handlers/
+│   │   ├── __init__.py
 │   │   ├── bot_core.py
-│   │   ├── bot_server.py
 │   │   └── message_handler.py
 │   ├── instructions/
 │   │   ├── azuris_system_prompt.txt
 │   │   ├── fallback_system_prompt.txt
-│   │   ├── identity_capability_prompt.txt
-│   │   ├── lite_reasoning_prompt.txt
-│   │   ├── three_block_context_prompt.txt
-│   │   ├── search_budget_prompt.txt
-│   │   ├── extra_retrieval_prompt.txt
-│   │   ├── partial_evidence_prompt.txt
-│   │   ├── auto_retrieval_limit_prompt.txt
-│   │   ├── final_synthesis_prompt.txt
+│   │   ├── fallback_sys_prompt.py
 │   │   ├── file_index_reasoning_prompt.txt
 │   │   ├── file_index_validation_prompt.txt
-│   │   ├── system_prompt.py
+│   │   ├── identity_capability_prompt.txt
+│   │   ├── lite_reasoning_prompt.txt
 │   │   ├── lite_sys_prompt.py
-│   │   └── fallback_sys_prompt.py
+│   │   ├── retrieval_prompts.txt
+│   │   ├── role_contract.txt
+│   │   └── system_prompt.py
 │   ├── managers/
+│   │   ├── __init__.py
 │   │   ├── cache_manager.py
 │   │   ├── cleanup_manager.py
 │   │   ├── note_manager.py
 │   │   └── premium_manager.py
 │   ├── services/
+│   │   ├── __init__.py
 │   │   ├── file_index_service.py
 │   │   ├── file_parser.py
-│   │   └── health_checker.py
+│   │   ├── health_checker.py
+│   │   ├── kafka_service.py
+│   │   ├── search_subtask_client.py
+│   │   └── search_subtask_worker.py
 │   ├── tools/
+│   │   ├── __init__.py
 │   │   └── tools.py
 │   ├── voice/
+│   │   ├── __init__.py
 │   │   └── voice_lock.py
 │   └── .runtime/                 # local runtime artifacts (generated)
+├── assets/
+│   └── encrypted/
+├── Donet-qr/                     # QR gốc (gitignored)
 ├── data/                         # runtime data (generated/mutable)
 ├── uploaded_files/               # runtime uploads (generated/mutable)
+├── logs/                         # logs (generated)
 └── .venv/                        # local virtualenv (generated)
 
 ================================================================================
@@ -73,28 +87,34 @@ ROLE MAP (SHORT)
 ================================================================================
 
 - run_bot.py / run_bot.sh / run_bot.ps1:
-  Launcher layer (preflight + runtime mode orchestration).
+  Launcher chính, preflight, khởi động BotCore + MessageHandler và SearchSubtaskWorker (nếu SEARCH_SUBTASKS_ENABLED=true).
 
 - stop_infra.sh / stop_infra.ps1:
-  Deterministic infra teardown layer (Kafka/Zookeeper/PostgreSQL).
+  Teardown hạ tầng (Kafka/Zookeeper/PostgreSQL) theo 2 pha.
 
 - install_services.sh / install_services.ps1:
-  Provision Java/Kafka/PostgreSQL project-local under src/.runtime.
-
-- Launcher/bootstrap scripts:
-  Upsert runtime env keys trực tiếp vào `.env` (single-file env workflow, không tạo `.env.bak`).
+  Bootstrap Java/Kafka/PostgreSQL project-local trong src/.runtime; Linux có fallback PostgreSQL host/build source.
 
 - src/core/*:
-  Pipeline core, model router/manager, config/prompt loader, preflight.
+  Router, key pool, proxy, prompt loader, preflight. retrieval_prompts.txt được tách thành 6 prompt con (three_block_context, search_budget, extra_retrieval, partial_evidence, auto_retrieval_limit, final_synthesis).
+  gemini_api_manager.py có cầu nối TOOL_CALL cho LM Studio local và guard correction.
 
 - src/handlers/*:
-  Discord event flow và message orchestration.
+  BotCore nhận sự kiện Discord, gom attachments (current + referenced), gửi Kafka, sanitize mentions, typing loop 5s, và các slash command:
+  /ping, /reset-chat, /reset-all, /health_check, /enable_custom_api, /custom_api_config, /imagine, /premium, /moderator, /global-notes, /global-note-demote, /message_to, /donate.
+  MessageHandler là worker Kafka, xử lý RAG, ảnh (inline_data), pipeline, và gửi reply_batch (chunk 1800 ký tự).
 
 - src/database/repository.py:
-  DB access/persistence layer.
+  Asyncpg repo, schema + index GIN/Trgm, custom_api_provider_config (endpoint_preset), custom_api_models, bot_model_config.
 
 - src/services/*:
-  File indexing/parsing và health-check services.
+  KafkaService chung, file parser/indexing, health checker, search subtask client/worker.
 
 - src/tools/tools.py:
-  Tool registry + dispatch implementation.
+  Tool registry gồm web_search, get_weather, calculate, save_note, retrieve_notes, delete_note, image_recognition, manage_user_role (Admin-only schema). Search pipeline hỗ trợ temporal, multi-intent, rerank, cache, dynamic timeout; image_recognition dùng Gemini Flash (GenAI SDK).
+
+- src/managers/*:
+  CacheManager (TTL/LRU), NoteManager (tóm tắt LLM Lite + promote global), PremiumManager (check/add/remove).
+
+- src/voice/voice_lock.py:
+  Voice lock và whitelist quản lý phòng thoại; BotCore đăng ký /lock, /unlock, /move, /move_all, /set_room, /add_privet, /remove_privet, /list_privet.

@@ -47,6 +47,7 @@ Chi tiết luồng hoạt động:
 2. Broker Apache Kafka:
    - Topic `discord-incoming`: Chứa tin nhắn cần xử lý từ người dùng. Định danh khóa (message key) được gán bằng `user_id` để đảm bảo tất cả các tin nhắn từ cùng một người dùng sẽ luôn đi vào cùng một Partition của Kafka (đảm bảo thứ tự FIFO tuyệt đối cho mỗi cá nhân).
    - Topic `discord-outgoing`: Chứa phản hồi đã được Worker tổng hợp xong để Gateway gửi trả lại Discord.
+   - Topic `search-subtasks` / `search-results` (tùy chọn, bật bằng env): Tách riêng xử lý tìm kiếm web khỏi luồng reasoning chính để giảm head-of-line blocking. Worker phụ xử lý truy vấn và trả kết quả theo `correlation_id`.
 3. Worker Node (MessageHandler):
    - Đọc tin nhắn từ `discord-incoming`.
    - Trích xuất chat history (sử dụng RAM KV Cache đầu tiên để đạt độ trễ 0ms, fallback xuống PostgreSQL).
@@ -77,6 +78,7 @@ Cấu trúc thư mục hạ tầng cục bộ (.runtime/):
 Quy trình vòng đời khởi động và dọn dẹp hạ tầng (Infra Lifecycle Management):
 1. Bootstrap (`install_services.ps1` / `install_services.sh`):
    - Tự động tải xuống, giải nén và cấu hình Java, Kafka, PostgreSQL vào đúng cấu trúc thư mục `.runtime/` cục bộ.
+   - Trên Linux, nếu URL PostgreSQL binaries từ EnterpriseDB trả 403 hoặc hết hiệu lực, `install_services.sh` tự fallback sang PostgreSQL host đã có sẵn với data directory project-local, sau đó mới build PostgreSQL từ source chính thức vào runtime local nếu máy có C compiler và `make`.
    - Khởi tạo cluster PostgreSQL (`initdb`) với phân quyền tin cậy nội bộ và đặt mật khẩu mã hóa an toàn.
    - Đồng bộ hóa trực tiếp các biến môi trường thiết yếu vào tệp `.env`.
 2. Khởi chạy bot (`run_bot.ps1` / `run_bot.sh`):
@@ -106,8 +108,12 @@ a) Nhóm cấu hình hạ tầng cốt lõi:
 
 b) Nhóm API Key Pools & Providers:
 - `GEMINI_API_KEYS`: Cấu hình danh sách API keys của Google Gemini. Có thể đặt nhiều key dưới dạng `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`... hệ thống sẽ tự động quét động, sắp xếp và xoay vòng xoay (Smart Rotation) để tránh bị cạn hạn ngạch (rate limit).
-- `OPENAI_API_KEY`: API Key dành cho các mô hình tương thích OpenAI.
-- `OPENAI_CUSTOM_ENDPOINT`: Endpoint tùy chỉnh tương thích với chuẩn gọi API của OpenAI.
+- `OPENAI_API_KEY`: API Key OpenAI-compatible fallback legacy. Runtime custom provider hiện ưu tiên key nhập qua `/custom_api_config` sau khi Moderator/Admin chọn endpoint mode và lưu active trong DB.
+- `OPENAI_CUSTOM_ENDPOINT`: Endpoint OpenAI-compatible fallback legacy. Runtime custom provider hiện ưu tiên endpoint lưu trong DB từ `/custom_api_config`; UI có 3 mode `manual`, `lm_studio`, `ollama`, người quản trị nhập link gốc không cần `/v1` vì hệ thống tự normalize.
+- `ENABLE_CUSTOM_ENDPOINT`: Công tắc fallback legacy khi DB chưa có provider config. Nếu đã có `custom_api_provider_config`, `/enable_custom_api` chỉ bật/tắt cột `is_enabled` trong DB và không xóa endpoint/key/model config.
+- `CUSTOM_API_DEFAULT_RPM` / `CUSTOM_API_DEFAULT_TPM` / `CUSTOM_API_DEFAULT_RPD`: Hạn mức mặc định rất cao cho mọi model custom discovered động, tránh áp nhầm giới hạn thấp kiểu Gemini DB key RPM.
+- `CUSTOM_IMAGE_SIZE`: Kích thước ảnh mặc định cho nhánh custom image generation nếu Admin chọn image generator custom trong `/custom_api_config`.
+- `REASONING_MODEL_ALIAS` / `FINAL_MODEL_ALIAS` / `FALLBACK_MODEL_ALIAS`: Alias Gemini tĩnh dùng làm default và fallback an toàn. Model custom không khai báo tại đây mà được quét vào DB và chọn qua `/custom_api_config`.
 
 c) Nhóm API Tìm kiếm & Thời tiết:
 - `SERPAPI_API_KEY`: API key của dịch vụ SerpAPI phục vụ duyệt kết quả tìm kiếm Google.
@@ -133,8 +139,25 @@ f) Nhóm tham số tinh chỉnh Pipeline & Reasoning:
 - `REASONING_MAX_LOOPS`: Số vòng lặp tối đa của luồng suy nghĩ reasoning (Mặc định: 3, giới hạn từ 1-6).
 - `FINAL_MAX_API_RETRIES`: Số lần thử lại tối đa cho bước tổng hợp (Synthesis) cuối cùng (Mặc định: 3, giới hạn từ 1-6).
 - `FALLBACK_MAX_API_RETRIES`: Số lần thử lại tối đa khi phải sử dụng luồng fallback dự phòng (Mặc định: 2, giới hạn từ 1-5).
+- `FINAL_MAX_OUTPUT_TOKENS`: Ngân sách token tối đa cho mỗi lượt final synthesis đơn lẻ (Mặc định: 8192, giới hạn từ 512-65536). Nếu model trả về trạng thái bị cắt do giới hạn token, pipeline sẽ tự gọi tiếp thay vì cắt cụt báo cáo.
+- `FALLBACK_MAX_OUTPUT_TOKENS`: Ngân sách token tối đa cho mỗi lượt fallback synthesis đơn lẻ (Mặc định: bằng `FINAL_MAX_OUTPUT_TOKENS`).
+- `FINAL_CONTINUATION_MAX_CALLS`: Tổng số lượt gọi tối đa cho một câu trả lời dài, tính cả lượt đầu và các lượt viết tiếp (Mặc định: 5, giới hạn từ 1-8). Kết quả sau đó vẫn được MessageHandler chia thành nhiều tin nhắn Discord 1900 ký tự.
 - `SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS`: Bật/Tắt bước truy xuất bổ sung thông tin tìm kiếm nâng cao (Mặc định: True).
 - `SEARCH_ALLOW_PARTIAL_ANSWER`: Cho phép trả về câu trả lời một phần khi có lỗi API tìm kiếm thay vì báo lỗi toàn bộ (Mặc định: True).
+- `MAX_SEARCH_CALLS_PER_TURN`: Số lượt tìm kiếm web (`web_search`) tối đa trong suốt vòng lặp lập luận (Reasoning Loop) của một lượt chat (Mặc định: 5, giới hạn từ 1-20). Cho phép bot thoải mái tra cứu nhiều lần để làm rõ và đối chiếu các thông tin phức tạp.
+- `MIN_FREE_SPACE_MB`: Ngưỡng dung lượng trống ổ đĩa tối thiểu tại thư mục lưu trữ file tải lên (`uploaded_files/`) để kích hoạt tiến trình tự động dọn dẹp file cũ của CleanupManager (Mặc định: 100 MB).
+- `GEMINI_CIRCUIT_ENABLED`: Bật/tắt circuit breaker cho Gemini key pool (Mặc định: True).
+- `GEMINI_CIRCUIT_FAILURE_THRESHOLD`: Số lỗi trong cửa sổ thời gian để mở circuit (Mặc định: 5).
+- `GEMINI_CIRCUIT_WINDOW_SECONDS`: Cửa sổ thời gian tính lỗi (giây, Mặc định: 10).
+- `GEMINI_CIRCUIT_OPEN_SECONDS`: Thời gian OPEN trước khi chuyển HALF_OPEN (giây, Mặc định: 30).
+- `SEARCH_SUBTASKS_ENABLED`: Bật worker phụ xử lý tìm kiếm web qua Kafka (Mặc định: False).
+- `SEARCH_SUBTASK_TIMEOUT_SEC`: Timeout cơ sở chờ kết quả search-subtasks trước khi fallback trực tiếp (Mặc định: 18s). Thời gian chờ thực tế được co giãn động theo số lượng intent để đảm bảo worker đủ thời gian xử lý các truy vấn đa intent phức tạp.
+- `SEARCH_INTENT_BATCH_MAX`: Số intent tối đa được tách trong một truy vấn tìm kiếm đa ý định (Mặc định: 3).
+- `SEARCH_DEEP_READ_MAX_CHARS`: Số ký tự evidence tối đa đọc sâu từ một trang trong chế độ grounded (Mặc định: 1800).
+- `SEARCH_EXA_AUTOPROMPT`: Bật/tắt autoprompt của Exa khi dùng provider fallback Exa (Mặc định: False).
+- `BOT_LOG_PATH`: Đường dẫn file log chính của bot, được resolve tuyệt đối theo `PROJECT_ROOT` nếu nhập tương đối (Mặc định: `bot.log`).
+- `FILE_CHUNK_DIR`: Thư mục lưu chunk file đã index (Mặc định: `data/file_chunks`).
+- `VOICE_LOCK_BASE_DIR`: Thư mục trạng thái voice lock, chứa `users.json`, `locked_channels.json`, `enforced_names.json`, `voice_lock.log` (Mặc định: `data/voice_lock`).
 
 ================================================================================
 5) CƠ CẤU THƯ MỤC VÀ CHI TIẾT MODULE (DIRECTORY STRUCTURE & MODULE DETAILS)
@@ -143,27 +166,32 @@ Chi tiết chức năng nghiệp vụ của từng file mã nguồn trong thư m
 
 - `src/core/config.py`: Đọc cấu hình từ `.env` và các biến mặc định, thực thi việc khởi tạo các thư mục lưu trữ dữ liệu động, thiết lập logger luân phiên (RotatingFileHandler) và export các biến cấu hình toàn cục.
 - `src/core/preflight.py`: Thực hiện kiểm tra tính khả dụng của các tệp cấu hình, tính hợp lệ của port, kết nối thử đến Database PostgreSQL và Kafka Broker để bảo đảm toàn bộ hệ thống sẵn sàng trước khi nạp ứng dụng.
-- `src/core/gemini_api_manager.py`: Quản lý danh sách API Key Google Gemini, thực thi cơ chế tự động xoay vòng key động (Rotation), quản lý cooldown khóa bị dính lỗi 429 (Resource Exhausted) và định tuyến cuộc gọi API thông minh.
-- `src/core/gemini_pipeline.py`: Trái tim của luồng tư duy. Nhận ngữ cảnh chat, kích hoạt tiến trình Reasoning (Suy nghĩ đa bước), gọi các tools hỗ trợ thu thập dữ liệu thực tế và thực hiện tổng hợp (Synthesis) câu trả lời cuối cùng để gửi lại người dùng.
+- `src/core/api_config.py`: Khai báo các alias Gemini tĩnh (`gemini-flash-35`, `gemini-flash-30`, `gemini-flash-lite`), default reasoning/final/fallback, alias vision cố định `gemini-flash-35`, và quota mặc định rất cao cho custom OpenAI-compatible API. File này không còn hardcode model custom.
+- `src/core/custom_endpoint.py`: Chuẩn hóa endpoint custom OpenAI-compatible dùng chung cho Select/Modal, Router và Health Checker; khai báo preset `manual`, `lm_studio`, `ollama`, tự append `/v1` khi Admin nhập link gốc và reject endpoint thiếu `http://` hoặc `https://`.
+- `src/core/api_router.py`: Điều phối alias model và key reservation. Router đọc provider config DB-first, tạo alias nội bộ dạng `custom:<model_id>`, cache danh sách model sống trong RAM TTL ngắn, chỉ route provider `openai` khi endpoint/key active và model custom còn alive, còn env chỉ là fallback legacy khi DB chưa có provider config. Bổ sung circuit breaker cho Gemini (CLOSED/OPEN/HALF_OPEN) để chặn spam khi gặp chuỗi lỗi 429/503/quota.
+- `src/core/gemini_api_manager.py`: Quản lý danh sách API Key Google Gemini và OpenAI-compatible keys, thực thi rotation, cooldown 429, nhận diện lỗi invalid key kiểu LM Studio/OpenAI 401, đồng thời cache client theo provider + endpoint + key để không dùng nhầm endpoint cũ; bổ sung đệm user message cho endpoint local (LM Studio/Ollama) khi message cuối không phải user hoặc kết thúc bằng `tool` để tránh lỗi prompt template. Riêng preset LM Studio trong reasoning không gửi trường native OpenAI `tools` để tránh lỗi Jinja `No user query found in messages`; hệ thống nhúng cầu nối text `TOOL_CALL: ...` vào prompt user và để `GeminiPipeline` parse/gọi tool nội bộ như `web_search`. LM Studio có safety profile riêng khi endpoint là preset `lm_studio` hoặc local port `1234`: nếu prompt có tín hiệu user đang đính chính/phủ định, nhánh flatten prompt sẽ thêm guard ngắn yêu cầu ưu tiên correction mới nhất và không lặp lại fact assistant cũ đã bị bác bỏ; profile này không áp dụng cho Gemini, manual OpenAI-compatible cloud endpoint hoặc Ollama.
+- `src/core/gemini_pipeline.py`: Trái tim của luồng tư duy. Nhận ngữ cảnh chat, kích hoạt tiến trình Reasoning (Suy nghĩ đa bước), gọi các tools hỗ trợ thu thập dữ liệu thực tế và thực hiện tổng hợp (Synthesis) câu trả lời cuối cùng để gửi lại người dùng. Final/Fallback synthesis có cơ chế long-output continuation: khi provider trả `MAX_TOKENS`/`length` hoặc khi câu trả lời bị cắt cụt theo heuristic ngữ nghĩa, pipeline tự gọi tiếp tối đa `FINAL_CONTINUATION_MAX_CALLS` lượt và có retry per-part, ghép nội dung bằng overlap-safe merge rồi bàn giao cho MessageHandler chia thành nhiều tin nhắn Discord. Khi route final/fallback đi qua LM Studio, pipeline hạ sampling riêng về `temperature=0.2`, `top_p=0.8` và chèn block `LATEST USER CORRECTION` nếu MessageHandler phát hiện user đang sửa lỗi; các provider khác giữ nguyên cấu hình sáng tạo hiện tại.
 - `src/core/prompt_loader.py`: Tải các tệp prompt hệ thống dạng văn bản thô nằm trong thư mục `src/instructions/` và nạp vào mã nguồn Python động.
-- `src/handlers/bot_core.py`: Xử lý lớp mạng Discord (sử dụng thư viện discord.py hoặc tương đương), tiếp nhận các sự kiện tin nhắn, slash commands (`/reset-all`, `/moderator`, `/premium`, `/health_check`, `/imagine`), chuyển tiếp sự kiện vào Kafka producer và xử lý luồng Kafka consumer để gửi tin nhắn phản hồi về Discord.
-- `src/handlers/message_handler.py`: Worker xử lý tin nhắn chạy nền. Lắng nghe Kafka topic `discord-incoming`, trích xuất ngữ cảnh, tương tác với lớp Cache và Database, kích hoạt `GeminiPipeline` và đẩy kết quả hoàn tất vào Kafka topic `discord-outgoing`.
-- `src/database/repository.py`: Đóng vai trò là Repository truy cập trực tiếp PostgreSQL bằng thư viện bất đồng bộ `asyncpg`. Thực hiện tạo bảng tự động khi khởi động, duy trì connection pool, đăng ký codecs JSONB, và thực thi tất cả các câu lệnh SQL phục vụ bot.
+- `src/handlers/bot_core.py`: Xử lý lớp mạng Discord, tiếp nhận sự kiện tin nhắn, slash commands (`/ping`, `/reset-chat`, `/reset-all`, `/moderator`, `/premium`, `/health_check`, `/enable_custom_api`, `/custom_api_config`, `/imagine`, `/global-notes`, `/global-note-demote`, `/message_to`, `/donate`, và bộ lệnh voice `/lock`, `/unlock`, `/move`, `/move_all`, `/set_room`, `/add_privet`, `/remove_privet`, `/list_privet`). Module này cũng quản lý Select chọn endpoint mode Manual/LM Studio/Ollama trước Modal nhập endpoint/API key custom provider, nút dùng lại cấu hình hiện tại, UI chọn model custom, đóng gói metadata tệp đính kèm Discord (`id`, `url`, `proxy_url`, `filename`, `size`, `content_type`, `source`, `source_message_id`) từ cả tin nhắn hiện tại và tin nhắn được reply vào Kafka producer, đồng thời xử lý luồng Kafka consumer để gửi tin nhắn phản hồi về Discord. Tất cả mention `<@id>` được chuyển về tên hiển thị để chống spam, chỉ cho phép ping khi worker gửi allowlist hợp lệ.
+- `src/handlers/message_handler.py`: Worker xử lý tin nhắn chạy nền. Lắng nghe Kafka topic `discord-incoming`, tải tệp đính kèm từ URL CDN Discord khi cần parse/index, trích xuất ngữ cảnh, tương tác với lớp Cache và Database, kích hoạt `GeminiPipeline` và đẩy kết quả hoàn tất vào Kafka topic `discord-outgoing`. Worker gửi allowlist mention riêng cho trường hợp thăng chức Moderator để BotCore có thể ping đúng mục tiêu, còn lại sẽ bị chuyển thành tên hiển thị. Worker cũng nhận diện nhẹ các câu user đang đính chính/phủ định như `không phải`, `bịa`, `sai rồi`, `là ... mà` để truyền metadata correction runtime cho safety profile LM Studio, không làm thay đổi prompt global. Nhánh `/imagine` hỗ trợ custom image generator theo 2 đường: `images.generate` (gpt-image/grok) và fallback chat completion trả base64 cho model Gemini image không hỗ trợ `/v1/images`.
+- `src/database/repository.py`: Đóng vai trò là Repository truy cập trực tiếp PostgreSQL bằng `asyncpg`. Thực hiện tạo bảng tự động khi khởi động, duy trì connection pool, đăng ký codecs JSONB, quản lý `custom_api_provider_config` gồm `endpoint_preset`, vô hiệu key OpenAI stale/invalid, và thực thi tất cả câu lệnh SQL phục vụ bot.
 - `src/managers/cache_manager.py`: Quản lý hệ thống KV Cache lưu trữ trên RAM Worker. Hỗ trợ cache kết quả tìm kiếm web, kết quả nhận diện hình ảnh và cache chat history 12 tin nhắn gần nhất của người dùng với cơ chế tự giải phóng TTL (300 giây) và giải phóng RAM theo thuật toán LRU (tối đa 1000 người dùng).
 - `src/managers/note_manager.py`: Quản lý việc thêm, cập nhật, xóa, truy vấn các ghi chú cá nhân hoặc thông tin ngữ cảnh dài hạn (user notes). Thực hiện nén/tóm tắt tự động các ghi chú quá dài bằng mô hình LLM Lite trước khi ghi xuống Database.
 - `src/managers/premium_manager.py`: Kiểm soát trạng thái Premium của người dùng thông qua DB cache để áp dụng hạn mức rate limit và quyền sử dụng lệnh tạo ảnh.
-- `src/services/file_parser.py`: Đọc và phân tích cú pháp các tệp đính kèm người dùng tải lên Discord (hỗ trợ .txt, .pdf, .docx, .xlsx...) sang định dạng văn bản sạch.
-- `src/services/file_index_service.py`: Phân mảnh tài liệu (chunking) và thực hiện lập chỉ mục để tìm kiếm ngữ nghĩa nhanh chóng cho các tệp đính kèm lớn.
-- `src/services/health_checker.py`: Chạy tác vụ nền giám sát sức sống của các custom API keys trong database pool. Tự động tính toán downtime chính xác, bỏ qua keys Gemini để tiết kiệm hạn ngạch và gọi LLM tự động tạo báo cáo khôi phục dịch vụ gửi trực tiếp tới Admin qua Discord DM khi key chết sống lại.
-- `src/tools/tools.py`: Khai báo và định nghĩa chi tiết tất cả các công cụ (tools) mà LLM có thể gọi thông qua cơ chế Function Calling như: `web_search` (tìm kiếm thông tin), `query_weather` (tra cứu thời tiết), `manage_user_role` (thăng/hạ cấp quyền người dùng), `save_note` / `search_notes` (quản lý ghi chú).
+- `src/services/file_parser.py`: Đọc và phân tích cú pháp các tệp đính kèm người dùng tải lên Discord (hỗ trợ .txt, .pdf, .md, .json, .js, .html, .css, .csv...) bằng cách tải bytes từ URL CDN Discord về local runtime rồi tách thành chunk văn bản sạch trong thư mục chunk thực tế.
+- `src/services/file_index_service.py`: Phân mảnh tài liệu (chunking), gắn tiền tố `document_id` vào `chunk_id` để tránh đè dữ liệu giữa nhiều tệp và thực hiện lập chỉ mục để tìm kiếm ngữ nghĩa nhanh chóng cho các tệp đính kèm lớn.
+- `src/services/health_checker.py`: Chạy tác vụ nền giám sát sức sống của custom API key trong provider config. Tự động tính downtime chính xác, bỏ qua keys Gemini để tiết kiệm hạn ngạch, quét `/v1/models` để cập nhật `custom_api_models`, ghi `last_scan_ok/last_scan_error`, hỗ trợ full scan toàn bộ key khi endpoint mode Manual và ping model đã chọn khi chạy `/health_check`, đồng thời gọi LLM tạo báo cáo khôi phục dịch vụ gửi trực tiếp tới Admin qua Discord DM khi key chết sống lại.
+- `src/services/search_subtask_worker.py`: Worker phụ xử lý topic `search-subtasks`, chạy pipeline tìm kiếm web và trả kết quả về `search-results` theo `correlation_id` để giảm head-of-line blocking.
+- `src/services/search_subtask_client.py`: Client trong Worker chính dùng để gửi subtask tìm kiếm qua Kafka và chờ kết quả, có timeout fallback.
+- `src/tools/tools.py`: Khai báo và định nghĩa chi tiết tất cả các công cụ mà LLM có thể gọi qua Function Calling: `web_search`, `get_weather`, `calculate`, `save_note`, `retrieve_notes`, `delete_note`, `image_recognition`, và `manage_user_role` (chỉ lộ schema cho Admin). Tool `image_recognition` luôn dùng Google Gen AI SDK với model Gemini Flash (`gemini-flash-35`), không dùng Lite hoặc custom endpoint. Nhánh tìm kiếm hỗ trợ temporal transformer (chèn năm hiện tại), `timelimit` DuckDuckGo cho truy vấn nhạy thời gian, phân tách multi-intent và chạy **song song hoàn toàn 100%** bằng `asyncio.gather(*tasks)` để tối ưu hóa thời gian xử lý. Đồng thời, hệ thống tích hợp lớp **Lightweight Reranking** xếp hạng lại kết quả của từng intent độc lập dựa trên: Consensus Boost, Freshness Boost, độ phủ query/snippet, và Domain Duplication Penalty. Giao thức gọi tool cũng tích hợp cơ chế **co giãn timeout động (Dynamic Timeout)** dựa trên số lượng intent `max(SEARCH_SUBTASK_TIMEOUT_SEC, num_intents * 8)` để đảm bảo tính mềm dẻo.
 - `src/voice/voice_lock.py`: Quản lý tính năng khóa phòng thoại Discord, whitelist người dùng và bảo vệ tên phòng.
 
 ================================================================================
 6) ĐẶC TẢ CHI TIẾT SCHEMA & INDEX CƠ SỞ DỮ LIỆU POSTGRESQL
 ================================================================================
-Hệ thống sử dụng cơ sở dữ liệu PostgreSQL gồm 12 bảng được thiết kế tối ưu hóa cho truy vấn bất đồng bộ cao độ:
+Hệ thống sử dụng cơ sở dữ liệu PostgreSQL gồm 15 bảng được thiết kế tối ưu hóa cho truy vấn bất đồng bộ cao độ:
 
-Chi tiết 12 bảng dữ liệu:
+Chi tiết 15 bảng dữ liệu:
 1. `messages`: Lưu trữ toàn bộ các tin nhắn hội thoại giữa người dùng và bot.
    - `message_id` (TEXT, PRIMARY KEY): ID tin nhắn Discord độc bản.
    - `user_id` (TEXT, NOT NULL): ID người dùng Discord.
@@ -234,6 +262,32 @@ Chi tiết 12 bảng dữ liệu:
     - `key_id` (BIGINT, PRIMARY KEY, references `api_key_pool(key_id)`).
     - `requests_used` (INTEGER, default: 0).
     - `last_reset` (TIMESTAMPTZ).
+13. `custom_api_models`: Danh sách model custom OpenAI-compatible được phát hiện động từ `/v1/models`.
+    - `provider` (TEXT, default: 'openai').
+    - `model_id` (TEXT, NOT NULL): ID model gốc từ provider, được router ánh xạ thành alias nội bộ `custom:<model_id>`.
+    - `display_name` (TEXT, default: '').
+    - `is_alive` (BOOLEAN, default: TRUE): Trạng thái còn xuất hiện trong lần scan thành công gần nhất.
+    - `last_seen_at` (TIMESTAMPTZ): Thời điểm model được thấy là sống.
+    - `last_checked_at` (TIMESTAMPTZ): Thời điểm scan gần nhất.
+    - `last_error` (TEXT, default: '').
+    - `metadata` (JSONB, default: '{}'::jsonb): Payload model gốc từ provider để debug/audit.
+    - PRIMARY KEY `(provider, model_id)`.
+14. `custom_api_provider_config`: Cấu hình provider custom OpenAI-compatible đang active theo hướng DB-first.
+    - `provider` (TEXT, PRIMARY KEY, default: 'openai').
+    - `endpoint_base_url` (TEXT, NOT NULL, default: ''): Endpoint gốc Admin nhập qua Modal, không bắt buộc có `/v1`.
+    - `normalized_base_url` (TEXT, NOT NULL, default: ''): Endpoint đã chuẩn hóa để gọi OpenAI-compatible API, luôn trỏ tới base `/v1`.
+    - `endpoint_preset` (TEXT, NOT NULL, default: 'manual'): Chế độ endpoint đang dùng (`manual`, `lm_studio`, `ollama`) để UI/runtime biết endpoint là nhập tay hay preset local.
+    - `active_key_id` (BIGINT, nullable, references `api_key_pool(key_id)`): Key OpenAI-compatible đang được phép route runtime.
+    - `is_enabled` (BOOLEAN, default: TRUE): Công tắc mềm bật/tắt custom provider mà không xóa key/model config.
+    - `last_scan_ok` (BOOLEAN, default: FALSE) và `last_scan_error` (TEXT): Trạng thái scan `/v1/models` gần nhất.
+    - `updated_by` (TEXT, default: '') và `updated_at` (TIMESTAMPTZ).
+15. `bot_model_config`: Cấu hình model toàn cục đang được bot sử dụng cho custom API.
+    - `config_key` (TEXT, PRIMARY KEY, default: 'global').
+    - `reasoning_model_id` (TEXT, nullable): Model custom dùng cho reasoning nếu còn alive.
+    - `final_model_id` (TEXT, nullable): Model custom dùng cho final synthesis nếu còn alive.
+    - `image_generator_model_id` (TEXT, nullable): Model custom dùng cho image generation; có thể NULL để giữ Gemini Imagen mặc định.
+    - `updated_by` (TEXT, default: '').
+    - `updated_at` (TIMESTAMPTZ).
 
 Đặc tả các Chỉ mục (Indexes) tối ưu hóa truy vấn:
 - `idx_messages_user_time`: Index kết hợp `(user_id, timestamp DESC)` trên bảng `messages`. Giúp việc lấy 12 tin nhắn gần nhất làm ngữ cảnh hội thoại diễn ra với độ trễ tối thiểu (dưới 1ms).
@@ -241,7 +295,8 @@ Chi tiết 12 bảng dữ liệu:
 - `idx_user_notes_fact_hash`: Index trên `fact_hash` giúp kiểm tra trùng lặp thông tin ghi chú trước khi lưu mà không phải quét toàn bảng.
 - `idx_user_notes_metadata_gin`: Chỉ mục GIN (Generalized Inverted Index) trên cột JSONB `metadata`. Cho phép PostgreSQL thực thi các phép toán lọc dữ liệu sâu bên trong cấu trúc JSONB cực kỳ nhanh chóng mà không cần scan tuần tự.
 - `idx_rag_chunks_keywords`: Chỉ mục GIN trên mảng TEXT `keywords` của bảng `rag_chunks` giúp truy vấn từ khóa tài liệu hiệu năng cao.
-- `idx_rag_chunks_summary_trgm`: Chỉ mục GIN sử dụng toán tử mở rộng `gin_trgm_ops` trên cột `chunk_summary` hỗ trợ tìm kiếm mờ hoặc tìm kiếm văn bản tương đối qua khoảng cách ký tự (trgm).
+- `idx_rag_chunks_summary_trgm`: Chỉ mục GIN sử dụng toán tử mở rộng `gin_trgm_ops` trên cột `chunk_summary` hỗ trợ tìm kiếm mờ hoặc tìm kiếm văn bản tương đối qua khoảng cách ký tự (trgm). Truy vấn RAG chunk phải dùng toán tử trigram chuẩn `%` của PostgreSQL (`chunk_summary % $1`), không dùng `%%` vì PostgreSQL sẽ hiểu đó là toán tử không tồn tại.
+- `idx_custom_api_models_alive`: Chỉ mục theo `(provider, is_alive)` trên bảng `custom_api_models`, giúp `/custom_api_config` và `APIRouter.refresh_custom_models_from_db()` lấy danh sách model custom sống nhanh mà không quét toàn bảng.
 
 ================================================================================
 7) ĐẶC TẢ HỆ THỐNG AN NINH & BẢO MẬT (HYBRID STATIC-DYNAMIC ROLE SYSTEM)
@@ -256,7 +311,7 @@ Cơ cấu 4 vai trò (Role Tiers):
 2. Moderator (Điều phối viên):
    - Quyền tĩnh: Được chỉ định trong cấu hình `.env` (`MODERATOR_IDS`).
    - Quyền động: Lưu trữ trong bảng `moderator_users`.
-   - Quyền hạn: Có quyền truy cập các slash command quản trị như `/health_check` để xem tình trạng các keys, `/enable_custom_api` để bật tắt API keys động, `/global-notes` và `/global-note-demote` để quản trị ghi chú chung, `/imagine` để tạo ảnh miễn phí, gửi tin nhắn `/message_to` nội bộ guild channel hiện tại.
+   - Quyền hạn: Có quyền truy cập các slash command quản trị như `/health_check` để xem tình trạng keys và quét model custom, `/enable_custom_api` để bật tắt custom endpoint, `/custom_api_config` để chọn endpoint mode Manual/LM Studio/Ollama và chọn model reasoning/final/image generator, `/global-notes` và `/global-note-demote` để quản trị ghi chú chung, `/imagine` để tạo ảnh miễn phí, gửi tin nhắn `/message_to` nội bộ guild channel hiện tại.
    - Giới hạn bảo mật: Moderator bị chặn cứng không được phép thực hiện `/reset-all` (chỉ dành cho Admin thực tế), không được thăng/hạ Moderator khác qua `/moderator`, không được thêm premium qua `/premium action:Add`, không được gửi DM trực tiếp hoặc nhắn liên server qua `/message_to`.
 3. Premium (Thành viên cao cấp):
    - Quyền động: Quản lý trong bảng `premium_users`.
@@ -298,10 +353,13 @@ Luồng tự động nén/tóm tắt ghi chú thông minh (Note Summary Engine):
 ================================================================================
 Hệ thống Health Checker chạy ngầm trong Worker đảm nhận việc tự động kiểm tra sức khỏe của các khóa API một cách an toàn và tối ưu:
 
-Quét custom API keys và loại bỏ Gemini keys khỏi chu trình ping:
-- Health Checker chỉ quét và gửi yêu cầu ping thử nghiệm đối với các custom API keys (OpenAI-compatible keys như OpenAI, DeepSeek, Llama...) được lưu trữ trong database pool `api_key_pool`.
+Quét custom API key, model discovery và loại bỏ Gemini keys khỏi chu trình ping:
+- Health Checker mặc định ping key active; khi chạy `/health_check` ở endpoint mode `manual` thì full scan toàn bộ key OpenAI-compatible và ping nhẹ model đã chọn để xác thực model hoạt động. Với `lm_studio`/`ollama`, chỉ ping model đang chọn và không quét toàn bộ key.
+- `/custom_api_config` là điểm nhập runtime chính: Moderator/Admin chọn endpoint mode trước (`manual`, `lm_studio`, `ollama`), sau đó Modal nhập endpoint/API key, endpoint được normalize sang `/v1`, bot scan `/v1/models` thành công mới lưu `endpoint_preset`, provider config/key/model vào DB và mở UI chọn reasoning, final output, image generator tùy chọn. Manual giữ chuẩn OpenAI-compatible cho provider production; LM Studio/Ollama chỉ là preset local và có thể để trống API key nếu server local không kiểm tra auth.
+- Với key active sống, hệ thống gọi `/v1/models`, parse payload chuẩn OpenAI `{"data": [{"id": "..."}]}`, upsert model còn thấy vào `custom_api_models` với `is_alive=true`, và mark model không còn thấy trong lần scan thành công là `is_alive=false` thay vì xóa khỏi DB.
+- `/enable_custom_api true/false` chỉ bật/tắt `custom_api_provider_config.is_enabled` khi đã có config DB, không xóa endpoint/key/model config; `/health_check` trả danh sách trạng thái key rõ ràng (tick/cross) kèm ping model đã chọn và số model alive.
 - Loại bỏ hoàn toàn và triệt để các API keys của Google Gemini khỏi chu trình ping tự động của Health Checker. Điều này giải quyết triệt để vấn đề nghẽn mạng do gọi API liên tục, đồng thời bảo vệ hoàn toàn hạn ngạch (quota) của Gemini keys. Việc giám sát và cooldown các Gemini keys được bàn giao trực tiếp cho `GeminiApiManager` xử lý động theo thời gian thực (real-time cooldown) ngay trong luồng trò chuyện khi phát hiện lỗi 429 hoặc lỗi kết nối.
-- Thêm cơ chế bảo vệ Custom Endpoint chống Cảnh báo giả: Nếu `OPENAI_CUSTOM_ENDPOINT` rỗng hoặc không hợp lệ (không chứa tiền tố `http://` hoặc `https://`), hệ thống sẽ tự động in một log warning duy nhất và tạm ngưng toàn bộ chu kỳ ping. Cơ chế này loại bỏ hoàn toàn nguy cơ toàn bộ key bị đánh dấu `"dead"` và gửi hàng loạt cảnh báo giả **KEY DOWN** liên tiếp tới Admin qua Discord DM khi cấu hình gặp sự cố.
+- Thêm cơ chế bảo vệ Custom Endpoint chống Cảnh báo giả: Nếu endpoint DB/env rỗng hoặc không hợp lệ (không chứa tiền tố `http://` hoặc `https://`), hệ thống sẽ tạm ngưng chu kỳ ping, ghi `last_scan_error` khi có provider config DB, và loại bỏ nguy cơ toàn bộ key bị đánh dấu `"dead"` rồi spam cảnh báo giả **KEY DOWN** tới Admin.
 
 Duy trì Strong Reference và Bảo vệ Vòng lặp Khởi tạo an toàn:
 Trong asyncio của Python, các task chạy nền không có tham chiếu mạnh (Strong Reference) rất dễ bị Garbage Collector (Bộ dọn rác) tự động thu hồi giữa chừng khi đang chạy ngầm. Để khắc phục lỗi này, Health Checker lưu trữ task chạy nền trực tiếp vào biến thực thể lớp `self._background_task_task = asyncio.create_task(self._background_task(...))` để duy trì tham chiếu mạnh trọn vẹn suốt vòng đời bot. Đồng thời, hàm `start_background_check` và `stop` được tối ưu hóa để tự động phát hiện và hủy bỏ (cancel) tiến trình chạy ngầm cũ nếu nó đang chạy trước khi khởi tạo tiến trình mới, triệt tiêu hoàn toàn nguy cơ chạy song song nhiều vòng lặp vô hạn gây rò rỉ tài nguyên (Memory/CPU Leak) hoặc trùng lặp thông báo gửi tới Admin. Toàn bộ mã nguồn chết không dùng đến như `_ping_gemini_key` cũng đã được xóa sạch.
@@ -349,11 +407,12 @@ Kết quả kiểm thử chi tiết:
    - Xác minh việc ghi/đọc quyền Moderator và Admin động vào Database PostgreSQL thành công.
    - Xác minh chặn đứng thành công các yêu cầu nâng quyền giả mạo từ người dùng thường gõ lệnh chat.
    - Xác minh cơ chế miễn demote đối với Admin tĩnh khai báo trong `.env` hoạt động hoàn hảo.
-2. Bộ test API Health Checker (`test_health_checker` - tích hợp trong codebase):
+2. Bộ test API Health Checker (`test_health_checker` và `tmp_custom_provider_tests.py` tạm thời, đã xóa sau khi pass):
    - Đạt kết quả pass 100%.
    - Xác minh loại bỏ thành công các API keys Google Gemini khỏi chu trình ping ngầm.
    - Xác minh phát hiện chính xác key sống/chết, tính toán downtime thân thiện dạng thời gian đọc được (`Xs`, `Xm Ys`...) và gửi Discord DM cảnh báo thành công.
    - Xác minh luồng gọi LLM Lite viết báo cáo khôi phục dịch vụ bằng tiếng Việt hoạt động trơn tru, fallback Markdown chính xác khi LLM giả định gặp sự cố.
+   - Xác minh `_fetch_openai_models()` parse `/v1/models`, xử lý HTTP lỗi/JSON sai shape, cập nhật bảng `custom_api_models` mà không xóa nhầm model khi endpoint lỗi toàn bộ, normalize endpoint không append trùng `/v1`, router DB-first dùng `active_key_id`, cache OpenAI client theo endpoint và nhận diện lỗi LM Studio `invalid_api_key`/401.
 3. Bộ test RAM KV Cache và Kafka Sync (`test_in_memory_kv_cache.py`):
    - Đạt kết quả pass 100%.
    - Xác minh Cache Hit trả về lịch sử chat với độ trễ 0ms.
@@ -373,18 +432,28 @@ Kết quả kiểm thử chi tiết:
    - Đạt kết quả pass 100%.
    - Xác minh khả năng tải bytes hình ảnh song song bất đồng bộ cực nhanh bằng `asyncio.gather` qua `aiohttp`.
    - Xác minh cấu trúc payload hình ảnh được chuyển đổi chính xác sang đối tượng `types.Part.from_bytes` của SDK Google GenAI chính thức.
-   - Xác minh ánh xạ chính xác sang chuỗi base64 `image_url` cho custom OpenAI API.
+   - Xác minh nhận diện ảnh luôn ép về Gemini Flash alias `gemini-flash-35` qua Google Gen AI SDK, bất kể final model đang được chọn là custom hay Lite.
    - Xác minh Gemini API nhận diện hình ảnh chính xác và trả về mô tả chi tiết bằng Tiếng Việt.
    - Xác minh giải phóng bộ nhớ RAM-Only (biến tạm tự động hủy sau khi hoàn tất cuộc gọi API) và hoàn toàn không lưu trữ bytes/base64 ảnh vào PostgreSQL database để bảo vệ tối ưu dung lượng DB.
+   - Xác minh `/imagine` không crash khi `image_generator_model_id` NULL hoặc không có key; hệ thống trả lỗi thân thiện hoặc fallback Gemini Imagen đúng nhánh.
 6. Kết quả Rà soát Bảo mật & Toàn vẹn (Security & Race Condition Audit):
    - Đạt kết quả pass 100%.
    - Rà soát lỗ hổng SQL Injection: Xác minh 100% các hàm truy vấn trong `DatabaseRepository` sử dụng cơ chế Parameterized Query ($1, $2...) thông qua driver asyncpg. Tuyệt đối không cộng chuỗi hoặc định dạng f-string cho dữ liệu thô của người dùng.
    - Rà soát lỗi Race Condition: Kiểm thử thực nghiệm với 5 luồng request đồng thời gửi tín hiệu chat trong cùng một mili-giây. Xác nhận cơ chế khóa trạng thái bận nguyên tử (Atomic User Lock) của PostgreSQL hoạt động hoàn hảo: Chỉ duy nhất 1 luồng được phép xử lý, 4 luồng spam còn lại bị chặn đứng lập tức ở cấp Database và trả về trạng thái bận để báo lỗi cho user, giúp bảo vệ RAM Cache và tiết kiệm API tokens.
-5. Kiểm tra mã nguồn tĩnh (Static Shell Script checks):
+7. Kiểm tra mã nguồn tĩnh (Static Shell Script checks):
    - Chạy lệnh kiểm tra cú pháp bash `bash -n run_bot.sh stop_infra.sh install_services.sh` thành công, không phát hiện lỗi cú pháp.
-6. Vòng đời chạy thử nghiệm thực tế (Local Smoke Test):
+   - Chạy `python -m compileall src/core src/database src/handlers src/services src/tools` thành công sau refactor provider config DB-first.
+8. Vòng đời chạy thử nghiệm thực tế (Local Smoke Test):
    - Khởi chạy `powershell ./run_bot.ps1 --preflight-only` vượt qua tất cả các chặng kiểm tra kết nối hạ tầng.
    - Khởi chạy `powershell ./run_bot.ps1 --server` thành công, bot kết nối thành công tới Discord Gateway, các worker kết nối Kafka Broker ổn định và sẵn sàng tiếp nhận tin nhắn.
+9. `tmp_lm_studio_reasoning_test.py` (tạm thời, đã xóa sau khi pass):
+   - Xác minh reservation custom API truyền `endpoint_preset='lm_studio'` từ `APIRouter` sang `GeminiApiManager`.
+   - Xác minh reasoning payload cho LM Studio luôn là một message `role='user'`, có nội dung câu hỏi thật của người dùng, có chỉ dẫn cầu nối `TOOL_CALL: web_search(...)`, và không gửi trường native OpenAI `tools` gây lỗi Jinja `No user query found in messages`.
+   - Xác minh endpoint manual OpenAI-compatible vẫn giữ payload chuẩn gồm `system` + `user` và vẫn gửi native `tools` như trước.
+10. `tmp_long_output_continuation_test.py` (tạm thời, đã xóa sau khi pass):
+   - Xác minh final synthesis khi nhận `finish_reason='MAX_TOKENS'` sẽ tự gọi continuation nhiều lượt cho đến khi provider trả `STOP` hoặc đạt `FINAL_CONTINUATION_MAX_CALLS`.
+   - Xác minh prompt lượt đầu có `LONG OUTPUT MODE`, các lượt sau có `CONTINUATION REQUEST`, và kết quả được ghép không cắt mất phần sau của báo cáo dài.
+   - Xác minh `MessageHandler._split_text` vẫn chia output dài thành các chunk tối đa 1900 ký tự để gửi nhiều tin nhắn Discord liên tục.
 
 ================================================================================
 12) HỆ THỐNG GỬI TYPING LIÊN TỤC VÀ ĐỊNH DANH BOT ĐỘNG (DYNAMIC TYPING & IDENTITY)
@@ -427,22 +496,22 @@ b) Kết quả rà soát:
 ================================================================================
 14) TÍCH HỢP NHẬN DIỆN HÌNH ẢNH ĐA PHƯƠNG THỨC (MULTIMODAL IMAGE RECOGNITION)
 ================================================================================
-Để giải quyết triệt để vấn đề người dùng gửi hình ảnh lên Discord nhưng Trợ lý AI không thể nhìn thấy nội dung ảnh, Azuris được nâng cấp tính năng nhận diện ảnh đa phương thức (Multimodal Image Recognition) với kiến trúc tối ưu hóa bộ nhớ:
+Để giải quyết triệt để vấn đề người dùng gửi hình ảnh lên Discord nhưng Trợ lý AI không thể nhìn thấy nội dung ảnh, Azuris được nâng cấp tính năng nhận diện ảnh đa phương thức (Multimodal Image Recognition) với kiến trúc tối ưu hóa bộ nhớ. Từ bản refactor custom API, mọi nhánh nhận diện ảnh đều bắt buộc dùng Google Gen AI SDK với Gemini Flash alias `gemini-flash-35`, không dùng Gemini Lite và không dùng custom OpenAI-compatible endpoint cho vision.
 
 a) Tải hình ảnh bất đồng bộ song song (Parallel RAM-Only Download):
-- Khi người dùng gửi hình ảnh đính kèm (hỗ trợ .png, .jpg, .jpeg, .webp, .gif, .bmp), API Gateway đóng gói URL ảnh từ Discord CDN và chuyển qua Kafka topic `discord-incoming`.
+- Khi người dùng gửi hình ảnh đính kèm (hỗ trợ .png, .jpg, .jpeg, .webp, .gif, .bmp), hoặc reply vào một tin nhắn Discord khác có tệp đính kèm, API Gateway đóng gói metadata attachment do Discord cung cấp gồm `id`, URL CDN tải về, `proxy_url`, tên file, kích thước, MIME type, nguồn attachment và ID tin nhắn nguồn rồi chuyển qua Kafka topic `discord-incoming`.
 - Tiến trình Worker (MessageHandler) trích xuất các tệp đính kèm. Nếu có nhiều ảnh, Worker sử dụng hàm `asyncio.gather` để tải song song bytes của toàn bộ các bức ảnh về RAM của tiến trình qua thư viện `aiohttp`.
 - Việc tải ảnh diễn ra hoàn toàn trên RAM dưới dạng biến tạm thời trong hàm xử lý. Ngay khi API LLM hoàn tất phản hồi, các biến tạm chứa bytes này sẽ được Garbage Collector giải phóng tự động khỏi bộ nhớ RAM của Python.
 - Database Preservation (Tối ưu hóa dung lượng DB): Để ngăn chặn cơ sở dữ liệu PostgreSQL bị phình to nhanh chóng, bytes ảnh hoặc base64 tuyệt đối KHÔNG bao giờ được lưu trữ vào PostgreSQL. Lịch sử lưu trong bảng `messages` chỉ chứa text hội thoại kèm URL ảnh gốc.
 
-b) Ánh xạ payload thông minh cho Gemini SDK & OpenAI API:
-Tại GeminiApiManager trong hàm `_generate_gemini_content`, hệ thống tự động phát hiện cấu trúc `inline_data` và thực hiện ánh xạ thích hợp cho từng nhánh:
+b) Ánh xạ payload thông minh cho Gemini SDK và chốt chặn không dùng custom vision:
+Tại MessageHandler, nếu payload chat có ảnh, hệ thống refresh pipeline aliases và ép cả reasoning/final/fallback về `VISION_MODEL_ALIAS = 'gemini-flash-35'` trước khi gọi LLM. Tool `image_recognition` trong `tools.py` cũng resolve cố định alias này khi reserve key, nên mọi yêu cầu vision luôn đi qua provider Gemini.
 1. Nhánh Google GenAI SDK (Gemini):
    - Chuyển đổi toàn bộ các phần tử `parts` thô thành đối tượng chính thức `types.Part.from_text` (cho văn bản) và `types.Part.from_bytes` (cho bytes ảnh và mime_type tương ứng).
    - Gom tất cả các parts và bọc thành đối tượng `types.Content` trước khi gửi lên API `client.models.generate_content`, giúp SDK tự động xử lý base64 hóa mượt mà và an toàn 100% theo đúng tài liệu đặc tả chính thức của Google GenAI.
-2. Nhánh OpenAI Wrapper (Custom Endpoint):
-   - Mã hóa bytes ảnh sang chuỗi base64 và đóng gói vào cấu trúc content dạng mảng các dict chứa `{"type": "text", "text": ...}` và các dict `{"type": "image_url", "image_url": {"url": "data:image/...;base64,..."}}`.
-   - Cung cấp khả năng nhận diện đa ảnh cùng lúc cho cả các custom API endpoint tương thích OpenAI một cách nhất quán và chuẩn xác.
+2. Chốt chặn Custom Endpoint:
+   - Custom OpenAI-compatible endpoint vẫn có thể dùng cho reasoning/final và image generation nếu Admin chọn model alive trong `/custom_api_config`, nhưng không được dùng cho nhận diện ảnh.
+   - Nếu không reserve được Gemini key cho vision, hệ thống trả lỗi thân thiện thay vì fallback sang custom endpoint, bảo đảm đúng yêu cầu Gemini Flash-only cho nhận diện ảnh.
 
 ================================================================================
 Tài liệu kết thúc. Mọi chỉnh sửa mã nguồn tiếp theo liên quan đến cấu hình hoặc

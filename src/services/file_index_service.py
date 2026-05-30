@@ -213,6 +213,8 @@ class FileIndexService:
                 system_instruction=system_instruction,
                 generation_config=generation_config,
                 messages=messages,
+                provider=(key_reservation or {}).get("provider", "gemini"),
+                endpoint=(key_reservation or {}).get("endpoint"),
             )
             self._commit_selected_key(key_reservation)
             candidate = response.candidates[0] if response.candidates else None
@@ -385,6 +387,8 @@ class FileIndexService:
                 system_instruction=system_instruction,
                 generation_config=generation_config,
                 messages=messages,
+                provider=(key_reservation or {}).get("provider", "gemini"),
+                endpoint=(key_reservation or {}).get("endpoint"),
             )
             self._commit_selected_key(key_reservation)
             candidate = response.candidates[0] if response.candidates else None

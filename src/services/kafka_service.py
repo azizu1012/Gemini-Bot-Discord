@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -63,22 +64,36 @@ class KafkaService:
             raise
 
     async def publish(self, topic: str, payload: Dict[str, Any], key: Optional[str] = None) -> bool:
-        """Publish a message to a Kafka topic with centralized logging."""
+        """Publish a message to a Kafka topic with centralized logging and bounded retry."""
         if self.producer is None:
             self.logger.error(f"Cannot publish message to topic '{topic}': Producer is not started.")
             return False
 
-        try:
-            user_id = payload.get("user_id") or key or "unknown"
-            msg_id = payload.get("message_id") or payload.get("interaction_id") or "none"
-            self.logger.info(
-                f"[KAFKA-SEND] Publishing to topic '{topic}' | User: {user_id} | MsgID/IntID: {msg_id} | Payload Action: {payload.get('action') or payload.get('type')}"
-            )
-            await self.producer.send_and_wait(topic, value=payload, key=key)
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to publish to topic '{topic}': {e}")
-            return False
+        max_attempts = max(1, int(os.getenv("KAFKA_PUBLISH_MAX_RETRIES", "3") or 3))
+        base_delay = max(0.05, float(os.getenv("KAFKA_PUBLISH_RETRY_BASE_DELAY", "0.25") or 0.25))
+        user_id = payload.get("user_id") or key or "unknown"
+        msg_id = payload.get("message_id") or payload.get("interaction_id") or payload.get("reply_group_id") or "none"
+        action = payload.get("action") or payload.get("type")
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                self.logger.info(
+                    f"[KAFKA-SEND] Publishing to topic '{topic}' | User: {user_id} | "
+                    f"MsgID/IntID: {msg_id} | Payload Action: {action} | Attempt: {attempt}/{max_attempts}"
+                )
+                await self.producer.send_and_wait(topic, value=payload, key=key)
+                return True
+            except Exception as e:
+                if attempt >= max_attempts:
+                    self.logger.error(f"Failed to publish to topic '{topic}' after {max_attempts} attempts: {e}")
+                    return False
+                wait_time = base_delay * (2 ** (attempt - 1))
+                self.logger.warning(
+                    f"Kafka publish retry {attempt}/{max_attempts} for topic '{topic}' action={action}: {e}"
+                )
+                await asyncio.sleep(wait_time)
+
+        return False
 
     async def stop(self) -> None:
         """Stop all consumers and the producer cleanly."""
