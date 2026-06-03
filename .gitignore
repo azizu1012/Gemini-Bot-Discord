@@ -1,0 +1,71 @@
+# Python cache / bytecode
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.example
+
+# Logs
+logs/
+*.log
+
+# Runtime (Java, Kafka, PostgreSQL binaries - downloaded, not source)
+src/.runtime/
+!src/.runtime/config/kafka/server.properties
+!src/.runtime/config/kafka/log4j.properties
+
+# Database & Data
+*.db
+*.sqlite
+*.sqlite3
+data/
+uploaded_files/
+
+# Cache
+.cache/
+*.cache
+
+# PID files
+*.pid
+
+# Premium users
+premium_users.json
+router_api/accounts.json
+router_api/*.tmp.json
+router_api/tmp_*.json
+
+# Downloads
+src/.runtime/downloads/
+src/.runtime/kafka-data/
+*.tar.gz
+*.zip
+*.tgz
+
+# Kafka Windows lock workaround files
+*.deleted
+*.cleaned
+*.swap
+
+# OS specific
+.DS_Store
