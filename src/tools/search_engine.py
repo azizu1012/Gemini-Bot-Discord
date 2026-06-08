@@ -199,13 +199,13 @@ class SearchEngine:
         base = (query or "").strip()
         if not base:
             return []
-        parts = re.split(r"\s*(?:\n+|;|\?|\.(?=\s)|,|\band\b|\bvà\b|\bva\b)\s*", base, flags=re.IGNORECASE)
+        parts = re.split(r"\s*(?:\n+|;|\?|\.(?=\s)|,)\s*", base, flags=re.IGNORECASE)
         intents = [p.strip() for p in parts if len(p.strip()) > 2]
         if not intents:
             return [base]
         if len(intents) == 1:
             return intents
-        if any(len(intent) < 14 for intent in intents):
+        if any(len(intent) < 20 for intent in intents):
             return [base]
         return intents[:self.intent_batch_size]
 
@@ -714,8 +714,9 @@ class SearchEngine:
             parts.append("\n".join(lines))
 
         quality_count = self._count_quality_sources(top, topic, query)
+        parts.append("")
+        parts.append(f"Required quality sources: {required_sources} | Quality sources found: {quality_count}")
         if quality_count < required_sources:
-            parts.append("")
             parts.append("⚠️ Chưa đủ nguồn chất lượng theo ngưỡng cho truy vấn này; nên xem kết quả như thông tin tham khảo.")
 
         return "\n".join(parts)

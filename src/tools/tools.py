@@ -8,21 +8,8 @@ from typing import Dict, List, Any, Optional, Set
 import requests
 from google import genai
 from google.genai import types as genai_types
-import sympy as sp
-from sympy.parsing.sympy_parser import (
-    parse_expr,
-    standard_transformations,
-    implicit_multiplication_application,
-    convert_xor,
-)
 
-from src.core.config import (
-    logger,
-    WEATHER_API_KEY,
-    CITY,
-    WEATHER_CACHE_PATH,
-    GEMINI_API_KEYS,
-)
+from src.core.config import logger, GEMINI_API_KEYS
 import src.core.config as config
 from src.core.api_router import get_api_router
 from src.core.api_config import VISION_MODEL_ALIAS
@@ -39,6 +26,8 @@ from src.tools.helpers import (
     CityNameHelper,
 )
 from src.tools.search_engine import SearchEngine
+from src.tools.weather_service import WeatherService
+from src.tools.calculator_service import CalculatorService
 
 
 class ToolsManager:
@@ -64,7 +53,8 @@ class ToolsManager:
         self.search_subtask_timeout_seconds = int(os.getenv("SEARCH_SUBTASK_TIMEOUT_SEC", "18"))
         self._allowed_mentions: Dict[str, Set[str]] = {}
         self.image_recognition_cache = {}
-        self.weather_lock = asyncio.Lock()
+        self.weather = WeatherService()
+        self.calculator = CalculatorService()
         self.search_lock = asyncio.Lock()
         self._gemini_key_cursor = 0
         self._invalid_tool_keys = set()
@@ -282,14 +272,19 @@ class ToolsManager:
                         "Tìm kiếm thông tin cập nhật, sự kiện mới, tin tức, "
                         "dữ liệu thực tế không có trong kiến thức của AI, "
                         "hoặc để xác minh thông tin. KHÔNG DÙNG cho các tác vụ tính toán, "
-                        "dịch thuật, tóm tắt, viết lại, hoặc các câu hỏi không cần dữ liệu mới."
+                        "dịch thuật, tóm tắt, viết lại, hoặc các câu hỏi không cần dữ liệu mới.\n\n"
+                        "QUAN TRỌNG: Nếu người dùng hỏi nhiều chủ đề, hãy gọi web_search "
+                        "NHIỀU LẦN — mỗi lần một chủ đề riêng, KHÔNG gộp chung vào một query.\n"
+                        "LUÔN dùng ngày đầy đủ từ `Current time:` (DD Month YYYY) trong query "
+                        "cho tin tức hoặc thông tin thời gian thực."
                     ),
                     parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {
                             "query": {
                                 "type": "string",
-                                "description": "Câu truy vấn tìm kiếm cụ thể, không để trống."
+                                "description": "Truy vấn tìm kiếm cụ thể, KHÔNG gộp nhiều chủ đề. "
+                                    "Dùng đúng ngày từ `Current time:` (DD Month YYYY) cho tin tức."
                             }
                         },
                         "required": ["query"]
@@ -416,138 +411,7 @@ class ToolsManager:
 
         return tools_list
 
-    # ── Weather ────────────────────────────────────────────
-
-    def _normalize_city_name(self, city_query: str):
-        return CityNameHelper.normalize(city_query)
-
-    async def get_weather(self, city_query: Optional[str] = None):
-        import json
-        async with self.weather_lock:
-            if city_query is None:
-                city_query = CITY or "Ho Chi Minh City"
-            city_en, city_vi = self._normalize_city_name(city_query)
-
-            cache_path = WEATHER_CACHE_PATH.replace(".json", f"_{city_en.replace(' ', '_').lower()}.json")
-
-            def _write_cache_sync(payload: Dict[str, Any]) -> None:
-                try:
-                    with open(cache_path, "w", encoding="utf-8") as f:
-                        json.dump(payload, f, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    self.logger.warning(f"Weather cache write failed: {e}")
-
-            try:
-                with open(cache_path, "r", encoding="utf-8") as f:
-                    cached = json.load(f)
-                cached_time = cached.get("timestamp", 0)
-                if time.time() - cached_time < self.CACHE_TTL_SECONDS:
-                    return cached.get("data", {})
-            except (FileNotFoundError, json.JSONDecodeError, Exception):
-                pass
-
-            if not WEATHER_API_KEY:
-                return {"error": f"Chưa cấu hình WEATHER_API_KEY cho thời tiết.", "city": city_en}
-
-            def _fetch_weather_sync() -> Dict[str, Any]:
-                try:
-                    resp = requests.get(
-                        f"https://api.openweathermap.org/data/2.5/weather",
-                        params={
-                            "q": city_en,
-                            "appid": WEATHER_API_KEY,
-                            "units": "metric",
-                            "lang": "vi",
-                        },
-                        timeout=10,
-                    )
-                    if resp.status_code == 200:
-                        raw = resp.json()
-                        main = raw.get("main", {})
-                        weather_desc = raw.get("weather", [{}])[0].get("description", "Không rõ")
-                        wind = raw.get("wind", {})
-                        return {
-                            "city": city_en,
-                            "city_vi": city_vi,
-                            "temperature": main.get("temp"),
-                            "feels_like": main.get("feels_like"),
-                            "humidity": main.get("humidity"),
-                            "description": weather_desc,
-                            "wind_speed": wind.get("speed"),
-                            "country": raw.get("sys", {}).get("country", ""),
-                        }
-                    elif resp.status_code == 404:
-                        return {"error": f"Không tìm thấy thành phố '{city_en}'.", "city": city_en}
-                    else:
-                        return {"error": f"Lỗi API thời tiết (HTTP {resp.status_code})", "city": city_en}
-                except requests.RequestException as e:
-                    return {"error": f"Lỗi kết nối OpenWeatherMap: {e}", "city": city_en}
-
-            data = await asyncio.to_thread(_fetch_weather_sync)
-            if "error" not in data:
-                await asyncio.to_thread(_write_cache_sync, {"timestamp": time.time(), "data": data})
-            return data
-
-    # ── Calculator ─────────────────────────────────────────
-
-    def run_calculator(self, equation_str: str):
-        raw_eq = (equation_str or "").strip()
-        if not raw_eq:
-            return json.dumps({
-                "equation": equation_str,
-                "result": "Lỗi biểu thức: Biểu thức rỗng.",
-                "success": False
-            }, ensure_ascii=False)
-
-        cleaned_eq = raw_eq.strip().lower().replace(',', '.')
-        cleaned_eq = cleaned_eq.replace('×', '*').replace('·', '*').replace('÷', '/')
-        cleaned_eq = cleaned_eq.replace('−', '-')
-        if cleaned_eq.endswith('='):
-            cleaned_eq = cleaned_eq[:-1].strip()
-        if '=' in cleaned_eq:
-            cleaned_eq = cleaned_eq.split('=', 1)[1].strip()
-
-        transformations = standard_transformations + (
-            implicit_multiplication_application,
-            convert_xor,
-        )
-        local_dict = {
-            "sin": sp.sin, "cos": sp.cos, "tan": sp.tan,
-            "asin": sp.asin, "acos": sp.acos, "atan": sp.atan,
-            "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh,
-            "log": sp.log, "ln": sp.log, "exp": sp.exp,
-            "sqrt": sp.sqrt, "pi": sp.pi, "e": sp.E,
-            "diff": sp.diff, "integrate": sp.integrate,
-            "limit": sp.limit, "simplify": sp.simplify,
-        }
-
-        try:
-            expr = parse_expr(
-                cleaned_eq,
-                local_dict=local_dict,
-                transformations=transformations,
-                evaluate=True,
-            )
-            if hasattr(expr, "doit"):
-                expr = expr.doit()
-            if getattr(expr, "free_symbols", set()):
-                result = sp.simplify(expr)
-            else:
-                result = sp.N(expr)
-            result_str = str(result)
-            if result_str.endswith('.0'):
-                result_str = result_str[:-2]
-            return json.dumps({
-                "equation": equation_str,
-                "result": result_str,
-                "success": True
-            }, ensure_ascii=False)
-        except (sp.SympifyError, TypeError, ZeroDivisionError, Exception) as e:
-            return json.dumps({
-                "equation": equation_str,
-                "result": f"Lỗi biểu thức: {str(e)}",
-                "success": False
-            }, ensure_ascii=False)
+    # ── Weather / Calculator delegated to services ──────────
 
     # ── Image recognition ─────────────────────────────────
 
@@ -701,12 +565,12 @@ class ToolsManager:
 
             elif name == "get_weather":
                 city = args.get("city", "Ho Chi Minh City")
-                data = await self.get_weather(city)
+                data = await self.weather.get_weather(city)
                 return json.dumps(data, ensure_ascii=False, indent=2)
 
             elif name == "calculate":
                 eq = args.get("equation", "")
-                return await asyncio.to_thread(self.run_calculator, eq)
+                return await asyncio.to_thread(self.calculator.run_calculator, eq)
 
             elif name == "save_note":
                 content = (args.get("note_content") or "").strip()

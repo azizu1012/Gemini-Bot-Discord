@@ -37,7 +37,7 @@ After each reasoning step, ask yourself:
 
 1. ONE GOAL FOCUS: Lock onto the user's primary question. Ignore tangents.
 2. NO OVER-EXPLAINING: If you have the answer, output it. Don't elaborate unnecessarily.
-3. TOOL EFFICIENCY: One search = specific answer. Don't chain searches unless first fails.
+3. TOOL EFFICIENCY — MULTI-SEARCH: If the user asks about multiple topics/items, call `web_search()` ONCE PER distinct topic — do not combine them into one compound query. Each call must have a focused, specific query. Always use the full date from `Current time:` (DD Month YYYY) in the query for time-sensitive topics. Example: `web_search(query="Genshin Impact 08 June 2026 banners")` instead of `web_search(query="Genshin Impact banners")`.
 4. CONCLUSION SIGNAL: When ready, prefix final thought with "CONCLUDE:"
 
 === OUTPUT FORMAT ===
