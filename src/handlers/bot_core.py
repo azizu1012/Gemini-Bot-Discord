@@ -585,7 +585,6 @@ class CustomApiEndpointModal(discord.ui.Modal):
             )
             await self.router.refresh_custom_provider_config(force=True)
             await self.router.refresh_custom_models_from_db(force=True)
-            await self.health_checker.gemini_mgr.clear_custom_api_clients()
         except Exception as save_error:
             logger.error(f"Failed to save custom provider config: {save_error}")
             await interaction.followup.send(f"⚠️ Scan model thành công nhưng lưu DB thất bại: `{save_error}`", ephemeral=True)
@@ -1597,7 +1596,6 @@ class BotCore:
             await router.refresh_custom_provider_config(force=True)
             status_text = "ĐÃ BẬT" if state else "ĐÃ TẮT"
             if not state:
-                await self.health_checker.gemini_mgr.clear_custom_api_clients()
                 await interaction.followup.send(f"✅ {status_text} Custom Endpoint (OpenAI). Cấu hình endpoint/key được giữ lại trong DB.", ephemeral=True)
                 return
 
@@ -1605,26 +1603,17 @@ class BotCore:
                 await interaction.followup.send("⚠️ Cấu hình custom provider thiếu endpoint hoặc API key. Hãy chạy lại /custom_api_config.", ephemeral=True)
                 return
 
-            model_config = await self.db_repo.get_bot_model_config()
-            selected_model_ids = [
-                model_config.get("reasoning_model_id"),
-                model_config.get("final_model_id"),
-            ]
-            report = await self.health_checker.run_health_check_cycle(
-                force_send_alerts=False,
-                full_key_scan=False,
-                selected_model_ids=selected_model_ids,
-                ping_selected_models=True,
-            )
             alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
-            key_checks = report.get("key_checks", [])
-            alive_keys = sum(1 for k in key_checks if k.get("alive"))
-            dead_keys = sum(1 for k in key_checks if not k.get("alive"))
-            report_text = f"Key sống/chết: {alive_keys}/{dead_keys}."
+            all_keys = await self.db_repo.get_all_keys_from_pool()
+            openai_keys = [k for k in all_keys if k.get("provider") == "openai"]
+            alive_keys = sum(1 for k in openai_keys if k.get("is_active"))
+            dead_keys = len(openai_keys) - alive_keys
+            report_text = f"Key hoạt động/ngưng: {alive_keys}/{dead_keys} (trạng thái lưu trong DB)."
             await interaction.followup.send(
                 f"✅ {status_text} Custom Endpoint (OpenAI) thành công!\n"
                 f"{report_text}\n"
-                f"Model custom đang alive: `{len(alive_models)}`.",
+                f"Model custom đang alive: `{len(alive_models)}`.\n"
+                f"💡 Mẹo: Bạn có thể chạy `/health_check` để quét và kiểm tra sức khỏe mạng thực tế của các key và model.",
                 ephemeral=True,
             )
 

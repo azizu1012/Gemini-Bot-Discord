@@ -227,11 +227,16 @@ class APIRouter:
         final_model_id = str(config.get("final_model_id") or "").strip()
         image_model_id = str(config.get("image_generator_model_id") or "").strip()
 
-        if reasoning_model_id and reasoning_model_id in alive_model_ids:
+        def should_route_custom(model_id: str) -> bool:
+            if not model_id:
+                return False
+            return model_id in alive_model_ids
+
+        if should_route_custom(reasoning_model_id):
             selected["reasoning"] = self.custom_model_alias(reasoning_model_id)
-        if final_model_id and final_model_id in alive_model_ids:
+        if should_route_custom(final_model_id):
             selected["final"] = self.custom_model_alias(final_model_id)
-        if image_model_id and image_model_id in alive_model_ids:
+        if should_route_custom(image_model_id):
             selected["image_generator_model_id"] = image_model_id
         return selected
 

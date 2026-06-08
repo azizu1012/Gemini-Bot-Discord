@@ -484,7 +484,7 @@ class GeminiPipeline:
             key_reservation: Optional[Dict[str, str]] = None
 
             try:
-                current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+                current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
                 time_context = f"Current time: {current_time_str}\n"
                 admin_cross_user_evidence = str(privacy_context.get("admin_cross_user_evidence") or "")
                 extra_admin_context = f"\n\n{admin_cross_user_evidence}\n" if admin_cross_user_evidence else ""
@@ -778,7 +778,7 @@ class GeminiPipeline:
             key_reservation: Optional[Dict[str, str]] = None
 
             try:
-                current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+                current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
 
                 user_input = ""
@@ -985,7 +985,7 @@ class GeminiPipeline:
                 if original_messages and original_messages[-1].get("role") == "user":
                     user_input = original_messages[-1].get("parts", [{}])[0].get("text", "")
 
-                current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+                current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
                 user_context_block = _prepare_user_context_block(user_input, privacy_context)
                 admin_cross_user_evidence = str(privacy_context.get("admin_cross_user_evidence") or "")

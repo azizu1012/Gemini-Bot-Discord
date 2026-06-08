@@ -10,6 +10,8 @@ from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 from typing import Dict, List, Any, Optional, Set, Tuple
 import aiofiles
 import requests
+from bs4 import BeautifulSoup
+import dateparser
 import sympy as sp
 from sympy.parsing.sympy_parser import (
     parse_expr,
@@ -285,21 +287,7 @@ class ToolsManager:
         else:
             self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
 
-        # Precompiled regex patterns for date extraction (IGNORECASE enabled for English/Vietnamese tokens)
-        self._date_min_pattern = re.compile(r'\b(\d+)\s*(?:phút|phút trước|minute|minutes|min|mins)\b', re.IGNORECASE)
-        self._date_hour_pattern = re.compile(r'\b(\d+)\s*(?:giờ|giờ trước|hour|hours|hr|hrs)\b', re.IGNORECASE)
-        self._date_day_pattern = re.compile(r'\b(\d+)\s*(?:ngày|ngày trước|day|days)\b', re.IGNORECASE)
-        self._date_week_pattern = re.compile(r'\b(\d+)\s*(?:tuần|tuần trước|week|weeks)\b', re.IGNORECASE)
-        self._date_month_pattern = re.compile(r'\b(\d+)\s*(?:tháng|tháng trước|month|months)\b', re.IGNORECASE)
-        self._date_year_pattern = re.compile(r'\b(\d+)\s*(?:năm|năm trước|year|years|yr|yrs)\b', re.IGNORECASE)
-        self._date_today_pattern = re.compile(r'\b(?:hôm nay|today)\b', re.IGNORECASE)
-        self._date_yesterday_pattern = re.compile(r'\b(?:hôm qua|yesterday)\b', re.IGNORECASE)
 
-        self._date_yyyy_mm_dd_pattern = re.compile(r'\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b', re.IGNORECASE)
-        self._date_dd_mm_yyyy_pattern = re.compile(r'\b(\d{1,2})[-/](\d{1,2})[-/](20\d{2})\b', re.IGNORECASE)
-        self._date_month_day_pattern = re.compile(r'\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})\b', re.IGNORECASE)
-        self._date_day_month_pattern = re.compile(r'\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b', re.IGNORECASE)
-        self._date_year_only_pattern = re.compile(r'\b(20\d{2})\b', re.IGNORECASE)
 
     def _record_allowed_mention(self, caller_user_id: str, target_user_id: str) -> None:
         caller_id = str(caller_user_id or "").strip()
@@ -331,7 +319,7 @@ class ToolsManager:
                         "hoặc để xác minh thông tin. KHÔNG DÙNG cho các tác vụ tính toán, "
                         "dịch thuật, tóm tắt, viết lại, hoặc các câu hỏi không cần dữ liệu mới."
                     ),
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {
                             "query": {
@@ -347,7 +335,7 @@ class ToolsManager:
                 genai_types.FunctionDeclaration(
                     name="get_weather",
                     description="Lấy thông tin thời tiết hiện tại cho một thành phố cụ thể.",
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {"city": {"type": "string", "description": "Tên thành phố, ví dụ: 'Hanoi', 'Tokyo'."}},
                         "required": ["city"]
@@ -361,7 +349,7 @@ class ToolsManager:
                         "Giải các bài toán số học hoặc biểu thức phức tạp (đại số, lượng giác, logarit). "
                         "Hỗ trợ đạo hàm/tích phân/rút gọn bằng cú pháp SymPy (vd: diff(x**3*exp(sin(x)), x))."
                     ),
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {"equation": {"type": "string", "description": "Biểu thức toán học dưới dạng string, ví dụ: 'sin(pi/2) + 2*x'."}},
                         "required": ["equation"]
@@ -375,7 +363,7 @@ class ToolsManager:
                         "Lưu một mẩu thông tin, sở thích, sự thật, hoặc nội dung quan trọng về người dùng để bạn có thể truy cập lại sau. "
                         "Dùng khi user chia sẻ thông tin cá nhân có giá trị lâu dài (ví dụ: 'tôi thích chơi game X', 'cấu hình máy của tôi là Y')."
                     ),
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {
                             "note_content": {"type": "string", "description": "Nội dung thông tin cần ghi nhớ."},
@@ -393,7 +381,7 @@ class ToolsManager:
                         "dữ liệu lịch sử, hoặc các sự kiện/thông tin quan trọng mà AI đã được yêu cầu ghi nhớ. "
                         "PHẢI LUÔN GỌI HÀM NÀY nếu câu hỏi liên quan đến kiến thức cá nhân, note, hoặc thông tin đã được ghi nhớ trước đó."
                     ),
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {
                             "query": {"type": "string", "description": "Từ khóa hoặc chủ đề tìm kiếm trong bộ nhớ (ví dụ: 'config', 'sở thích'). Để trống nếu muốn lấy tất cả."}
@@ -409,7 +397,7 @@ class ToolsManager:
                         "Xóa một ghi chú/thông tin cụ thể đã lưu trữ của người dùng dựa vào note_id. "
                         "Thường sử dụng kết hợp sau khi gọi retrieve_notes để lấy chính xác note_id cần xóa."
                     ),
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {
                             "note_id": {"type": "string", "description": "ID của note cần xóa (UUID)."}
@@ -426,7 +414,7 @@ class ToolsManager:
                         "Sử dụng khi người dùng tải lên một hình ảnh và hỏi các câu hỏi liên quan đến nội dung của hình ảnh đó. "
                         "Ví dụ: 'có bao nhiêu quả táo trong ảnh?', 'người này là ai?', 'đây là nhân vật gì?', 'đọc chữ trong ảnh này'."
                     ),
-                    parameters={
+                    parameters={  # type: ignore[arg-type]
                         "type": "object",
                         "properties": {
                             "image_url": {"type": "string", "description": "URL công khai của hình ảnh cần nhận diện."},
@@ -448,7 +436,7 @@ class ToolsManager:
                             "hoặc hạ chức người dùng về User thông thường. Lệnh này chỉ thực hiện được khi người gọi lệnh "
                             "(tham số user_id của chat context) là Admin thực tế của bot."
                         ),
-                        parameters={
+                        parameters={  # type: ignore[arg-type]
                             "type": "object",
                             "properties": {
                                 "target_user_id": {"type": "string", "description": "ID Discord số của người dùng cần thay đổi vai trò."},
@@ -733,105 +721,9 @@ class ToolsManager:
         if not text:
             return None
         try:
-            text_lower = text.lower().strip()
-            now = datetime.now()
-
-            # 1. Quét các từ khóa mốc thời gian tương đối cụ thể trước (hôm nay, hôm qua)
-            if self._date_today_pattern.search(text_lower):
-                return now
-            if self._date_yesterday_pattern.search(text_lower):
-                return now - timedelta(days=1)
-
-            # 2. Quét các mốc thời gian tương đối từ hẹp đến rộng: Phút -> Giờ -> Ngày -> Tuần -> Tháng -> Năm
-            # Phút / Mins
-            m = self._date_min_pattern.search(text_lower)
-            if m:
-                return now
-
-            # Giờ / Hours
-            m = self._date_hour_pattern.search(text_lower)
-            if m:
-                return now
-
-            # Ngày / Days
-            m = self._date_day_pattern.search(text_lower)
-            if m:
-                return now - timedelta(days=int(m.group(1)))
-
-            # Tuần / Weeks
-            m = self._date_week_pattern.search(text_lower)
-            if m:
-                return now - timedelta(days=int(m.group(1)) * 7)
-
-            # Tháng / Months (Quy đổi 1 tháng = 30 ngày)
-            m = self._date_month_pattern.search(text_lower)
-            if m:
-                return now - timedelta(days=int(m.group(1)) * 30)
-
-            # Năm / Years
-            m = self._date_year_pattern.search(text_lower)
-            if m:
-                return now - timedelta(days=int(m.group(1)) * 365)
-
-            # 3. Quét định dạng thời gian tuyệt đối YYYY-MM-DD
-            m = self._date_yyyy_mm_dd_pattern.search(text_lower)
-            if m:
-                try:
-                    return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-                except ValueError:
-                    pass
-
-            # 4. Quét định dạng tuyệt đối DD/MM/YYYY (hoặc MM/DD/YYYY fallback)
-            m = self._date_dd_mm_yyyy_pattern.search(text_lower)
-            if m:
-                try:
-                    return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
-                except ValueError:
-                    try:
-                        return datetime(int(m.group(3)), int(m.group(1)), int(m.group(2)))
-                    except ValueError:
-                        pass
-
-            # 5. Quét định dạng chữ tiếng Anh: Month DD, YYYY hoặc DD Month YYYY
-            months = {
-                "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
-                "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
-                "aug": 8, "august": 8, "sep": 9, "september": 9, "oct": 10, "october": 10,
-                "nov": 11, "november": 11, "dec": 12, "december": 12
-            }
-
-            m = self._date_month_day_pattern.search(text_lower)
-            if m:
-                month_val = months[m.group(1)]
-                day_val = int(m.group(2))
-                text_after = text_lower[m.end():m.end() + 15]
-                year_match = self._date_year_only_pattern.search(text_after)
-                year_val = int(year_match.group(1)) if year_match else now.year
-                try:
-                    return datetime(year_val, month_val, day_val)
-                except ValueError:
-                    pass
-
-            m = self._date_day_month_pattern.search(text_lower)
-            if m:
-                day_val = int(m.group(1))
-                month_val = months[m.group(2)]
-                text_after = text_lower[m.end():m.end() + 15]
-                year_match = self._date_year_only_pattern.search(text_after)
-                year_val = int(year_match.group(1)) if year_match else now.year
-                try:
-                    return datetime(year_val, month_val, day_val)
-                except ValueError:
-                    pass
-
-            # 6. Fallback chỉ quét thấy năm YYYY
-            m = self._date_year_only_pattern.search(text_lower)
-            if m:
-                return datetime(int(m.group(1)), 6, 1)
-
+            return dateparser.parse(text, languages=['vi', 'en'])
         except Exception as e:
             logger.warning(f"Error parsing date in _extract_date: {e}")
-
         return None
 
     def _calculate_time_decay_penalty(self, topic: str, pub_date: Optional[datetime], is_time_sensitive: bool) -> float:
@@ -1248,7 +1140,7 @@ class ToolsManager:
                 return v
         return (city_query, city_query.title())
     
-    async def get_weather(self, city_query: str = None):
+    async def get_weather(self, city_query: Optional[str] = None):
         """Get weather information for a city."""
         async with self.weather_lock:
             if city_query is None:
@@ -1530,20 +1422,13 @@ class ToolsManager:
         return quality_count >= required_sources and total_chars >= min_chars
 
     def _extract_main_text(self, html_text: str) -> str:
-        text = html_text or ""
-        text = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<noscript[\s\S]*?</noscript>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<(svg|form|button)[\s\S]*?</\1>", " ", text, flags=re.IGNORECASE)
-
-        article_match = re.search(r"<(article|main)[^>]*>([\s\S]*?)</\1>", text, flags=re.IGNORECASE)
-        if article_match:
-            text = article_match.group(2)
-
-        for block_tag in ("header", "footer", "nav", "aside"):
-            text = re.sub(rf"<{block_tag}[^>]*>[\s\S]*?</{block_tag}>", " ", text, flags=re.IGNORECASE)
-
-        text = re.sub(r"<[^>]+>", " ", text)
+        soup = BeautifulSoup(html_text, 'lxml')
+        for tag in soup(["script", "style", "noscript", "svg", "form", "button", "header", "footer", "nav", "aside"]):
+            tag.decompose()
+        content = soup.find("article") or soup.find("main") or soup.body
+        if not content:
+            return ""
+        text = content.get_text(separator=' ')
         text = re.sub(r"\b(cookie policy|accept cookies|subscribe|advertisement|all rights reserved)\b", " ", text, flags=re.IGNORECASE)
         text = re.sub(r"\s+", " ", text).strip()
         return text
@@ -1732,10 +1617,7 @@ class ToolsManager:
         }
 
         try:
-            if self.exa_use_autoprompt:
-                results = await asyncio.to_thread(exa.search, use_autoprompt=True, **params)
-            else:
-                results = await asyncio.to_thread(exa.search, **params)
+            results = await asyncio.to_thread(exa.search, **params)
         except TypeError:
             results = await asyncio.to_thread(exa.search, **params)
 
@@ -1783,7 +1665,7 @@ class ToolsManager:
         success_count = 0
 
         for (name, _), result in zip(selected, results):
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 self.logger.warning(f"Fallback {name} error: {result}")
                 continue
             if result:
@@ -1925,7 +1807,7 @@ class ToolsManager:
 
         records: List[Dict[str, str]] = []
         for result in primary_results:
-            if isinstance(result, Exception):
+            if isinstance(result, BaseException):
                 continue
             records.extend(result)
 
@@ -2032,7 +1914,7 @@ class ToolsManager:
         try:
             output = await task
             if not output and time_sensitive and not force_fallback:
-                absolute_date = datetime.now().strftime("%d/%m/%Y")
+                absolute_date = datetime.now().strftime("%d %B %Y")
                 forced_query = f"{clean_query} ngay {absolute_date}"
                 self.logger.info(
                     f"Time-sensitive query produced empty result. Retrying forced fallback query='{forced_query[:80]}'."

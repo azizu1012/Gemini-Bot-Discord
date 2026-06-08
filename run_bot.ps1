@@ -821,6 +821,13 @@ function Start-KafkaIfNeeded {
     $kafkaLibs = Join-Path $KafkaDir 'libs/*'
 
     $kafkaDataDir = Join-Path $RuntimeRoot 'kafka-data'
+    if (Test-Path $kafkaDataDir) {
+        Get-ChildItem -Path $kafkaDataDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.Attributes -match "ReadOnly") {
+                $_.Attributes = $_.Attributes -band -not [System.IO.FileAttributes]::ReadOnly
+            }
+        }
+    }
     $staleFiles = Get-ChildItem -Path $kafkaDataDir -Recurse -Filter '*.deleted' -ErrorAction SilentlyContinue
     if ($staleFiles) {
         Write-Host "[INFO] Cleaning $($staleFiles.Count) stale .deleted files from kafka-data (Windows file-lock workaround)"

@@ -172,7 +172,7 @@ class FileIndexService:
         security_report: str,
         user_id: str,
     ) -> Dict[str, Any]:
-        current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+        current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
         time_context = f"Current time: {current_time_str}\n"
         system_instruction = time_context + get_file_index_reasoning_prompt()
 
@@ -341,7 +341,7 @@ class FileIndexService:
         }
 
     async def validate_file_index(self, index_data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
-        current_time_str = datetime.now().strftime("%A, %d/%m/%Y %H:%M")
+        current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
         time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
         system_instruction = time_context + get_file_index_validation_prompt()
 

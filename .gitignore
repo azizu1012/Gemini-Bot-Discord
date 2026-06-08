@@ -13,6 +13,8 @@ env/
 # IDE
 .vscode/
 .idea/
+.claude/
+.claude/**
 *.swp
 *.swo
 *~
@@ -66,6 +68,13 @@ src/.runtime/kafka-data/
 *.deleted
 *.cleaned
 *.swap
+
+# Internal project docs (AI agent handoff, not for public)
+CLAUDE.md
+GEMINI.md
+AGENT_HANDOFF_PROJECT_CONTEXT.md
+PROJECT_INFO.txt
+Project_structure.txt
 
 # OS specific
 .DS_Store

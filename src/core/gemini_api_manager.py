@@ -250,7 +250,7 @@ class GeminiApiManager:
                 client = AsyncOpenAI(
                     api_key=api_key,
                     base_url=normalized_endpoint,
-                    timeout=Timeout(15.0, connect=5.0),
+                    timeout=Timeout(120.0, connect=10.0),
                     max_retries=1,
                 )
                 self._gemini_clients[cache_key] = client
@@ -610,8 +610,10 @@ class GeminiApiManager:
             if openai_tools and not is_lm_studio_endpoint:
                 create_kwargs["tools"] = openai_tools
 
+            create_kwargs["stream"] = True
+            create_kwargs["extra_body"] = {"web_search": False}
             try:
-                response = await client.chat.completions.create(**create_kwargs)
+                stream = await client.chat.completions.create(**create_kwargs)
             except APIConnectionError:
                 self._mark_key_as_failed(
                     api_key,
@@ -621,31 +623,52 @@ class GeminiApiManager:
                 )
                 raise
 
-            choice = response.choices[0]
-            msg = choice.message
-            finish_reason = getattr(choice, "finish_reason", None)
-            parts = []
-
-            if msg.content:
-                parts.append(CustomAPIWrapperPart(text=msg.content))
-
+            content = ""
+            finish_reason = "stop"
             import json
-            if hasattr(msg, "tool_calls") and msg.tool_calls:
-                for tc in msg.tool_calls:
-                    if tc.type == "function":
-                        args_dict = {}
-                        try:
-                            args_dict = json.loads(tc.function.arguments)
-                        except Exception as e:
-                            self.logger.error(f"OpenAI Wrapper: Failed to parse JSON args for tool {tc.function.name}: {e}")
-                            args_dict = {
-                                "_parsing_error": str(e),
-                                "_raw_arguments": getattr(tc.function, 'arguments', '')
+            partial_tool_calls = {}
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta.content:
+                    content += delta.content
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in partial_tool_calls:
+                            partial_tool_calls[idx] = {
+                                "id": tc.id or "",
+                                "function": {"name": "", "arguments": ""},
+                                "type": "function",
                             }
-                        
-                        func_call = CustomFunctionCall(tc.function.name, args_dict, id=getattr(tc, 'id', None))
-                        parts.append(CustomAPIWrapperPart(function_call=func_call))
-            
+                        if tc.function:
+                            if tc.function.name:
+                                partial_tool_calls[idx]["function"]["name"] += tc.function.name
+                            if tc.function.arguments:
+                                partial_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
+                        if tc.id:
+                            partial_tool_calls[idx]["id"] = tc.id
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+
+            parts = []
+            if content:
+                parts.append(CustomAPIWrapperPart(text=content))
+
+            for tc_dict in partial_tool_calls.values():
+                args_dict = {}
+                try:
+                    args_dict = json.loads(tc_dict["function"]["arguments"])
+                except Exception as e:
+                    self.logger.error(f"OpenAI Wrapper: Failed to parse JSON args for tool {tc_dict['function']['name']}: {e}")
+                    args_dict = {
+                        "_parsing_error": str(e),
+                        "_raw_arguments": tc_dict["function"]["arguments"],
+                    }
+                func_call = CustomFunctionCall(tc_dict["function"]["name"], args_dict, id=tc_dict.get("id"))
+                parts.append(CustomAPIWrapperPart(function_call=func_call))
+
             if not parts:
                 parts.append(CustomAPIWrapperPart(text=""))
 
