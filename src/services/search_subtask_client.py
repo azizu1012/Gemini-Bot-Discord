@@ -3,13 +3,13 @@ import uuid
 from typing import Any, Dict, Optional
 
 from src.core.config import logger
-from src.services.kafka_service import KafkaService
+from src.services.redis_service import RedisStreamService
 
 
 class SearchSubtaskClient:
-    """Client for dispatching web search subtasks over Kafka and awaiting results."""
+    """Client for dispatching web search subtasks over Redis Streams and awaiting results."""
 
-    def __init__(self, kafka_service: KafkaService, group_id: Optional[str] = None):
+    def __init__(self, kafka_service: RedisStreamService, group_id: Optional[str] = None):
         self.kafka_service = kafka_service
         self.group_id = group_id or f"azuris_search_results_{uuid.uuid4()}"
         self._consumer = None

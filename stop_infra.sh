@@ -21,19 +21,17 @@ fi
 export LOCAL_RUNTIME_ROOT="$LOCAL_RUNTIME_ROOT_VALUE"
 
 RUNTIME_CONFIG_DIR="$RUNTIME_ROOT/config"
-KAFKA_DIR="$RUNTIME_ROOT/kafka"
 POSTGRES_DIR="$RUNTIME_ROOT/postgres"
 POSTGRES_CREDENTIALS_FILE="$POSTGRES_DIR/credentials.env"
 RUNTIME_RUN_DIR="$RUNTIME_ROOT/run"
 
-KAFKA_PID_FILE="$RUNTIME_RUN_DIR/kafka.pid"
-ZOOKEEPER_PID_FILE="$RUNTIME_RUN_DIR/zookeeper.pid"
+REDIS_DIR="$RUNTIME_ROOT/redis"
+REDIS_PID_FILE="$RUNTIME_RUN_DIR/redis.pid"
 POSTGRES_PID_FILE="$RUNTIME_RUN_DIR/postgres.pid"
 POSTGRES_DATA_DIR="$POSTGRES_DIR/data"
 
 POSTGRES_PORT="${POSTGRES_PORT:-}"
-KAFKA_PORT="${KAFKA_PORT:-59092}"
-ZOOKEEPER_PORT="${ZOOKEEPER_PORT:-2181}"
+REDIS_PORT="${REDIS_PORT:-6379}"
 
 if [ -z "$POSTGRES_PORT" ] && [ -f "$POSTGRES_CREDENTIALS_FILE" ]; then
   parsed_pg_port="$(grep -E '^AZURIS_DB_PORT=[0-9]+$' "$POSTGRES_CREDENTIALS_FILE" | head -n 1 | cut -d= -f2 || true)"
@@ -47,35 +45,6 @@ if [ -z "$POSTGRES_PORT" ]; then
 fi
 
 PYTHON_BIN="$(command -v python3 || command -v python || true)"
-
-is_kafka_kraft_mode() {
-  local kafka_config="$RUNTIME_CONFIG_DIR/kafka/server.properties"
-  if [ ! -f "$kafka_config" ]; then
-    echo "0"
-    return
-  fi
-
-  if grep -Eq '^\s*process\.roles\s*=' "$kafka_config" || grep -Eq '^\s*controller\.quorum\.voters\s*=' "$kafka_config"; then
-    echo "1"
-    return
-  fi
-
-  echo "0"
-}
-
-get_zookeeper_client_port() {
-  local zk_config="$KAFKA_DIR/config/zookeeper.properties"
-  if [ -f "$zk_config" ]; then
-    local line
-    line="$(grep -E '^\s*clientPort\s*=\s*[0-9]+\s*$' "$zk_config" | head -n 1 || true)"
-    if [ -n "$line" ]; then
-      echo "$line" | sed -E 's/^\s*clientPort\s*=\s*([0-9]+)\s*$/\1/'
-      return
-    fi
-  fi
-
-  echo "$ZOOKEEPER_PORT"
-}
 
 is_port_open() {
   local host="$1"
@@ -187,22 +156,6 @@ stop_pid_file_process() {
   rm -f "$pid_file"
 }
 
-stop_runtime_java_with_token() {
-  local token="$1"
-  local service_name="$2"
-
-  local pids
-  pids="$(ps -eo pid=,args= | awk -v marker="$KAFKA_DIR" -v t="$token" 'index($0, marker) > 0 && tolower($0) ~ /java/ && index(tolower($0), tolower(t)) > 0 {print $1}')"
-  if [ -z "$pids" ]; then
-    return
-  fi
-
-  while IFS= read -r pid; do
-    [ -n "$pid" ] || continue
-    terminate_pid "$pid" "$service_name"
-  done <<< "$pids"
-}
-
 stop_runtime_postgres_processes() {
   local pids
   pids="$(ps -eo pid=,args= | awk -v marker="$POSTGRES_DIR" 'tolower($0) ~ /postgres/ && index($0, marker) > 0 {print $1}')"
@@ -234,28 +187,18 @@ stop_postgres() {
   stop_runtime_postgres_processes
 }
 
-stop_zookeeper() {
-  if [ "$(is_kafka_kraft_mode)" = "0" ]; then
-    local zk_stop="$KAFKA_DIR/bin/zookeeper-server-stop.sh"
-    if [ -x "$zk_stop" ]; then
-      echo "[INFO] Requesting Zookeeper stop via script..."
-      "$zk_stop" >/dev/null 2>&1 || true
-    fi
+stop_redis() {
+  if command -v redis-cli &>/dev/null; then
+    echo "[INFO] Shutting down Redis via redis-cli..."
+    redis-cli -h 127.0.0.1 -p "$REDIS_PORT" shutdown 2>/dev/null || true
   fi
-
-  stop_pid_file_process "Zookeeper" "$ZOOKEEPER_PID_FILE"
-  stop_runtime_java_with_token "zookeeper" "Zookeeper"
-}
-
-stop_kafka() {
-  local kafka_stop="$KAFKA_DIR/bin/kafka-server-stop.sh"
-  if [ -x "$kafka_stop" ]; then
-    echo "[INFO] Requesting Kafka stop via script..."
-    "$kafka_stop" >/dev/null 2>&1 || true
+  stop_pid_file_process "Redis" "$REDIS_PID_FILE"
+  local redis_pids
+  redis_pids="$(ps -eo pid=,args= | awk -v dir="$REDIS_DIR" 'index($0, dir) && /redis-server/ {print $1}')"
+  if [ -n "$redis_pids" ]; then
+    echo "[INFO] Killing remaining Redis server processes from $REDIS_DIR..."
+    echo "$redis_pids" | xargs kill -9 2>/dev/null || true
   fi
-
-  stop_pid_file_process "Kafka" "$KAFKA_PID_FILE"
-  stop_runtime_java_with_token "kafka.kafka" "Kafka"
 }
 
 port_owner_hint() {
@@ -273,26 +216,15 @@ port_owner_hint() {
 
 assert_infra_stopped() {
   local failures=0
-  local zookeeper_client_port
-  zookeeper_client_port="$(get_zookeeper_client_port)"
-  local check_zk
-  check_zk="$(is_kafka_kraft_mode)"
 
   if ! wait_for_port_closed "PostgreSQL" "127.0.0.1" "$POSTGRES_PORT" 25; then
     echo "[ERROR] PostgreSQL port owner: $(port_owner_hint "$POSTGRES_PORT")"
     failures=$((failures + 1))
   fi
 
-  if ! wait_for_port_closed "Kafka" "127.0.0.1" "$KAFKA_PORT" 25; then
-    echo "[ERROR] Kafka port owner: $(port_owner_hint "$KAFKA_PORT")"
+  if ! wait_for_port_closed "Redis" "127.0.0.1" "$REDIS_PORT" 25; then
+    echo "[ERROR] Redis port owner: $(port_owner_hint "$REDIS_PORT")"
     failures=$((failures + 1))
-  fi
-
-  if [ "$check_zk" = "0" ]; then
-    if ! wait_for_port_closed "Zookeeper" "127.0.0.1" "$zookeeper_client_port" 25; then
-      echo "[ERROR] Zookeeper port owner: $(port_owner_hint "$zookeeper_client_port")"
-      failures=$((failures + 1))
-    fi
   fi
 
   if [ "$failures" -gt 0 ]; then
@@ -306,13 +238,10 @@ echo "  Azuris Local Infra Teardown (Linux)"
 echo "==============================================="
 echo "Project root: $PROJECT_ROOT"
 
-stop_kafka
-stop_zookeeper
+stop_redis
 stop_postgres
-stop_runtime_java_with_token "kafka" "Kafka/Zookeeper leftover"
-stop_runtime_java_with_token "zookeeper" "Kafka/Zookeeper leftover"
 stop_runtime_postgres_processes
 
 assert_infra_stopped
 
-echo "[OK] Local Kafka/Zookeeper/PostgreSQL teardown complete."
+echo "[OK] Local Redis/PostgreSQL teardown complete."

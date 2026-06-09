@@ -166,7 +166,7 @@ def main():
     logger.info(f"Model: {config.MODEL_NAME}")
     logger.info(f"Gemini API keys available: {len(config.GEMINI_API_KEYS)}")
     logger.info(f"Database URL: {_mask_database_url(config.DATABASE_URL)}")
-    logger.info(f"Kafka Bootstrap Servers: {config.KAFKA_BOOTSTRAP_SERVERS}")
+    logger.info(f"Redis URL: {config.REDIS_URL}")
 
     try:
         asyncio.run(run_bot_only(config))

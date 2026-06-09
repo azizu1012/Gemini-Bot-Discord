@@ -51,9 +51,10 @@ class Config:
         self.PROJECT_ROOT = _detect_project_root()
         _load_runtime_env(self.PROJECT_ROOT)
 
-        # --- DATABASE & KAFKA ---
+        # --- DATABASE & MESSAGE QUEUE ---
         self.DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/azuris")
-        self.KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+        self.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+        self.KAFKA_BOOTSTRAP_SERVERS = ""  # deprecated - Kafka replaced by Redis Streams
 
         # --- FILE PATHS (ABSOLUTE & CWD-INDEPENDENT) ---
         self.NOTE_PATH = self._resolve_runtime_path("NOTE_PATH", "data/notes.txt")
@@ -134,6 +135,10 @@ class Config:
         # --- OPENAI / CUSTOM ENDPOINT ---
         self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
         self.OPENAI_CUSTOM_ENDPOINT = os.getenv("OPENAI_CUSTOM_ENDPOINT", "")
+
+        # --- GEMINI ROUTER / PROXY ENDPOINT ---
+        # Trỏ về Router API (http://127.0.0.1:58100) để route Gemini SDK qua proxy thay vì gọi Google trực tiếp.
+        self.GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "")
 
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
         self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")

@@ -20,7 +20,7 @@ KEY_PACKAGES = [
     "requests",
     "pypdf",
     "asyncpg",
-    "aiokafka",
+    "redis",
 ]
 
 
@@ -61,7 +61,7 @@ def emit_startup_banner(config: Config) -> None:
         logger.info(f"Runtime path [{key}]: {value}")
 
     logger.info(f"Database URL: {_mask_database_url(config.DATABASE_URL)}")
-    logger.info(f"Kafka Servers: {config.KAFKA_BOOTSTRAP_SERVERS}")
+    logger.info(f"Redis URL: {config.REDIS_URL}")
     logger.info("=" * 70)
 
 

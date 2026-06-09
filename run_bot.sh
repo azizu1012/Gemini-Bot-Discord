@@ -29,8 +29,7 @@ else
 fi
 export LOCAL_RUNTIME_ROOT="$LOCAL_RUNTIME_ROOT_VALUE"
 
-JAVA_DIR="$RUNTIME_ROOT/java"
-KAFKA_DIR="$RUNTIME_ROOT/kafka"
+REDIS_DIR="$RUNTIME_ROOT/redis"
 POSTGRES_DIR="$RUNTIME_ROOT/postgres"
 POSTGRES_CREDENTIALS_FILE="$POSTGRES_DIR/credentials.env"
 INSTALL_SCRIPT="$PROJECT_ROOT/install_services.sh"
@@ -48,8 +47,7 @@ fi
 export AZURIS_POSTGRES_START_MODE="$POSTGRES_START_MODE"
 
 POSTGRES_PORT="${POSTGRES_PORT:-}"
-KAFKA_PORT="${KAFKA_PORT:-59092}"
-ZOOKEEPER_PORT="${ZOOKEEPER_PORT:-2181}"
+REDIS_PORT="${REDIS_PORT:-6379}"
 
 PM2_MODE=0
 PM2_FRESH=0
@@ -108,12 +106,6 @@ export AZURIS_PYTHON="$VENV_PY"
 auto_bootstrap_runtime() {
   local needs_bootstrap=0
 
-  if [ ! -x "$JAVA_DIR/bin/java" ]; then
-    needs_bootstrap=1
-  fi
-  if [ ! -x "$KAFKA_DIR/bin/kafka-server-start.sh" ]; then
-    needs_bootstrap=1
-  fi
   if [ ! -x "$POSTGRES_DIR/bin/initdb" ]; then
     needs_bootstrap=1
   fi
@@ -192,8 +184,6 @@ sync_runtime_env() {
 
   cleanup_env_backups
   set_env_value "$env_file" "LOCAL_RUNTIME_ROOT" "$LOCAL_RUNTIME_ROOT_VALUE"
-  set_env_value "$env_file" "JAVA_HOME" "$JAVA_DIR"
-  set_env_value "$env_file" "KAFKA_BOOTSTRAP_SERVERS" "127.0.0.1:${KAFKA_PORT}"
   set_env_value "$env_file" "AZURIS_POSTGRES_START_MODE" "$POSTGRES_START_MODE"
 
   if [ -n "$db_url" ]; then
@@ -388,44 +378,9 @@ start_postgres_if_needed() {
   wait_for_port "PostgreSQL" "127.0.0.1" "$POSTGRES_PORT" 30
 }
 
-is_kafka_kraft_mode() {
-  local kafka_config="$RUNTIME_CONFIG_DIR/kafka/server.properties"
-  if [ ! -f "$kafka_config" ]; then
-    echo "0"
-    return
-  fi
-
-  if grep -Eq '^\s*process\.roles\s*=' "$kafka_config" || grep -Eq '^\s*controller\.quorum\.voters\s*=' "$kafka_config"; then
-    echo "1"
-    return
-  fi
-
-  echo "0"
-}
-
-get_zookeeper_client_port() {
-  local zk_config="$KAFKA_DIR/config/zookeeper.properties"
-  if [ -f "$zk_config" ]; then
-    local line
-    line="$(grep -E '^\s*clientPort\s*=\s*[0-9]+\s*$' "$zk_config" | head -n 1 || true)"
-    if [ -n "$line" ]; then
-      echo "$line" | sed -E 's/^\s*clientPort\s*=\s*([0-9]+)\s*$/\1/'
-      return
-    fi
-  fi
-
-  echo "$ZOOKEEPER_PORT"
-}
-
 collect_infra_active_reasons() {
   local reasons=()
 
-  if [ "$(is_pid_file_process_running "$RUNTIME_RUN_DIR/kafka.pid")" = "1" ]; then
-    reasons+=("Kafka PID file points to a running process")
-  fi
-  if [ "$(is_pid_file_process_running "$RUNTIME_RUN_DIR/zookeeper.pid")" = "1" ]; then
-    reasons+=("Zookeeper PID file points to a running process")
-  fi
   if [ "$(is_pid_file_process_running "$POSTGRES_PID_FILE")" = "1" ]; then
     reasons+=("PostgreSQL PID file points to a running process")
   fi
@@ -465,88 +420,36 @@ auto_reset_infra_if_needed() {
     exit 1
   fi
 
-  local zookeeper_client_port
-  zookeeper_client_port="$(get_zookeeper_client_port)"
-
   if ! wait_for_port_closed "PostgreSQL" "127.0.0.1" "$POSTGRES_PORT" 25; then
-    exit 1
-  fi
-  if ! wait_for_port_closed "Kafka" "127.0.0.1" "$KAFKA_PORT" 25; then
-    exit 1
-  fi
-  if [ "$(is_kafka_kraft_mode)" = "0" ] && ! wait_for_port_closed "Zookeeper" "127.0.0.1" "$zookeeper_client_port" 25; then
     exit 1
   fi
 
   echo -e "${GREEN}[OK]${NC} Existing local infra was stopped successfully"
 }
 
-start_zookeeper_if_needed() {
-  if [ "$(is_kafka_kraft_mode)" = "1" ]; then
-    echo "[INFO] Kafka is running in KRaft mode. Skipping Zookeeper startup."
+ensure_redis_running() {
+  if command -v redis-cli &>/dev/null && redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    echo -e "${GREEN}[OK]${NC} Redis is already running"
     return
   fi
-
-  local zk_start="$KAFKA_DIR/bin/zookeeper-server-start.sh"
-  local zk_config="$KAFKA_DIR/config/zookeeper.properties"
-  local zk_pid_file="$RUNTIME_RUN_DIR/zookeeper.pid"
-  local zk_log_file="$RUNTIME_LOGS_DIR/zookeeper.log"
-  local zk_err_log_file="$RUNTIME_LOGS_DIR/zookeeper.err.log"
-  local zk_client_port
-  zk_client_port="$(get_zookeeper_client_port)"
-
-  if [ ! -x "$zk_start" ] || [ ! -f "$zk_config" ]; then
-    echo -e "${RED}[ERROR]${NC} Kafka không chạy KRaft nhưng thiếu script/config Zookeeper"
-    exit 1
+  echo "[INFO] Starting Redis..."
+  if command -v systemctl &>/dev/null; then
+    systemctl start redis-server 2>/dev/null || systemctl start redis 2>/dev/null || true
   fi
-
-  if [ "$(is_port_open "127.0.0.1" "$zk_client_port")" = "1" ]; then
-    echo -e "${GREEN}[OK]${NC} Zookeeper is already running on port $zk_client_port"
-    return
+  if ! redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    redis-server --daemonize yes --port "$REDIS_PORT" --bind 127.0.0.1 2>/dev/null || true
   fi
-
-  echo "[INFO] Starting Zookeeper in background..."
-  mkdir -p "$RUNTIME_RUN_DIR" "$RUNTIME_LOGS_DIR"
-  nohup "$zk_start" "$zk_config" > "$zk_log_file" 2> "$zk_err_log_file" &
-  echo $! > "$zk_pid_file"
-
-  wait_for_port "Zookeeper" "127.0.0.1" "$zk_client_port" 45
-}
-
-start_kafka_if_needed() {
-  local kafka_start="$KAFKA_DIR/bin/kafka-server-start.sh"
-  local kafka_config="$RUNTIME_CONFIG_DIR/kafka/server.properties"
-  local kafka_pid_file="$RUNTIME_RUN_DIR/kafka.pid"
-  local kafka_log_file="$RUNTIME_LOGS_DIR/kafka.log"
-
-  if [ ! -x "$kafka_start" ]; then
-    echo -e "${RED}[ERROR]${NC} Missing Kafka start script: $kafka_start"
-    exit 1
+  sleep 1
+  if redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    echo -e "${GREEN}[OK]${NC} Redis is running on port $REDIS_PORT"
+  else
+    echo -e "${RED}[ERROR]${NC} Redis failed to start"
   fi
-
-  if [ ! -f "$kafka_config" ]; then
-    echo -e "${RED}[ERROR]${NC} Missing Kafka config: $kafka_config"
-    exit 1
-  fi
-
-  if [ "$(is_port_open "127.0.0.1" "$KAFKA_PORT")" = "1" ]; then
-    echo -e "${GREEN}[OK]${NC} Kafka is already running"
-    return
-  fi
-
-  echo "[INFO] Starting Kafka in background..."
-  mkdir -p "$RUNTIME_RUN_DIR" "$RUNTIME_LOGS_DIR"
-  export JAVA_HOME="$JAVA_DIR"
-  nohup "$kafka_start" "$kafka_config" > "$kafka_log_file" 2>&1 &
-  echo $! > "$kafka_pid_file"
-
-  wait_for_port "Kafka" "127.0.0.1" "$KAFKA_PORT" 60
 }
 
 start_local_infra() {
   start_postgres_if_needed
-  start_zookeeper_if_needed
-  start_kafka_if_needed
+  ensure_redis_running
 }
 
 auto_bootstrap_runtime
@@ -555,13 +458,10 @@ auto_reset_infra_if_needed
 sync_runtime_env
 start_local_infra
 
-export JAVA_HOME="$JAVA_DIR"
-export PATH="$JAVA_HOME/bin:$POSTGRES_DIR/bin:$PATH"
-
 echo "[INFO] Verifying core dependencies..."
 if ! "$VENV_PY" - <<'PY' >/dev/null 2>&1
 import importlib
-required = ("google.genai", "discord", "dotenv", "flask", "aiohttp", "cryptography", "openai", "asyncpg", "aiokafka")
+required = ("google.genai", "discord", "dotenv", "flask", "aiohttp", "cryptography", "openai", "asyncpg", "redis")
 for mod in required:
     importlib.import_module(mod)
 PY

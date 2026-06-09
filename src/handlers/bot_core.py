@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import os
 import random
 import re
 from datetime import datetime, timedelta
@@ -8,41 +9,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import discord
-from src.services.kafka_service import KafkaService
+from src.services.redis_service import RedisStreamService
 from discord import app_commands
 from discord.ext import commands
 
 from src.core.config import Config, logger
-from src.core.custom_endpoint import CUSTOM_ENDPOINT_PRESETS, normalize_custom_endpoint, resolve_custom_endpoint_preset
 from src.database.repository import DatabaseRepository
 from src.managers.cleanup_manager import CleanupManager
 from src.services.health_checker import get_health_checker
 from src.voice.voice_lock import VoiceLockManager
-
-
-CUSTOM_ENDPOINT_PRESET_LABELS = {
-    "manual": "Nhập tay endpoint",
-    "lm_studio": "LM Studio local",
-    "ollama": "Ollama local",
-}
-
-CUSTOM_ENDPOINT_DUMMY_KEYS = {
-    "lm_studio": "lm-studio-local",
-    "ollama": "ollama-local",
-}
-
-
-def _custom_endpoint_preset_label(preset: Any) -> str:
-    return CUSTOM_ENDPOINT_PRESET_LABELS.get(str(preset or "manual").strip().lower(), CUSTOM_ENDPOINT_PRESET_LABELS["manual"])
-
-
-def _custom_endpoint_dummy_key(preset: Any) -> str:
-    return CUSTOM_ENDPOINT_DUMMY_KEYS.get(str(preset or "manual").strip().lower(), "")
-
-
-def _clean_custom_endpoint_preset(preset: Any) -> str:
-    clean = str(preset or "manual").strip().lower()
-    return clean if clean in CUSTOM_ENDPOINT_PRESETS else "manual"
 
 
 def _flatten_note_preview(note: Dict[str, Any], max_len: int = 80) -> str:
@@ -316,418 +291,8 @@ class ImageHistoryView(discord.ui.View):
         self.add_item(ImageHistorySelect(history))
 
 
-class CustomApiConfigView(discord.ui.View):
-    def __init__(
-        self,
-        models: List[Dict[str, Any]],
-        current_config: Dict[str, Any],
-        db_repo: DatabaseRepository,
-        router: Any,
-        updated_by: str,
-        provider_config: Optional[Dict[str, Any]] = None,
-    ):
-        super().__init__(timeout=300)
-        self.models = list(models[:25])
-        self.db_repo = db_repo
-        self.router = router
-        self.updated_by = updated_by
-        self.provider_config = provider_config or {}
-        self.reasoning_model_id = self._initial_model_id(current_config.get("reasoning_model_id"))
-        self.final_model_id = self._initial_model_id(current_config.get("final_model_id"))
-        self.image_generator_model_id = self._initial_model_id(current_config.get("image_generator_model_id"), allow_none=True)
-        self._rebuild_components()
-
-    def _initial_model_id(self, value: Any, allow_none: bool = False) -> Optional[str]:
-        model_ids = [str(model.get("model_id")) for model in self.models if model.get("model_id")]
-        selected = str(value or "").strip()
-        if selected in model_ids:
-            return selected
-        if allow_none:
-            return None
-        return model_ids[0] if model_ids else None
-
-    def _option_label(self, model: Dict[str, Any]) -> str:
-        label = str(model.get("display_name") or model.get("model_id") or "model")
-        return label[:97] + "..." if len(label) > 100 else label
-
-    def _option_description(self, model: Dict[str, Any]) -> str:
-        model_id = str(model.get("model_id") or "")
-        return model_id[:97] + "..." if len(model_id) > 100 else model_id
-
-    def _model_id_from_value(self, value: str) -> Optional[str]:
-        if value == "__none__":
-            return None
-        try:
-            idx = int(value)
-        except (TypeError, ValueError):
-            return None
-        if 0 <= idx < len(self.models):
-            return str(self.models[idx].get("model_id") or "") or None
-        return None
-
-    def _build_options(self, selected_model_id: Optional[str], include_none: bool = False) -> List[discord.SelectOption]:
-        options: List[discord.SelectOption] = []
-        if include_none:
-            options.append(discord.SelectOption(
-                label="Không dùng custom image generator",
-                description="Giữ luồng Gemini Imagen mặc định hoặc bỏ qua custom image model.",
-                value="__none__",
-                default=selected_model_id is None,
-            ))
-        for idx, model in enumerate(self.models):
-            model_id = str(model.get("model_id") or "")
-            if not model_id:
-                continue
-            options.append(discord.SelectOption(
-                label=self._option_label(model),
-                description=self._option_description(model),
-                value=str(idx),
-                default=model_id == selected_model_id,
-            ))
-        return options[:25]
-
-    def summary_text(self) -> str:
-        image_text = self.image_generator_model_id or "Không dùng custom image generator"
-        endpoint_preset = _clean_custom_endpoint_preset(self.provider_config.get("endpoint_preset"))
-        endpoint = str(self.provider_config.get("normalized_base_url") or self.provider_config.get("endpoint_base_url") or "chưa lưu")
-        return (
-            "⚙️ **Custom API Config**\n"
-            "Chọn model custom đang alive cho từng vai trò rồi bấm Save.\n\n"
-            f"- Đang chạy: `{_custom_endpoint_preset_label(endpoint_preset)}`\n"
-            f"- Endpoint: `{endpoint}`\n"
-            f"- Reasoning: `{self.reasoning_model_id or 'chưa chọn'}`\n"
-            f"- Final output: `{self.final_model_id or 'chưa chọn'}`\n"
-            f"- Image generator: `{image_text}`\n\n"
-            f"Model alive hiển thị: `{len(self.models)}`"
-        )
-
-    def _rebuild_components(self) -> None:
-        self.clear_items()
-
-        reasoning_select = discord.ui.Select(
-            placeholder="Chọn model reasoning",
-            min_values=1,
-            max_values=1,
-            options=self._build_options(self.reasoning_model_id),
-            disabled=not self.models,
-        )
-        final_select = discord.ui.Select(
-            placeholder="Chọn model final output",
-            min_values=1,
-            max_values=1,
-            options=self._build_options(self.final_model_id),
-            disabled=not self.models,
-        )
-        image_select = discord.ui.Select(
-            placeholder="Chọn model image generator nếu có",
-            min_values=1,
-            max_values=1,
-            options=self._build_options(self.image_generator_model_id, include_none=True),
-            disabled=not self.models,
-        )
-
-        async def on_reasoning(select_interaction: discord.Interaction):
-            self.reasoning_model_id = self._model_id_from_value(reasoning_select.values[0])
-            self._rebuild_components()
-            await select_interaction.response.edit_message(content=self.summary_text(), view=self)
-
-        async def on_final(select_interaction: discord.Interaction):
-            self.final_model_id = self._model_id_from_value(final_select.values[0])
-            self._rebuild_components()
-            await select_interaction.response.edit_message(content=self.summary_text(), view=self)
-
-        async def on_image(select_interaction: discord.Interaction):
-            self.image_generator_model_id = self._model_id_from_value(image_select.values[0])
-            self._rebuild_components()
-            await select_interaction.response.edit_message(content=self.summary_text(), view=self)
-
-        async def on_save(button_interaction: discord.Interaction):
-            alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
-            alive_model_ids = {str(model.get("model_id")) for model in alive_models if model.get("model_id")}
-            required = [self.reasoning_model_id, self.final_model_id]
-            if not all(model_id and model_id in alive_model_ids for model_id in required):
-                await button_interaction.response.send_message(
-                    "⚠️ Model reasoning/final đã không còn alive hoặc chưa được chọn. Hãy chạy /health_check rồi mở lại config.",
-                    ephemeral=True,
-                )
-                return
-            if self.image_generator_model_id and self.image_generator_model_id not in alive_model_ids:
-                await button_interaction.response.send_message(
-                    "⚠️ Model image generator đã không còn alive. Hãy chọn lại hoặc để trống.",
-                    ephemeral=True,
-                )
-                return
-            saved = await self.db_repo.set_bot_model_config(
-                self.reasoning_model_id,
-                self.final_model_id,
-                self.image_generator_model_id,
-                self.updated_by,
-            )
-            await self.router.refresh_custom_models_from_db(force=True)
-            endpoint_preset = _clean_custom_endpoint_preset(self.provider_config.get("endpoint_preset"))
-            endpoint = str(self.provider_config.get("normalized_base_url") or self.provider_config.get("endpoint_base_url") or "chưa lưu")
-            await button_interaction.response.edit_message(
-                content=(
-                    "✅ Đã lưu Custom API Config.\n"
-                    f"- Endpoint mode: `{_custom_endpoint_preset_label(endpoint_preset)}`\n"
-                    f"- Endpoint: `{endpoint}`\n"
-                    f"- Reasoning: `{saved.get('reasoning_model_id')}`\n"
-                    f"- Final output: `{saved.get('final_model_id')}`\n"
-                    f"- Image generator: `{saved.get('image_generator_model_id') or 'Không dùng custom image generator'}`"
-                ),
-                view=None,
-            )
-
-        reasoning_select.callback = on_reasoning
-        final_select.callback = on_final
-        image_select.callback = on_image
-        self.add_item(reasoning_select)
-        self.add_item(final_select)
-        self.add_item(image_select)
-
-        save_button = discord.ui.Button(label="Save", style=discord.ButtonStyle.success)
-        save_button.callback = on_save
-        self.add_item(save_button)
-
-
-class CustomApiEndpointModal(discord.ui.Modal):
-    def __init__(
-        self,
-        db_repo: DatabaseRepository,
-        health_checker: Any,
-        router: Any,
-        updated_by: str,
-        endpoint_preset: str = "manual",
-        initial_endpoint: str = "",
-    ):
-        self.endpoint_preset = _clean_custom_endpoint_preset(endpoint_preset)
-        preset_endpoint = resolve_custom_endpoint_preset(self.endpoint_preset)
-        endpoint_default = str(initial_endpoint or preset_endpoint or "")
-        super().__init__(title=f"Custom API - {_custom_endpoint_preset_label(self.endpoint_preset)}")
-        self.db_repo = db_repo
-        self.health_checker = health_checker
-        self.router = router
-        self.updated_by = updated_by
-        self.endpoint_input = discord.ui.TextInput(
-            label="Endpoint custom API",
-            placeholder="https://provider.example/ hoặc http://host:port/",
-            default=endpoint_default[:4000],
-            required=True,
-            max_length=4000,
-        )
-        api_key_required = self.endpoint_preset == "manual"
-        self.api_key_input = discord.ui.TextInput(
-            label="API key",
-            placeholder="Bỏ trống với LM Studio/Ollama local nếu server không kiểm tra auth" if not api_key_required else "Nhập key của endpoint OpenAI-compatible",
-            required=api_key_required,
-            max_length=4000,
-            style=discord.TextStyle.short,
-        )
-        self.add_item(self.endpoint_input)
-        self.add_item(self.api_key_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        endpoint_raw = str(self.endpoint_input.value or "").strip()
-        api_key = str(self.api_key_input.value or "").strip()
-        if not api_key and self.endpoint_preset != "manual":
-            api_key = _custom_endpoint_dummy_key(self.endpoint_preset)
-        if not api_key:
-            await interaction.followup.send("⚠️ API key không được để trống với endpoint nhập tay.", ephemeral=True)
-            return
-
-        try:
-            normalized_endpoint = normalize_custom_endpoint(endpoint_raw)
-        except ValueError as endpoint_error:
-            await interaction.followup.send(f"⚠️ Endpoint không hợp lệ: {endpoint_error}", ephemeral=True)
-            return
-
-        scan_result = await self.health_checker.scan_openai_models(api_key, normalized_endpoint)
-        models = list(scan_result.get("models") or [])
-        if not scan_result.get("scan_success") or not scan_result.get("alive") or not models:
-            await interaction.followup.send(
-                "⚠️ Không áp dụng cấu hình mới vì scan `/v1/models` thất bại.\n"
-                f"Lỗi: `{str(scan_result.get('error') or 'không tìm thấy model alive')[:500]}`",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            from datetime import timezone
-
-            key_row = await self.db_repo.upsert_provider_api_key(api_key, provider="openai")
-            await self.db_repo.deactivate_other_provider_keys(provider="openai", keep_key_id=key_row.get("key_id"))
-            provider_config = await self.db_repo.set_custom_provider_config(
-                provider="openai",
-                endpoint_base_url=endpoint_raw,
-                normalized_base_url=normalized_endpoint,
-                active_key_id=key_row.get("key_id"),
-                is_enabled=True,
-                last_scan_ok=True,
-                last_scan_error="",
-                updated_by=self.updated_by,
-                endpoint_preset=self.endpoint_preset,
-            )
-            checked_at = datetime.now(timezone.utc)
-            await self.db_repo.upsert_custom_api_models(
-                provider="openai",
-                models=models,
-                checked_at=checked_at,
-            )
-            await self.db_repo.mark_missing_custom_api_models_dead(
-                provider="openai",
-                seen_model_ids=[
-                    str(model.get("id") or model.get("model") or model.get("name") or "").strip()
-                    for model in models
-                    if str(model.get("id") or model.get("model") or model.get("name") or "").strip()
-                ],
-                checked_at=checked_at,
-            )
-            await self.router.refresh_custom_provider_config(force=True)
-            await self.router.refresh_custom_models_from_db(force=True)
-        except Exception as save_error:
-            logger.error(f"Failed to save custom provider config: {save_error}")
-            await interaction.followup.send(f"⚠️ Scan model thành công nhưng lưu DB thất bại: `{save_error}`", ephemeral=True)
-            return
-
-        alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
-        current_config = await self.db_repo.get_bot_model_config()
-        view = CustomApiConfigView(
-            alive_models,
-            current_config,
-            self.db_repo,
-            self.router,
-            self.updated_by,
-            provider_config=provider_config,
-        )
-        await interaction.followup.send(
-            "✅ Đã lưu endpoint/API key và quét model thành công.\n"
-            f"Endpoint mode: `{_custom_endpoint_preset_label(self.endpoint_preset)}`\n"
-            f"Endpoint đang dùng: `{normalized_endpoint}`\n\n"
-            f"{view.summary_text()}",
-            view=view,
-            ephemeral=True,
-        )
-
-
-class CustomApiEndpointPresetView(discord.ui.View):
-    def __init__(
-        self,
-        db_repo: DatabaseRepository,
-        health_checker: Any,
-        router: Any,
-        updated_by: str,
-        provider_config: Optional[Dict[str, Any]] = None,
-        legacy_endpoint: str = "",
-    ):
-        super().__init__(timeout=180)
-        self.db_repo = db_repo
-        self.health_checker = health_checker
-        self.router = router
-        self.updated_by = updated_by
-        self.provider_config = provider_config or {}
-        self.legacy_endpoint = str(legacy_endpoint or "").strip()
-        self.current_preset = _clean_custom_endpoint_preset(self.provider_config.get("endpoint_preset"))
-        self._build_components()
-
-    def summary_text(self) -> str:
-        endpoint = str(self.provider_config.get("normalized_base_url") or self.provider_config.get("endpoint_base_url") or self.legacy_endpoint or "chưa cấu hình")
-        is_enabled = bool(self.provider_config.get("is_enabled")) if self.provider_config else False
-        status_text = "ĐÃ BẬT" if is_enabled else "ĐANG TẮT"
-        return (
-            "Chọn loại endpoint custom API trước khi nhập chi tiết hoặc bấm **Dùng cấu hình hiện tại** để bỏ qua.\n\n"
-            f"- Đang chạy: `{_custom_endpoint_preset_label(self.current_preset)}` ({status_text})\n"
-            f"- Endpoint hiện tại: `{endpoint}`\n\n"
-            "Manual giữ chuẩn OpenAI-compatible cho provider production. LM Studio/Ollama chỉ là preset local để điền nhanh endpoint."
-        )
-
-    def _initial_endpoint_for_preset(self, preset: str) -> str:
-        clean_preset = _clean_custom_endpoint_preset(preset)
-        stored_endpoint = str(self.provider_config.get("endpoint_base_url") or self.provider_config.get("normalized_base_url") or "").strip()
-        if clean_preset == self.current_preset and stored_endpoint:
-            return stored_endpoint
-        preset_endpoint = resolve_custom_endpoint_preset(clean_preset)
-        if preset_endpoint:
-            return preset_endpoint
-        return self.legacy_endpoint if clean_preset == "manual" else ""
-
-    def _build_components(self) -> None:
-        preset_select = discord.ui.Select(
-            placeholder="Chọn loại endpoint custom API",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label="Nhập tay endpoint",
-                    description="Dùng provider production hoặc endpoint OpenAI-compatible bất kỳ.",
-                    value="manual",
-                    default=self.current_preset == "manual",
-                ),
-                discord.SelectOption(
-                    label="LM Studio local",
-                    description="Mặc định http://127.0.0.1:1234/; API key có thể để trống.",
-                    value="lm_studio",
-                    default=self.current_preset == "lm_studio",
-                ),
-                discord.SelectOption(
-                    label="Ollama local",
-                    description="Mặc định http://127.0.0.1:11434/; API key có thể để trống.",
-                    value="ollama",
-                    default=self.current_preset == "ollama",
-                ),
-            ],
-        )
-
-        async def on_select(select_interaction: discord.Interaction):
-            selected_preset = _clean_custom_endpoint_preset(preset_select.values[0])
-            await select_interaction.response.send_modal(CustomApiEndpointModal(
-                db_repo=self.db_repo,
-                health_checker=self.health_checker,
-                router=self.router,
-                updated_by=self.updated_by,
-                endpoint_preset=selected_preset,
-                initial_endpoint=self._initial_endpoint_for_preset(selected_preset),
-            ))
-
-        preset_select.callback = on_select
-        self.add_item(preset_select)
-
-        skip_disabled = not self.provider_config or not self.provider_config.get("normalized_base_url") or self.provider_config.get("active_key_id") is None
-        skip_button = discord.ui.Button(label="Dùng cấu hình hiện tại", style=discord.ButtonStyle.secondary, disabled=skip_disabled)
-
-        async def on_skip(button_interaction: discord.Interaction):
-            if skip_disabled:
-                await button_interaction.response.send_message(
-                    "⚠️ Chưa có cấu hình endpoint/API key hợp lệ để dùng lại. Hãy chọn mode và nhập lại endpoint.",
-                    ephemeral=True,
-                )
-                return
-
-            alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
-            if not alive_models:
-                await button_interaction.response.send_message(
-                    "⚠️ Chưa có model alive. Hãy chạy /health_check rồi thử lại.",
-                    ephemeral=True,
-                )
-                return
-
-            current_config = await self.db_repo.get_bot_model_config()
-            view = CustomApiConfigView(
-                alive_models,
-                current_config,
-                self.db_repo,
-                self.router,
-                self.updated_by,
-                provider_config=self.provider_config,
-            )
-            await button_interaction.response.edit_message(content=view.summary_text(), view=view)
-
-        skip_button.callback = on_skip
-        self.add_item(skip_button)
-
-
 class BotCore:
-    """Core bot initialization and event handling for Kafka-based architecture."""
+    """Core bot initialization and event handling for Redis Streams-based architecture."""
 
     def __init__(self, config: Config):
         self.config = config
@@ -748,7 +313,7 @@ class BotCore:
         intents.members = True
 
         self.bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-        self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="bot-core")
+        self.kafka_service = RedisStreamService(redis_url=self.config.REDIS_URL, client_id="bot-core")
         self.active_interactions: Dict[str, discord.Interaction] = {}
         self.active_typing_tasks: Dict[str, asyncio.Task] = {}
         self._outgoing_queues: Dict[str, asyncio.Queue] = {}
@@ -964,8 +529,8 @@ class BotCore:
                         payload={"type": "invalidate_cache", "user_id": user_id},
                         key=user_id
                     )
-                except Exception as kafka_err:
-                    self.logger.error(f"Failed to publish invalidate_cache for user {user_id}: {kafka_err}")
+                except Exception as pub_err:
+                    self.logger.error(f"Failed to publish invalidate_cache for user {user_id}: {pub_err}")
                 await message.reply("✅ Đã xóa lịch sử chat của bạn.", mention_author=False)
                 return True
             elif normalized_content in valid_no:
@@ -1001,8 +566,8 @@ class BotCore:
                         payload={"type": "invalidate_all_cache"},
                         key="all"
                     )
-                except Exception as kafka_err:
-                    self.logger.error(f"Failed to publish invalidate_all_cache: {kafka_err}")
+                except Exception as pub_err:
+                    self.logger.error(f"Failed to publish invalidate_all_cache: {pub_err}")
                 await message.reply("✅ Đã xóa toàn bộ dữ liệu hệ thống.", mention_author=False)
                 return True
             elif normalized_content in valid_cancel:
@@ -1089,20 +654,20 @@ class BotCore:
 
         return attachments
 
-    async def setup_kafka(self):
+    async def setup_redis(self):
         try:
             await self.kafka_service.start_producer()
             await self.kafka_service.start_consumer("discord-outgoing", group_id="azuris_bot_dispatcher_group")
             self._consume_task = asyncio.create_task(self.consume_outgoing_loop())
         except Exception as e:
-            self.logger.error(f"Failed to start BotCore Kafka services: {e}")
+            self.logger.error(f"Failed to start BotCore Redis services: {e}")
             raise
 
     async def consume_outgoing_loop(self):
-        self.logger.info("BotCore Kafka consumer loop started. Listening for outgoing replies...")
+        self.logger.info("BotCore Redis consumer loop started. Listening for outgoing replies...")
         consumer = self.kafka_service.consumers.get("discord-outgoing")
         if not consumer:
-            self.logger.error("Consumer for 'discord-outgoing' not found in KafkaService")
+            self.logger.error("Consumer for 'discord-outgoing' not found in RedisStreamService")
             return
 
         try:
@@ -1110,15 +675,15 @@ class BotCore:
                 payload = msg.value
                 asyncio.create_task(self.handle_outgoing_payload(payload))
         except asyncio.CancelledError:
-            self.logger.info("BotCore Kafka consumer loop cancelled")
+            self.logger.info("BotCore Redis consumer loop cancelled")
         except Exception as e:
-            self.logger.error(f"Error in BotCore Kafka consumer loop: {e}")
+            self.logger.error(f"Error in BotCore Redis consumer loop: {e}")
 
     async def handle_outgoing_payload(self, payload: dict):
         action = payload.get("action")
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
-        self.logger.info(f"[KAFKA-RECV] BotCore consumed outgoing event | Action: {action} | User: {user_id} | MsgID/IntID: {payload.get('reference_message_id') or payload.get('interaction_id')}")
+        self.logger.info(f"[REDIS-RECV] BotCore consumed outgoing event | Action: {action} | User: {user_id} | MsgID/IntID: {payload.get('reference_message_id') or payload.get('interaction_id')}")
 
         if not action:
             return
@@ -1174,7 +739,7 @@ class BotCore:
                     self.logger.warning(f"Could not find active interaction for ID {interaction_id}")
 
         except Exception as e:
-            self.logger.error(f"Failed to handle outgoing Kafka payload: {e}")
+            self.logger.error(f"Failed to handle outgoing Redis payload: {e}")
 
     def _get_outgoing_queue(self, user_id: str) -> asyncio.Queue:
         queue = self._outgoing_queues.get(user_id)
@@ -1503,142 +1068,70 @@ class BotCore:
             self.confirmation_pending[user_id] = {"timestamp": datetime.now(), "awaiting": True}
             await interaction.followup.send("Clear chat history? Reply **yes** or **y** in 60 seconds! 😳", ephemeral=True)
 
-        @self.bot.tree.command(name="health_check", description="Kiểm tra thủ công trạng thái custom API keys (ADMIN ONLY)")
+        @self.bot.tree.command(name="health_check", description="Kiểm tra thủ công trạng thái Gemini API keys và model scan (ADMIN ONLY)")
         @is_moderator_or_admin()
         async def health_check_slash(interaction: discord.Interaction):
             await interaction.response.defer(ephemeral=True)
-            from src.core.api_router import get_api_router
 
-            router = get_api_router()
-            provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
-            if not await router.is_custom_enabled_async(force=True):
-                if provider_config is None:
-                    await interaction.followup.send("⚠️ Chưa có cấu hình custom provider. Hãy chạy /custom_api_config để nhập endpoint/API key trước.", ephemeral=True)
-                else:
-                    await interaction.followup.send("⚠️ Custom provider đang tắt hoặc thiếu endpoint/key. Hãy bật bằng /enable_custom_api true hoặc chạy lại /custom_api_config.", ephemeral=True)
-                return
+            await interaction.followup.send("⏳ Đang ping health check...", ephemeral=True)
 
-            endpoint_preset = str((provider_config or {}).get("endpoint_preset") or "manual").strip().lower()
-            model_config = await self.db_repo.get_bot_model_config()
-            selected_model_ids = [
-                model_config.get("reasoning_model_id"),
-                model_config.get("final_model_id"),
-            ]
-            full_key_scan = endpoint_preset == "manual"
-
-            await interaction.followup.send("⏳ Đang ping health check và quét /v1/models...", ephemeral=True)
-
-            report = await self.health_checker.run_health_check_cycle(
-                full_key_scan=full_key_scan,
-                selected_model_ids=selected_model_ids,
-                ping_selected_models=True,
-            )
+            report = await self.health_checker.run_health_check_cycle()
 
             embed = discord.Embed(
                 title="🩺 Health Check Report",
-                color=discord.Color.green() if report.get("model_scan", {}).get("success") else discord.Color.orange(),
+                color=discord.Color.green(),
                 timestamp=datetime.now(),
             )
 
             key_lines = []
-            alive_keys = 0
             for entry in report.get("key_checks", []):
                 alive = entry.get("alive")
-                if alive: alive_keys += 1
                 status = "✅ Alive" if alive else "❌ Dead"
                 error_text = f" — `{entry.get('error')}`" if entry.get("error") else ""
                 key_lines.append(f"**{status}** `{entry.get('key')}` — {entry.get('provider')}{error_text}")
             key_block = "\n".join(key_lines) if key_lines else "*Không có key để kiểm tra*"
             embed.add_field(name="🔑 API Keys", value=key_block, inline=False)
 
-            ping_lines = []
-            for entry in report.get("model_ping", []):
-                alive = entry.get("alive")
-                status = "✅ OK" if alive else "❌ Fail"
-                err_text = f" — `{entry.get('error')}`" if entry.get("error") else ""
-                ping_lines.append(f"**{status}** `{entry.get('model_id')}` qua `{entry.get('key')}`{err_text}")
-            if ping_lines:
-                embed.add_field(name="📡 Ping Model", value="\n".join(ping_lines), inline=False)
-
-            model_scan = report.get("model_scan", {})
-            scan_success = model_scan.get("success", False)
-            alive = model_scan.get("alive_keys", 0)
-            dead = model_scan.get("dead_keys", 0)
-            models = model_scan.get("models_alive", 0)
-            scan_icon = "✅" if scan_success else "⚠️"
-            scan_text = f"{scan_icon} Keys: **{alive} sống** / **{dead} chết** | Models: **{models}** alive"
-            if model_scan.get("error"):
-                scan_text += f"\nLỗi: `{model_scan.get('error')}`"
-            embed.add_field(name="📊 Model Scan", value=scan_text, inline=False)
-
-            embed.set_footer(text=f"Preset: {endpoint_preset}")
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-        @self.bot.tree.command(name="enable_custom_api", description="Bật/tắt custom endpoint OpenAI (ADMIN ONLY)")
-        @app_commands.describe(state="Bật (true) hoặc Tắt (false)")
+        @self.bot.tree.command(name="endpoint", description="Xem/cấu hình Gemini Router endpoint URL (ADMIN ONLY)")
         @is_moderator_or_admin()
-        async def enable_custom_api_slash(interaction: discord.Interaction, state: bool):
+        @app_commands.describe(url="Gemini Base URL mới (để trống nếu chỉ muốn xem)")
+        async def endpoint_slash(interaction: discord.Interaction, url: Optional[str] = None):
             await interaction.response.defer(ephemeral=True)
-            import os
-            from src.core.api_router import get_api_router
 
-            router = get_api_router()
-            provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
-            if provider_config is None:
-                os.environ["ENABLE_CUSTOM_ENDPOINT"] = "false" if not state else os.environ.get("ENABLE_CUSTOM_ENDPOINT", "false")
-                if state:
-                    await interaction.followup.send("⚠️ Chưa có cấu hình custom provider trong DB. Hãy chạy /custom_api_config để nhập endpoint/API key trước.", ephemeral=True)
-                else:
-                    await interaction.followup.send("✅ Custom provider chưa có cấu hình DB; đã giữ trạng thái tắt.", ephemeral=True)
-                return
+            current = str(self.config.GEMINI_BASE_URL or "(trống)")
 
-            saved = await self.db_repo.set_custom_provider_enabled("openai", state, str(interaction.user.id))
-            await router.refresh_custom_provider_config(force=True)
-            status_text = "ĐÃ BẬT" if state else "ĐÃ TẮT"
-            if not state:
-                await interaction.followup.send(f"✅ {status_text} Custom Endpoint (OpenAI). Cấu hình endpoint/key được giữ lại trong DB.", ephemeral=True)
-                return
+            if url:
+                url = url.strip()
+                self.config.GEMINI_BASE_URL = url
+                os.environ["GEMINI_BASE_URL"] = url
 
-            if not saved or not saved.get("normalized_base_url") or saved.get("active_key_id") is None:
-                await interaction.followup.send("⚠️ Cấu hình custom provider thiếu endpoint hoặc API key. Hãy chạy lại /custom_api_config.", ephemeral=True)
-                return
+                env_path = Path(self.config.PROJECT_ROOT) / ".env"
+                try:
+                    lines = env_path.read_text(encoding="utf-8").splitlines()
+                except FileNotFoundError:
+                    lines = []
+                new_lines = []
+                found = False
+                for line in lines:
+                    if line.strip().upper().startswith("GEMINI_BASE_URL"):
+                        new_lines.append(f"GEMINI_BASE_URL={url}")
+                        found = True
+                    else:
+                        new_lines.append(line)
+                if not found:
+                    new_lines.append(f"GEMINI_BASE_URL={url}")
+                env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
 
-            alive_models = await self.db_repo.get_alive_custom_api_models(provider="openai")
-            all_keys = await self.db_repo.get_all_keys_from_pool()
-            openai_keys = [k for k in all_keys if k.get("provider") == "openai"]
-            alive_keys = sum(1 for k in openai_keys if k.get("is_active"))
-            dead_keys = len(openai_keys) - alive_keys
-            report_text = f"Key hoạt động/ngưng: {alive_keys}/{dead_keys} (trạng thái lưu trong DB)."
-            await interaction.followup.send(
-                f"✅ {status_text} Custom Endpoint (OpenAI) thành công!\n"
-                f"{report_text}\n"
-                f"Model custom đang alive: `{len(alive_models)}`.\n"
-                f"💡 Mẹo: Bạn có thể chạy `/health_check` để quét và kiểm tra sức khỏe mạng thực tế của các key và model.",
-                ephemeral=True,
-            )
-
-        @self.bot.tree.command(name="custom_api_config", description="Chọn endpoint/API key và model custom API")
-        @is_moderator_or_admin()
-        async def custom_api_config_slash(interaction: discord.Interaction):
-            import os
-            from src.core.api_router import get_api_router
-
-            router = get_api_router()
-            try:
-                provider_config = await self.db_repo.get_custom_provider_config(provider="openai")
-            except Exception as config_error:
-                self.logger.warning(f"Không đọc được custom provider config trước khi mở modal: {config_error}")
-                provider_config = None
-            legacy_endpoint = os.getenv("OPENAI_CUSTOM_ENDPOINT", "").strip()
-            view = CustomApiEndpointPresetView(
-                db_repo=self.db_repo,
-                health_checker=self.health_checker,
-                router=router,
-                updated_by=str(interaction.user.id),
-                provider_config=provider_config,
-                legacy_endpoint=legacy_endpoint,
-            )
-            await interaction.response.send_message(view.summary_text(), view=view, ephemeral=True)
+                await interaction.followup.send(
+                    f"✅ Đã cập nhật GEMINI_BASE_URL\n"
+                    f"**Cũ:** `{current}`\n"
+                    f"**Mới:** `{url}`",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.followup.send(f"📡 **GEMINI_BASE_URL** hiện tại: `{current}`", ephemeral=True)
 
         @self.bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
         @app_commands.describe(
@@ -1719,7 +1212,7 @@ class BotCore:
                 return
 
             await interaction.response.defer(ephemeral=False)
-            await interaction.followup.send("⏳ Đang gửi yêu cầu tạo ảnh qua Kafka...")
+            await interaction.followup.send("⏳ Đang gửi yêu cầu tạo ảnh...")
 
             interaction_id_str = str(interaction.id)
             self.active_interactions[interaction_id_str] = interaction
@@ -2393,7 +1886,7 @@ class BotCore:
             except Exception:
                 pass
 
-        _ = (ping, reset_chat_slash, health_check_slash, enable_custom_api_slash, custom_api_config_slash, imagine_slash, premium_slash, reset_all_slash,
+        _ = (ping, reset_chat_slash, health_check_slash, endpoint_slash, imagine_slash, premium_slash, reset_all_slash,
              global_notes_slash, global_note_demote_slash, message_to_slash, donate_slash,
              lock_room, unlock_room, move_member, move_all, set_room, add_privet, remove_privet, list_privet, on_app_command_error)
 
@@ -2404,9 +1897,9 @@ class BotCore:
 
             await self.db_repo.init_db()
             try:
-                await self.setup_kafka()
+                await self.setup_redis()
             except Exception as e:
-                self.logger.error(f"Failed to start Kafka producer: {e}")
+                self.logger.error(f"Failed to start Redis producer: {e}")
 
             try:
                 synced = await self.bot.tree.sync()
@@ -2535,7 +2028,7 @@ class BotCore:
                 payload["type"] = "chat"
                 success = await self.kafka_service.publish("discord-incoming", payload=payload, key=user_id)
                 if not success:
-                    raise RuntimeError("Kafka publish returned False")
+                    raise RuntimeError("Redis publish returned False")
             except Exception as e:
                 self.logger.error(f"Failed to publish incoming message: {e}")
                 # Hủy typing loop nếu publish thất bại
@@ -2545,7 +2038,7 @@ class BotCore:
                 # Giải phóng khóa trên RAM
                 self._active_user_locks.pop(user_id, None)
                 await self.db_repo.clear_user_processing_state(user_id)
-                await message.reply("🚨 Hệ thống Kafka đang lỗi. Vui lòng thử lại sau.", mention_author=False)
+                await message.reply("🚨 Hệ thống Redis đang lỗi. Vui lòng thử lại sau.", mention_author=False)
 
         @self.bot.event
         async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):

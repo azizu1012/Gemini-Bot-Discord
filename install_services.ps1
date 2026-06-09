@@ -30,15 +30,15 @@ $ConfigDir = Join-Path $RuntimeRoot 'config'
 $LogsDir = Join-Path $RuntimeRoot 'logs'
 $RunDir = Join-Path $RuntimeRoot 'run'
 
-$JavaDir = Join-Path $RuntimeRoot 'java'
-$KafkaDir = Join-Path $RuntimeRoot 'kafka'
 $PostgresDir = Join-Path $RuntimeRoot 'postgres'
 $PostgresDataDir = Join-Path $PostgresDir 'data'
 $PostgresLogFile = Join-Path $LogsDir 'postgres.log'
-$KafkaLogFile = Join-Path $LogsDir 'kafka.log'
-$KafkaErrLogFile = Join-Path $LogsDir 'kafka.err.log'
 $PostgresCredentialsFile = Join-Path $PostgresDir 'credentials.env'
 $PostgresPidFile = Join-Path $RunDir 'postgres.pid'
+
+$RedisDir = Join-Path $RuntimeRoot 'redis'
+$RedisLogFile = Join-Path $LogsDir 'redis.log'
+$RedisErrLogFile = Join-Path $LogsDir 'redis.err.log'
 
 $PostgresStartMode = "$($env:AZURIS_POSTGRES_START_MODE)".Trim().ToLower()
 if (-not $PostgresStartMode -and (Test-Path $EnvFilePath)) {
@@ -59,15 +59,6 @@ if ($PostgresStartMode -notin @('direct', 'auto', 'pg_ctl')) {
 }
 
 $PostgresPort = if ($env:POSTGRES_PORT) { $env:POSTGRES_PORT } else { '55432' }
-$KafkaPort = if ($env:KAFKA_PORT) { $env:KAFKA_PORT } else { '59092' }
-$KafkaControllerPort = if ($env:KAFKA_CONTROLLER_PORT) { $env:KAFKA_CONTROLLER_PORT } else { '59093' }
-$KafkaClusterIdFile = Join-Path $RuntimeRoot 'kafka.cluster_id'
-$KafkaClusterId = if ($env:KAFKA_CLUSTER_ID) { $env:KAFKA_CLUSTER_ID } else { 'AzurisLocalCluster0001' }
-
-$JavaDownloadUrl = if ($env:JAVA_DOWNLOAD_URL) { $env:JAVA_DOWNLOAD_URL } else { 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse' }
-$KafkaVersion = if ($env:KAFKA_VERSION) { $env:KAFKA_VERSION } else { '3.7.0' }
-$ScalaVersion = if ($env:SCALA_VERSION) { $env:SCALA_VERSION } else { '2.13' }
-$KafkaDownloadUrl = if ($env:KAFKA_DOWNLOAD_URL) { $env:KAFKA_DOWNLOAD_URL } else { "https://downloads.apache.org/kafka/$KafkaVersion/kafka_${ScalaVersion}-${KafkaVersion}.tgz" }
 $PostgresDownloadUrl = if ($env:POSTGRES_DOWNLOAD_URL) { $env:POSTGRES_DOWNLOAD_URL } else { 'https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64-binaries.zip' }
 
 $VenvPython = Join-Path $ProjectRoot '.venv/Scripts/python.exe'
@@ -208,118 +199,9 @@ function Wait-TcpPortReady {
     throw "$Name is not ready on $TargetHost`:$TargetPort after $MaxSeconds seconds"
 }
 
-function Install-Java {
-    $javaExe = Join-Path $JavaDir 'bin/java.exe'
-    if (Test-Path $javaExe) {
-        Write-Info "Java already installed at $JavaDir"
-        return
-    }
 
-    $archive = Join-Path $DownloadsDir 'java-windows-x64.zip'
-    $javaUrlCandidates = @(
-        $JavaDownloadUrl,
-        'https://github.com/adoptium/temurin17-binaries/releases/latest/download/OpenJDK17U-jdk_x64_windows_hotspot.zip'
-    )
 
-    $installed = $false
-    foreach ($candidate in $javaUrlCandidates) {
-        $tempDir = Join-Path $env:TEMP ("azuris-java-" + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $tempDir | Out-Null
 
-        try {
-            if (Test-Path $archive) {
-                Remove-Item $archive -Force
-            }
-
-            Get-FileIfMissing $candidate $archive
-            Expand-Archive -Path $archive -DestinationPath $tempDir -Force
-            Move-ExtractedChildToTarget $tempDir $JavaDir
-            $installed = $true
-            Remove-Item -Recurse -Force $tempDir
-            break
-        }
-        catch {
-            Write-WarnMsg "Java install attempt failed from: $candidate"
-            if (Test-Path $archive) {
-                Remove-Item $archive -Force
-            }
-            if (Test-Path $tempDir) {
-                Remove-Item -Recurse -Force $tempDir
-            }
-        }
-    }
-
-    if (-not $installed) {
-        throw 'Failed to download/extract Java from all configured sources.'
-    }
-
-    Write-Info "Installed Java at $JavaDir"
-}
-
-function Install-Kafka {
-    $kafkaStart = Join-Path $KafkaDir 'bin/windows/kafka-server-start.bat'
-    if (Test-Path $kafkaStart) {
-        Write-Info "Kafka already installed at $KafkaDir"
-        return
-    }
-
-    $archive = Join-Path $DownloadsDir "kafka_${ScalaVersion}-${KafkaVersion}.tgz"
-    $kafkaUrlCandidates = @(
-        $KafkaDownloadUrl,
-        "https://archive.apache.org/dist/kafka/$KafkaVersion/kafka_${ScalaVersion}-${KafkaVersion}.tgz"
-    )
-
-    $installed = $false
-    foreach ($candidate in $kafkaUrlCandidates) {
-        $tempDir = Join-Path $env:TEMP ("azuris-kafka-" + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $tempDir | Out-Null
-
-        try {
-            if (Test-Path $archive) {
-                Remove-Item $archive -Force
-            }
-
-            Get-FileIfMissing $candidate $archive
-            tar -xzf $archive -C $tempDir
-            Move-ExtractedChildToTarget $tempDir $KafkaDir
-            $installed = $true
-            Remove-Item -Recurse -Force $tempDir
-            break
-        }
-        catch {
-            Write-WarnMsg "Kafka install attempt failed from: $candidate"
-            if (Test-Path $archive) {
-                Remove-Item $archive -Force
-            }
-            if (Test-Path $tempDir) {
-                Remove-Item -Recurse -Force $tempDir
-            }
-        }
-    }
-
-    if (-not $installed) {
-        throw 'Failed to download/extract Kafka from all configured sources.'
-    }
-
-    Write-Info "Installed Kafka at $KafkaDir"
-}
-
-function Update-KafkaWindowsScripts {
-    $kafkaStartScript = Join-Path $KafkaDir 'bin/windows/kafka-server-start.bat'
-    if (-not (Test-Path $kafkaStartScript)) {
-        return
-    }
-
-    $originalLine = 'wmic os get osarchitecture | find /i "32-bit" >nul 2>&1'
-    $replacementLine = 'cmd /c exit /b 1'
-    $content = Get-Content -Path $kafkaStartScript -Raw
-
-    if ($content -like "*$originalLine*") {
-        $patched = $content -replace [Regex]::Escape($originalLine), $replacementLine
-        Write-Utf8NoBom -Path $kafkaStartScript -Content $patched
-        Write-Info 'Patched kafka-server-start.bat to remove WMIC dependency'
-    }
-}
 
 function Install-Postgres {
     $initdb = Join-Path $PostgresDir 'bin/initdb.exe'
@@ -482,167 +364,71 @@ function Initialize-PostgresRuntime {
     Update-EnvFile $databaseUrl
 }
 
-function Initialize-KafkaConfig {
-    Write-Info 'Generating Kafka KRaft configuration'
-    $kafkaConfigDir = Join-Path $ConfigDir 'kafka'
-    $kafkaDataDir = Join-Path $RuntimeRoot 'kafka-data'
-    New-Item -ItemType Directory -Force -Path $kafkaConfigDir, $kafkaDataDir | Out-Null
+function Install-Redis {
+    $redisExe = Join-Path $RedisDir 'redis-server.exe'
+    if (Test-Path $redisExe) {
+        Write-Info "Redis already installed at $RedisDir"
+        return
+    }
 
-    $kafkaDataDirForward = ($kafkaDataDir -replace '\\', '/')
+    $archive = Join-Path $DownloadsDir 'redis-windows-x64.zip'
+    $redisUrl = 'https://github.com/microsoftarchive/redis/releases/download/win-3.2.100/Redis-x64-3.2.100.zip'
 
-    $kafkaConfigContent = @"
-process.roles=broker,controller
-node.id=1
-listeners=PLAINTEXT://127.0.0.1:$KafkaPort,CONTROLLER://127.0.0.1:$KafkaControllerPort
-advertised.listeners=PLAINTEXT://127.0.0.1:$KafkaPort
-controller.listener.names=CONTROLLER
-listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-controller.quorum.voters=1@127.0.0.1:$KafkaControllerPort
-num.network.threads=3
-num.io.threads=8
-socket.send.buffer.bytes=102400
-socket.receive.buffer.bytes=102400
-socket.request.max.bytes=104857600
-log.dirs=$kafkaDataDirForward
-num.partitions=3
-offsets.topic.replication.factor=1
-transaction.state.log.replication.factor=1
-transaction.state.log.min.isr=1
-group.initial.rebalance.delay.ms=0
-auto.create.topics.enable=true
-# Windows file-lock workarounds:
-# - Disable log cleaner (rename .cleaned->.swap fails on Windows)
-# - Prevent log retention from renaming locked segment files
-log.cleaner.enable=false
-log.retention.hours=87600
-log.retention.check.interval.ms=2592000000
-log.segment.delete.delay.ms=60000
-file.delete.delay.ms=60000
+    New-Item -ItemType Directory -Force -Path $RedisDir | Out-Null
+    Get-FileIfMissing $redisUrl $archive
+    Expand-Archive -Path $archive -DestinationPath $RedisDir -Force
+
+    $redisConf = @"
+port 6379
+bind 127.0.0.1
+daemonize no
+save ""
+appendonly no
 "@
+    Write-Utf8NoBom -Path (Join-Path $RedisDir 'redis.conf') -Content $redisConf
 
-    Write-Utf8NoBom -Path (Join-Path $kafkaConfigDir 'server.properties') -Content $kafkaConfigContent
+    if (-not (Test-Path $redisExe)) {
+        throw 'Redis binaries were not extracted correctly.'
+    }
+
+    Write-Info "Installed Redis at $RedisDir"
 }
 
-function Start-KafkaIfNeeded {
-    $kafkaConfig = Join-Path $ConfigDir 'kafka/server.properties'
-    $kafkaDataMeta = Join-Path $RuntimeRoot 'kafka-data/meta.properties'
-    $kafkaPidFile = Join-Path $RunDir 'kafka.pid'
+function Start-RedisIfNeeded {
+    $redisExe = Join-Path $RedisDir 'redis-server.exe'
+    $redisPidFile = Join-Path $RunDir 'redis.pid'
+    $redisConf = Join-Path $RedisDir 'redis.conf'
 
-    $kafkaDataDir = Join-Path $RuntimeRoot 'kafka-data'
-    $staleFiles = Get-ChildItem -Path $kafkaDataDir -Recurse -Filter '*.deleted' -ErrorAction SilentlyContinue
-    if ($staleFiles) {
-        Write-Info "Cleaning $($staleFiles.Count) stale .deleted files from kafka-data (Windows file-lock workaround)"
-        $staleFiles | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue | Out-Null
-        }
+    if (-not (Test-Path $redisExe)) {
+        throw "Missing Redis executable: $redisExe"
     }
 
-    if (-not (Test-Path $kafkaConfig)) {
-        throw "Kafka config file missing: $kafkaConfig"
+    New-Item -ItemType Directory -Force -Path $RunDir, $LogsDir | Out-Null
+
+    if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort 6379) {
+        Write-Info 'Redis is already running on port 6379'
+        return
     }
 
-    if (-not (Test-Path $KafkaClusterIdFile)) {
-        Write-Utf8NoBom -Path $KafkaClusterIdFile -Content ($KafkaClusterId + "`n")
+    Write-Info 'Starting Redis server'
+    Remove-Item -LiteralPath $RedisLogFile, $RedisErrLogFile -Force -ErrorAction SilentlyContinue
+
+    $proc = Start-Process -FilePath $redisExe -ArgumentList $redisConf -PassThru -WindowStyle Hidden -RedirectStandardOutput $RedisLogFile -RedirectStandardError $RedisErrLogFile
+    Set-Content -Path $redisPidFile -Value $proc.Id -Encoding UTF8
+
+    Start-Sleep -Seconds 3
+
+    if (-not (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort 6379)) {
+        throw "Redis failed to start on port 6379. Check $RedisErrLogFile"
     }
 
-    $javaExe = Join-Path $JavaDir 'bin/java.exe'
-    $kafkaLibs = Join-Path $KafkaDir 'libs/*'
-
-    if (-not (Test-Path $javaExe)) {
-        throw "Java runtime missing: $javaExe"
-    }
-
-    if (-not (Test-Path (Join-Path $KafkaDir 'libs'))) {
-        throw "Kafka libs directory missing: $(Join-Path $KafkaDir 'libs')"
-    }
-
-    if (-not (Test-Path $kafkaDataMeta)) {
-        Write-Info 'Formatting Kafka KRaft storage'
-        $env:JAVA_HOME = $JavaDir
-        $clusterId = (Get-Content $KafkaClusterIdFile).Trim()
-        $formatOutput = & $javaExe -cp $kafkaLibs kafka.tools.StorageTool format -t $clusterId -c $kafkaConfig
-        $formatOutputText = "$formatOutput"
-
-        if (($LASTEXITCODE -ne 0) -or ($formatOutputText -match 'Exception') -or (-not (Test-Path $kafkaDataMeta))) {
-            if ($formatOutputText -match 'cluster.id' -or $formatOutputText -match 'cluster ID' -or $formatOutputText -match 'Invalid') {
-                Write-WarnMsg 'Kafka cluster id appears invalid, generating a new one.'
-                $clusterId = (& $javaExe -cp $kafkaLibs kafka.tools.StorageTool random-uuid).Trim()
-                if (-not $clusterId) {
-                    throw 'Kafka random-uuid generation failed on Windows.'
-                }
-                Write-Utf8NoBom -Path $KafkaClusterIdFile -Content ($clusterId + "`n")
-                $formatOutput = & $javaExe -cp $kafkaLibs kafka.tools.StorageTool format -t $clusterId -c $kafkaConfig
-                $formatOutputText = "$formatOutput"
-            }
-        }
-
-        if (($LASTEXITCODE -ne 0) -or ($formatOutputText -match 'Exception') -or (-not (Test-Path $kafkaDataMeta))) {
-            throw 'Kafka storage format failed on Windows.'
-        }
-    }
-
-    if (Test-Path $kafkaPidFile) {
-        $existingPid = (Get-Content $kafkaPidFile).Trim()
-        if ($existingPid) {
-            $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
-            if ($proc) {
-                Write-Info 'Kafka already running'
-            }
-            else {
-                Remove-Item $kafkaPidFile -Force
-            }
-        }
-    }
-
-    if (-not (Test-Path $kafkaPidFile)) {
-        Write-Info 'Starting Kafka broker process'
-        $env:JAVA_HOME = $JavaDir
-        $log4jFile = Join-Path $ConfigDir 'kafka/log4j.properties'
-        if (-not (Test-Path $log4jFile)) {
-            $log4jFile = Join-Path $KafkaDir 'config/log4j.properties'
-        }
-        $kafkaLogsDir = Split-Path -Parent $KafkaLogFile
-        $kafkaArgs = @()
-        if (Test-Path $log4jFile) {
-            $kafkaArgs += "-Dlog4j.configuration=file:$log4jFile"
-            $kafkaArgs += "-Dkafka.logs.dir=$kafkaLogsDir"
-        }
-        $kafkaArgs += @('-cp', $kafkaLibs, 'kafka.Kafka', $kafkaConfig)
-        $proc = Start-Process -FilePath $javaExe -ArgumentList $kafkaArgs -RedirectStandardOutput $KafkaLogFile -RedirectStandardError $KafkaErrLogFile -PassThru -WindowStyle Hidden
-        Set-Content -Path $kafkaPidFile -Value $proc.Id -Encoding UTF8
-    }
-
-    Write-Info 'Waiting for Kafka port readiness'
-    $ready = $false
-    for ($i = 0; $i -lt 45; $i++) {
-        $client = New-Object System.Net.Sockets.TcpClient
-        try {
-            $async = $client.BeginConnect('127.0.0.1', [int]$KafkaPort, $null, $null)
-            $connected = $async.AsyncWaitHandle.WaitOne(1000, $false)
-            if ($connected -and $client.Connected) {
-                $client.EndConnect($async)
-                $ready = $true
-                break
-            }
-        }
-        finally {
-            $client.Close()
-        }
-        Start-Sleep -Seconds 1
-    }
-
-    if (-not $ready) {
-        throw "Kafka failed to become ready. Check $KafkaLogFile"
-    }
-
+    Write-Info 'Redis is ready on port 6379'
 }
 
 function Update-EnvFile($DatabaseUrl) {
     $envFile = Join-Path $ProjectRoot '.env'
     Remove-EnvBackups
     Set-EnvValue -EnvFile $envFile -Key 'LOCAL_RUNTIME_ROOT' -Value $RuntimeRootEnvValue
-    Set-EnvValue -EnvFile $envFile -Key 'JAVA_HOME' -Value $JavaDir
-    Set-EnvValue -EnvFile $envFile -Key 'KAFKA_BOOTSTRAP_SERVERS' -Value "127.0.0.1:$KafkaPort"
     Set-EnvValue -EnvFile $envFile -Key 'DATABASE_URL' -Value $DatabaseUrl
     Remove-EnvBackups
 }
@@ -656,16 +442,12 @@ Write-Info "Project root: $ProjectRoot"
 Write-Info "Runtime root: $RuntimeRoot"
 
 Stop-PostgresIfRunning
-Install-Java
-Install-Kafka
-Update-KafkaWindowsScripts
 Install-Postgres
 Initialize-PostgresData
 Initialize-PostgresRuntime
-Initialize-KafkaConfig
-Start-KafkaIfNeeded
+Install-Redis
+Start-RedisIfNeeded
 
 Write-Info 'Completed local runtime setup.'
-Write-Host 'DATABASE_URL and KAFKA_BOOTSTRAP_SERVERS have been synced to .env'
+Write-Host 'DATABASE_URL has been synced to .env'
 Write-Host "PostgreSQL: 127.0.0.1:$PostgresPort"
-Write-Host "Kafka: 127.0.0.1:$KafkaPort"

@@ -56,20 +56,6 @@ def _prepare_user_context_block(user_input: str, privacy_context: Dict[str, Any]
     return f"{metadata_block}\n{user_input_block}"
 
 
-def _prepare_lm_studio_correction_block(privacy_context: Dict[str, Any]) -> str:
-    correction = str(privacy_context.get("active_user_correction") or "").strip()
-    if not correction:
-        return ""
-    if len(correction) > 500:
-        correction = correction[:500].rstrip()
-    return (
-        "\n\n[LATEST USER CORRECTION FOR LM STUDIO]\n"
-        f"{correction}\n"
-        "Correction này chỉ áp dụng cho request LM Studio local hiện tại và thắng các phát biểu assistant/history cũ mâu thuẫn.\n"
-        "[/LATEST USER CORRECTION FOR LM STUDIO]"
-    )
-
-
 def _extract_intent_blocks(tool_results: str) -> Dict[str, str]:
     if not tool_results:
         return {}
@@ -345,9 +331,6 @@ class GeminiPipeline:
                         system_instruction=system_instruction,
                         generation_config=generation_config,
                         messages=continuation_messages,
-                        provider=(key_reservation or {}).get("provider", "gemini"),
-                        endpoint=(key_reservation or {}).get("endpoint"),
-                        endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                     )
                     self.api_mgr._commit_selected_key(key_reservation)
 
@@ -523,9 +506,6 @@ class GeminiPipeline:
                         generation_config=generation_config,
                         messages=reasoning_messages,
                         tools=tools,
-                        provider=(key_reservation or {}).get("provider", "gemini"),
-                        endpoint=(key_reservation or {}).get("endpoint"),
-                        endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                     )
                     self.api_mgr._commit_selected_key(key_reservation)
                     
@@ -814,17 +794,9 @@ class GeminiPipeline:
                     self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
                     return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
 
-                is_lm_studio = self.api_mgr._is_lm_studio_endpoint(
-                    (key_reservation or {}).get("provider", "gemini"),
-                    (key_reservation or {}).get("endpoint"),
-                    (key_reservation or {}).get("endpoint_preset"),
-                )
-                if is_lm_studio:
-                    system_with_context += _prepare_lm_studio_correction_block(privacy_context)
-
                 generation_config = {
-                    "temperature": 0.2 if is_lm_studio else 0.7,
-                    "top_p": 0.8 if is_lm_studio else 0.9,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
                     "top_k": 40,
                     "max_output_tokens": int(getattr(self.config, "FINAL_MAX_OUTPUT_TOKENS", 8192) or 8192),
                 }
@@ -848,16 +820,47 @@ class GeminiPipeline:
 
                 self.logger.info(f"Final output for user {user_id} ({model_name}, attempt {attempt + 1}/{MAX_RETRIES})")
 
-                response = await self.api_mgr._generate_gemini_content(
+                stream_generator = self.api_mgr._generate_gemini_content_stream(
                     api_key=api_key,
                     model_name=model_name,
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
-                    provider=(key_reservation or {}).get("provider", "gemini"),
-                    endpoint=(key_reservation or {}).get("endpoint"),
-                    endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                 )
+
+                full_text_parts = []
+                finish_reason = "stop"
+                async for chunk in stream_generator:
+                    if hasattr(chunk, "candidates") and chunk.candidates:
+                        cand = chunk.candidates[0]
+                        if cand.content and cand.content.parts:
+                            for part in cand.content.parts:
+                                if part.text:
+                                    full_text_parts.append(part.text)
+                        if getattr(cand, "finish_reason", None):
+                            finish_reason = cand.finish_reason
+
+                accumulated_text = "".join(full_text_parts)
+
+                # Construct Mock Response
+                class MockPart:
+                    def __init__(self, text):
+                        self.text = text
+                class MockContent:
+                    def __init__(self, text):
+                        self.parts = [MockPart(text)]
+                class MockCandidate:
+                    def __init__(self, text, finish_reason):
+                        self.content = MockContent(text)
+                        class MockFinishReason:
+                            def __init__(self, name):
+                                self.name = name
+                        self.finish_reason = MockFinishReason(finish_reason)
+                class MockResponse:
+                    def __init__(self, text, finish_reason):
+                        self.candidates = [MockCandidate(text, finish_reason)]
+
+                response = MockResponse(accumulated_text, finish_reason)
                 self.api_mgr._commit_selected_key(key_reservation)
 
                 candidate = response.candidates[0] if response.candidates else None
@@ -1009,17 +1012,9 @@ class GeminiPipeline:
                 if not api_key or not model_name:
                     return user_facing_error
 
-                is_lm_studio = self.api_mgr._is_lm_studio_endpoint(
-                    (key_reservation or {}).get("provider", "gemini"),
-                    (key_reservation or {}).get("endpoint"),
-                    (key_reservation or {}).get("endpoint_preset"),
-                )
-                if is_lm_studio:
-                    system_with_context += _prepare_lm_studio_correction_block(privacy_context)
-
                 generation_config = {
-                    "temperature": 0.2 if is_lm_studio else 0.7,
-                    "top_p": 0.8 if is_lm_studio else 0.9,
+                    "temperature": 0.7,
+                    "top_p": 0.9,
                     "top_k": 40,
                     "max_output_tokens": int(getattr(self.config, "FALLBACK_MAX_OUTPUT_TOKENS", 8192) or 8192),
                 }
@@ -1048,9 +1043,6 @@ class GeminiPipeline:
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
-                    provider=(key_reservation or {}).get("provider", "gemini"),
-                    endpoint=(key_reservation or {}).get("endpoint"),
-                    endpoint_preset=(key_reservation or {}).get("endpoint_preset"),
                 )
                 self.api_mgr._commit_selected_key(key_reservation)
 

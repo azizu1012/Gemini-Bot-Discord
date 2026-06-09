@@ -43,8 +43,6 @@ else {
 }
 $env:LOCAL_RUNTIME_ROOT = $RuntimeRootEnvValue
 
-$JavaDir = Join-Path $RuntimeRoot 'java'
-$KafkaDir = Join-Path $RuntimeRoot 'kafka'
 $PostgresDir = Join-Path $RuntimeRoot 'postgres'
 $PostgresCredentialsFile = Join-Path $PostgresDir 'credentials.env'
 $InstallScript = Join-Path $ProjectRoot 'install_services.ps1'
@@ -75,8 +73,8 @@ else {
 
     if ($credentialsPort) { $credentialsPort } else { '55432' }
 }
-$KafkaPort = if ($env:KAFKA_PORT) { $env:KAFKA_PORT } else { '59092' }
-$ZookeeperPort = if ($env:ZOOKEEPER_PORT) { $env:ZOOKEEPER_PORT } else { '2181' }
+$RedisDir = Join-Path $RuntimeRoot 'redis'
+$RedisPort = if ($env:REDIS_PORT) { $env:REDIS_PORT } else { '6379' }
 
 $Pm2Mode = $false
 $Pm2Fresh = $false
@@ -120,10 +118,9 @@ $env:AZURIS_PYTHON = $venvPy
 
 function Initialize-Runtime {
     $needsBootstrap = $false
-    if (-not (Test-Path (Join-Path $JavaDir 'bin/java.exe'))) { $needsBootstrap = $true }
-    if (-not (Test-Path (Join-Path $KafkaDir 'bin/windows/kafka-server-start.bat'))) { $needsBootstrap = $true }
     if (-not (Test-Path (Join-Path $PostgresDir 'bin/initdb.exe'))) { $needsBootstrap = $true }
     if (-not (Test-Path $PostgresCredentialsFile)) { $needsBootstrap = $true }
+    if (-not (Test-Path (Join-Path $RedisDir 'redis-server.exe'))) { $needsBootstrap = $true }
 
     if (-not $needsBootstrap) {
         Write-Host '[OK] Local runtime already exists'
@@ -210,8 +207,6 @@ function Sync-RuntimeEnv {
     $envFile = Join-Path $ProjectRoot '.env'
     Remove-EnvBackups
     Set-EnvValue -EnvFile $envFile -Key 'LOCAL_RUNTIME_ROOT' -Value $RuntimeRootEnvValue
-    Set-EnvValue -EnvFile $envFile -Key 'JAVA_HOME' -Value $JavaDir
-    Set-EnvValue -EnvFile $envFile -Key 'KAFKA_BOOTSTRAP_SERVERS' -Value "127.0.0.1:$KafkaPort"
     Set-EnvValue -EnvFile $envFile -Key 'AZURIS_POSTGRES_START_MODE' -Value $PostgresStartMode
 
     if ($dbUrl) {
@@ -609,37 +604,7 @@ function Start-PostgresIfNeeded {
     }
 }
 
-function Test-KafkaKRaftMode {
-    $kafkaConfig = Join-Path $RuntimeRoot 'config/kafka/server.properties'
-    if (-not (Test-Path $kafkaConfig)) {
-        return $false
-    }
 
-    $content = Get-Content $kafkaConfig -Raw
-    if ($content -match '(?m)^\s*process\.roles\s*=') {
-        return $true
-    }
-    if ($content -match '(?m)^\s*controller\.quorum\.voters\s*=') {
-        return $true
-    }
-
-    return $false
-}
-
-function Get-ZookeeperClientPort {
-    $zookeeperConfig = Join-Path $KafkaDir 'config/zookeeper.properties'
-    if (-not (Test-Path $zookeeperConfig)) {
-        return [int]$ZookeeperPort
-    }
-
-    foreach ($line in (Get-Content $zookeeperConfig)) {
-        if ($line -match '^\s*clientPort\s*=\s*(\d+)\s*$') {
-            return [int]$Matches[1]
-        }
-    }
-
-    return [int]$ZookeeperPort
-}
 
 function Test-PortOwnedByRuntimeProcess {
     param(
@@ -680,43 +645,28 @@ function Test-PortOwnedByRuntimeProcess {
 
 function Get-InfraActiveReasons {
     $reasons = @()
-    $zookeeperClientPort = Get-ZookeeperClientPort
     $postgresRuntimeToken = $PostgresDir.ToLower().Replace('\', '/')
-    $kafkaRuntimeToken = $KafkaDir.ToLower().Replace('\', '/')
+    $redisRuntimeToken = $RedisDir.ToLower().Replace('\', '/')
 
-    # Check if Postgres port is occupied
     if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$PostgresPort)) {
         $reasons += "PostgreSQL port $PostgresPort is open/occupied"
     }
 
-    # Check if Kafka port is occupied
-    if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$KafkaPort)) {
-        $reasons += "Kafka port $KafkaPort is open/occupied"
-    }
-
-    # Check if Zookeeper port is occupied (if not KRaft mode)
-    if (-not (Test-KafkaKRaftMode)) {
-        if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$zookeeperClientPort)) {
-            $reasons += "Zookeeper port $zookeeperClientPort is open/occupied"
-        }
+    if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$RedisPort)) {
+        $reasons += "Redis port $RedisPort is open/occupied"
     }
 
     $runtimeRunDir = Join-Path $RuntimeRoot 'run'
-    $kafkaPidFile = Join-Path $runtimeRunDir 'kafka.pid'
-    $zookeeperPidFile = Join-Path $runtimeRunDir 'zookeeper.pid'
     $postgresPidFile = Join-Path $runtimeRunDir 'postgres.pid'
+    $redisPidFile = Join-Path $runtimeRunDir 'redis.pid'
 
-    if (Test-PidFileProcessRunning -PidFilePath $kafkaPidFile) {
-        $reasons += "Kafka PID file points to a running process ($kafkaPidFile)"
-    }
-    if (Test-PidFileProcessRunning -PidFilePath $zookeeperPidFile) {
-        $reasons += "Zookeeper PID file points to a running process ($zookeeperPidFile)"
-    }
     if (Test-PidFileProcessRunning -PidFilePath $postgresPidFile) {
         $reasons += "PostgreSQL PID file points to a running process ($postgresPidFile)"
     }
+    if (Test-PidFileProcessRunning -PidFilePath $redisPidFile) {
+        $reasons += "Redis PID file points to a running process ($redisPidFile)"
+    }
 
-    # Also check processes directly running from runtime directories as a fallback
     $postgresProcs = Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" -ErrorAction SilentlyContinue
     foreach ($proc in $postgresProcs) {
         $cmd = "$($proc.CommandLine)"
@@ -726,11 +676,11 @@ function Get-InfraActiveReasons {
         }
     }
 
-    $javaProcs = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue
-    foreach ($proc in $javaProcs) {
+    $redisProcs = Get-CimInstance Win32_Process -Filter "Name='redis-server.exe'" -ErrorAction SilentlyContinue
+    foreach ($proc in $redisProcs) {
         $cmd = "$($proc.CommandLine)"
-        if ($cmd -and $cmd.ToLower().Replace('\', '/').Contains($kafkaRuntimeToken)) {
-            $reasons += "Java/Kafka process is running from runtime path (PID=$($proc.ProcessId))"
+        if ($cmd -and $cmd.ToLower().Replace('\', '/').Contains($redisRuntimeToken)) {
+            $reasons += "Redis process is running from runtime path (PID=$($proc.ProcessId))"
             break
         }
     }
@@ -759,139 +709,52 @@ function Invoke-InfraResetIfNeeded {
         throw "stop_infra.ps1 failed with exit code $LASTEXITCODE"
     }
 
-    $zookeeperClientPort = Get-ZookeeperClientPort
     if (-not (Wait-TcpPortClosed -Name 'PostgreSQL' -TargetHost '127.0.0.1' -TargetPort ([int]$PostgresPort) -MaxSeconds 25)) {
         throw "PostgreSQL port $PostgresPort is still open after stop_infra"
     }
-    if (-not (Wait-TcpPortClosed -Name 'Kafka' -TargetHost '127.0.0.1' -TargetPort ([int]$KafkaPort) -MaxSeconds 25)) {
-        throw "Kafka port $KafkaPort is still open after stop_infra"
-    }
-    if ((-not (Test-KafkaKRaftMode)) -and (-not (Wait-TcpPortClosed -Name 'Zookeeper' -TargetHost '127.0.0.1' -TargetPort ([int]$zookeeperClientPort) -MaxSeconds 25))) {
-        throw "Zookeeper port $zookeeperClientPort is still open after stop_infra"
+    if (-not (Wait-TcpPortClosed -Name 'Redis' -TargetHost '127.0.0.1' -TargetPort ([int]$RedisPort) -MaxSeconds 25)) {
+        throw "Redis port $RedisPort is still open after stop_infra"
     }
 
     Write-Host '[OK] Existing local infra was stopped successfully'
 }
 
-function Start-ZookeeperIfNeeded {
-    if (Test-KafkaKRaftMode) {
-        Write-Host '[INFO] Kafka is running in KRaft mode. Skipping Zookeeper startup.'
+function Start-RedisIfNeeded {
+    $redisExe = Join-Path $RedisDir 'redis-server.exe'
+    $redisPidFile = Join-Path $RuntimeRoot 'run/redis.pid'
+    $redisLogFile = Join-Path $RuntimeRoot 'logs/redis.log'
+    $redisErrLogFile = Join-Path $RuntimeRoot 'logs/redis.err.log'
+    $redisConf = Join-Path $RedisDir 'redis.conf'
+
+    if (-not (Test-Path $redisExe)) {
+        throw "Missing Redis executable: $redisExe"
+    }
+    if (-not (Test-Path $redisConf)) {
+        throw "Missing Redis config: $redisConf"
+    }
+
+    if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$RedisPort)) {
+        Write-Host "[OK] Redis is already running on port $RedisPort"
         return
     }
 
-    $zookeeperConfig = Join-Path $KafkaDir 'config/zookeeper.properties'
-    $zookeeperPidFile = Join-Path $RuntimeRoot 'run/zookeeper.pid'
-    $zookeeperLogFile = Join-Path $RuntimeRoot 'logs/zookeeper.log'
-    $zookeeperErrLogFile = Join-Path $RuntimeRoot 'logs/zookeeper.err.log'
-    $zookeeperClientPort = Get-ZookeeperClientPort
+    Write-Host '[INFO] Starting Redis in background...'
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $redisPidFile), (Split-Path -Parent $redisLogFile) | Out-Null
+    Remove-Item -LiteralPath $redisLogFile, $redisErrLogFile -Force -ErrorAction SilentlyContinue
 
-    $javaExe = Join-Path $JavaDir 'bin/java.exe'
-    $kafkaLibs = Join-Path $KafkaDir 'libs/*'
+    $redisProc = Start-Process -FilePath $redisExe -ArgumentList $redisConf -PassThru -WindowStyle Hidden -RedirectStandardOutput $redisLogFile -RedirectStandardError $redisErrLogFile
+    Set-Content -Path $redisPidFile -Value $redisProc.Id -Encoding UTF8
 
-    if (-not (Test-Path $javaExe)) {
-        throw "Missing Java runtime: $javaExe"
+    Start-Sleep -Seconds 3
+
+    if (-not (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$RedisPort))) {
+        throw "Redis failed to start on port $RedisPort. Check $redisErrLogFile"
     }
-    if (-not (Test-Path (Join-Path $KafkaDir 'libs'))) {
-        throw "Missing Kafka libs directory: $(Join-Path $KafkaDir 'libs')"
-    }
-    if (-not (Test-Path $zookeeperConfig)) {
-        throw "Missing Zookeeper config: $zookeeperConfig"
-    }
-
-    if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort $zookeeperClientPort) {
-        Write-Host "[OK] Zookeeper is already running on port $zookeeperClientPort"
-        return
-    }
-
-    Write-Host '[INFO] Starting Zookeeper in background...'
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $zookeeperPidFile), (Split-Path -Parent $zookeeperLogFile) | Out-Null
-    $zkProc = Start-Process -FilePath $javaExe -ArgumentList @('-cp', $kafkaLibs, 'org.apache.zookeeper.server.quorum.QuorumPeerMain', $zookeeperConfig) -RedirectStandardOutput $zookeeperLogFile -RedirectStandardError $zookeeperErrLogFile -PassThru -WindowStyle Hidden
-    Set-Content -Path $zookeeperPidFile -Value $zkProc.Id -Encoding UTF8
-
-    Wait-TcpPortReady -Name 'Zookeeper' -TargetHost '127.0.0.1' -TargetPort $zookeeperClientPort -MaxSeconds 45
-}
-
-function Start-KafkaIfNeeded {
-    $kafkaConfig = Join-Path $RuntimeRoot 'config/kafka/server.properties'
-    $kafkaPidFile = Join-Path $RuntimeRoot 'run/kafka.pid'
-    $kafkaLogFile = Join-Path $RuntimeRoot 'logs/kafka.log'
-    $kafkaErrLogFile = Join-Path $RuntimeRoot 'logs/kafka.err.log'
-
-    $javaExe = Join-Path $JavaDir 'bin/java.exe'
-    $kafkaLibs = Join-Path $KafkaDir 'libs/*'
-
-    $kafkaDataDir = Join-Path $RuntimeRoot 'kafka-data'
-    if (Test-Path $kafkaDataDir) {
-        Get-ChildItem -Path $kafkaDataDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.Attributes -match "ReadOnly") {
-                $_.Attributes = $_.Attributes -band -not [System.IO.FileAttributes]::ReadOnly
-            }
-        }
-    }
-    $staleFiles = Get-ChildItem -Path $kafkaDataDir -Recurse -Filter '*.deleted' -ErrorAction SilentlyContinue
-    if ($staleFiles) {
-        Write-Host "[INFO] Cleaning $($staleFiles.Count) stale .deleted files from kafka-data (Windows file-lock workaround)"
-        $staleFiles | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue | Out-Null
-        }
-    }
-
-    function Add-KafkaConfigIfMissing {
-        param([string]$ConfigPath, [string]$Setting)
-        $content = Get-Content -Path $ConfigPath -Raw -ErrorAction SilentlyContinue
-        $key = ($Setting -split '=')[0]
-        if ($content -and $content -notmatch [Regex]::Escape($key)) {
-            Write-Host "[INFO] Adding $key to Kafka config"
-            Add-Content -Path $ConfigPath -Value $Setting -Encoding UTF8
-        }
-    }
-
-    Add-KafkaConfigIfMissing -ConfigPath $kafkaConfig -Setting "log.cleaner.enable=false"
-    Add-KafkaConfigIfMissing -ConfigPath $kafkaConfig -Setting "log.retention.hours=87600"
-    Add-KafkaConfigIfMissing -ConfigPath $kafkaConfig -Setting "log.retention.check.interval.ms=2592000000"
-    Add-KafkaConfigIfMissing -ConfigPath $kafkaConfig -Setting "log.segment.delete.delay.ms=60000"
-    Add-KafkaConfigIfMissing -ConfigPath $kafkaConfig -Setting "file.delete.delay.ms=60000"
-
-    if (-not (Test-Path $javaExe)) {
-        throw "Missing Java runtime: $javaExe"
-    }
-    if (-not (Test-Path (Join-Path $KafkaDir 'libs'))) {
-        throw "Missing Kafka libs directory: $(Join-Path $KafkaDir 'libs')"
-    }
-    if (-not (Test-Path $kafkaConfig)) {
-        throw "Missing Kafka config: $kafkaConfig"
-    }
-
-    if (Test-TcpPortReady -TargetHost '127.0.0.1' -TargetPort ([int]$KafkaPort)) {
-        Write-Host '[OK] Kafka is already running'
-        return
-    }
-
-    $log4jFile = Join-Path $RuntimeRoot 'config/kafka/log4j.properties'
-    if (-not (Test-Path $log4jFile)) {
-        $log4jFile = Join-Path $KafkaDir 'config/log4j.properties'
-    }
-    $kafkaLogsDir = Split-Path -Parent $kafkaLogFile
-
-    Write-Host '[INFO] Starting Kafka in background...'
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $kafkaPidFile), $kafkaLogsDir | Out-Null
-    $env:JAVA_HOME = $JavaDir
-    $kafkaArgs = @()
-    if (Test-Path $log4jFile) {
-        $kafkaArgs += "-Dlog4j.configuration=file:$log4jFile"
-        $kafkaArgs += "-Dkafka.logs.dir=$kafkaLogsDir"
-    }
-    $kafkaArgs += @('-cp', $kafkaLibs, 'kafka.Kafka', $kafkaConfig)
-    $kafkaProc = Start-Process -FilePath $javaExe -ArgumentList $kafkaArgs -RedirectStandardOutput $kafkaLogFile -RedirectStandardError $kafkaErrLogFile -PassThru -WindowStyle Hidden
-    Set-Content -Path $kafkaPidFile -Value $kafkaProc.Id -Encoding UTF8
-
-    Wait-TcpPortReady -Name 'Kafka' -TargetHost '127.0.0.1' -TargetPort ([int]$KafkaPort) -MaxSeconds 60
 }
 
 function Start-LocalInfra {
     Start-PostgresIfNeeded
-    Start-ZookeeperIfNeeded
-    Start-KafkaIfNeeded
+    Start-RedisIfNeeded
 }
 
 Initialize-Runtime
@@ -900,11 +763,10 @@ Invoke-InfraResetIfNeeded
 Sync-RuntimeEnv
 Start-LocalInfra
 
-$env:JAVA_HOME = $JavaDir
-$env:Path = "$JavaDir\bin;$PostgresDir\bin;$env:Path"
+$env:Path = "$PostgresDir\bin;$env:Path"
 
 Write-Host '[INFO] Verifying core dependencies...'
-& $venvPy -c "import importlib; [importlib.import_module(m) for m in ('google.genai','discord','dotenv','flask','aiohttp','cryptography','openai','asyncpg','aiokafka')]"
+& $venvPy -c "import importlib; [importlib.import_module(m) for m in ('google.genai','discord','dotenv','flask','aiohttp','cryptography','openai','asyncpg','redis')]"
 if ($LASTEXITCODE -ne 0) {
     Write-Host '[INFO] Installing/updating requirements...'
     & $venvPy -m pip install --upgrade pip

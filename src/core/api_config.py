@@ -57,36 +57,10 @@ GEMINI_LIMITER_MAX_OUTPUT_TOKENS = int(os.getenv('GEMINI_LIMITER_MAX_OUTPUT_TOKE
 GEMINI_LIMITER_FIXED_OVERHEAD = int(os.getenv('GEMINI_LIMITER_FIXED_OVERHEAD', '80'))
 GEMINI_LIMITER_SAFETY_FACTOR = float(os.getenv('GEMINI_LIMITER_SAFETY_FACTOR', '1.25'))
 
-CUSTOM_API_DEFAULT_RPM = int(os.getenv('CUSTOM_API_DEFAULT_RPM', '1000000'))
-CUSTOM_API_DEFAULT_TPM = int(os.getenv('CUSTOM_API_DEFAULT_TPM', '100000000'))
-CUSTOM_API_DEFAULT_RPD = int(os.getenv('CUSTOM_API_DEFAULT_RPD', '10000000'))
-
 DEFAULT_REASONING_MODEL_ALIAS = os.getenv('REASONING_MODEL_ALIAS', 'gemini-flash-lite').strip() or 'gemini-flash-lite'
 DEFAULT_FINAL_MODEL_ALIAS = os.getenv('FINAL_MODEL_ALIAS', 'gemini-flash-35').strip() or 'gemini-flash-35'
 DEFAULT_FALLBACK_MODEL_ALIAS = os.getenv('FALLBACK_MODEL_ALIAS', DEFAULT_REASONING_MODEL_ALIAS).strip() or DEFAULT_REASONING_MODEL_ALIAS
 VISION_MODEL_ALIAS = 'gemini-flash-35'
-
-# ============================================================================
-# PROXY/RELAY SETTINGS
-# Để bypass VPS bị Google chặn, có thể route qua external server
-# ============================================================================
-@dataclass
-class ProxyConfig:
-    """Config cho proxy/relay server"""
-    enabled: bool = False
-    
-    # Relay server URL (Google Colab, Cloudflare Worker, hoặc self-hosted)
-    relay_url: str = ""
-    
-    # Auth cho relay server
-    relay_secret: str = ""
-    
-    # Fallback: nếu relay fail, thử direct call không
-    fallback_direct: bool = True
-    
-    # Timeout settings
-    relay_timeout: int = 60
-
 
 @dataclass 
 class BotRouterConfig:
@@ -101,15 +75,6 @@ class BotRouterConfig:
     retry_initial_delay: float = 2.0
     retry_max_delay: float = 30.0
     min_request_interval: float = 2.0
-    
-    # Proxy config
-    proxy: ProxyConfig = field(default_factory=ProxyConfig)
-    
-    def __post_init__(self):
-        # Load proxy settings from env
-        self.proxy.enabled = os.getenv('GEMINI_PROXY_ENABLED', 'false').lower() == 'true'
-        self.proxy.relay_url = os.getenv('GEMINI_RELAY_URL', '')
-        self.proxy.relay_secret = os.getenv('GEMINI_RELAY_SECRET', '')
 
 
 # ============================================================================
@@ -127,13 +92,6 @@ def auto_detect_api_keys() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     for key_name, key_value in env_vars.items():
         if not key_value or not key_value.strip():
             continue
-            
-        # Add Custom OpenAI API Key to main keys so it goes into the router pool
-        custom_endpoint_enabled = os.getenv("ENABLE_CUSTOM_ENDPOINT", "false").lower() == "true"
-        if custom_endpoint_enabled and key_name.upper() == 'OPENAI_API_KEY' and env_vars.get('OPENAI_CUSTOM_ENDPOINT'):
-            main_keys.append((key_name, key_value))
-            key_to_name[key_value] = key_name
-            continue
         
         if key_name.upper().startswith('GEMINI_API_KEY_') and 'TOMTAT' not in key_name.upper():
             main_keys.append((key_name, key_value))
@@ -145,11 +103,7 @@ def auto_detect_api_keys() -> Tuple[Dict[str, List[str]], Dict[str, str]]:
     main_keys.sort(key=lambda x: x[0])
     summary_keys.sort(key=lambda x: x[0])
     
-    # Prepend OPENAI_API_KEY to ensure it gets highest priority if present
-    openai_keys = [val for name, val in main_keys if name == 'OPENAI_API_KEY']
-    other_keys = [val for name, val in main_keys if name != 'OPENAI_API_KEY']
-    
-    all_keys['main'] = openai_keys + other_keys
+    all_keys['main'] = [val for _, val in main_keys]
     all_keys['summary'] = [val for _, val in summary_keys]
     
     return all_keys, key_to_name

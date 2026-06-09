@@ -29,24 +29,13 @@ CONFIG_DIR="$RUNTIME_ROOT/config"
 LOGS_DIR="$RUNTIME_ROOT/logs"
 RUN_DIR="$RUNTIME_ROOT/run"
 
-JAVA_DIR="$RUNTIME_ROOT/java"
-KAFKA_DIR="$RUNTIME_ROOT/kafka"
 POSTGRES_DIR="$RUNTIME_ROOT/postgres"
 POSTGRES_DATA_DIR="$POSTGRES_DIR/data"
 POSTGRES_LOG_FILE="$LOGS_DIR/postgres.log"
-KAFKA_LOG_FILE="$LOGS_DIR/kafka.log"
 POSTGRES_CREDENTIALS_FILE="$POSTGRES_DIR/credentials.env"
 
 POSTGRES_PORT="${POSTGRES_PORT:-55432}"
-KAFKA_PORT="${KAFKA_PORT:-59092}"
-KAFKA_CONTROLLER_PORT="${KAFKA_CONTROLLER_PORT:-59093}"
-KAFKA_CLUSTER_ID_FILE="$RUNTIME_ROOT/kafka.cluster_id"
-KAFKA_CLUSTER_ID="${KAFKA_CLUSTER_ID:-AzurisLocalCluster0001}"
-
-JAVA_DOWNLOAD_URL="${JAVA_DOWNLOAD_URL:-https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jdk/hotspot/normal/eclipse}"
-KAFKA_VERSION="${KAFKA_VERSION:-3.7.0}"
-SCALA_VERSION="${SCALA_VERSION:-2.13}"
-KAFKA_DOWNLOAD_URL="${KAFKA_DOWNLOAD_URL:-https://downloads.apache.org/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz}"
+REDIS_PORT="${REDIS_PORT:-6379}"
 POSTGRES_DOWNLOAD_URL="${POSTGRES_DOWNLOAD_URL:-https://get.enterprisedb.com/postgresql/postgresql-16.4-1-linux-x64-binaries.tar.gz}"
 POSTGRES_DOWNLOAD_URL_ALT="${POSTGRES_DOWNLOAD_URL_ALT:-}"
 POSTGRES_MAJOR_VERSION="${POSTGRES_MAJOR_VERSION:-16}"
@@ -392,49 +381,41 @@ stop_postgres_if_running() {
   fi
 }
 
-install_java() {
-  if [ -x "$JAVA_DIR/bin/java" ]; then
-    log "Java already installed at $JAVA_DIR"
+install_redis() {
+  if command -v redis-server &>/dev/null; then
+    log "Redis already installed (system package)"
     return
   fi
-
-  local archive="$DOWNLOADS_DIR/java-linux-x64.tar.gz"
-  download_if_missing "$JAVA_DOWNLOAD_URL" "$archive"
-  extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$JAVA_DIR"
-  log "Installed Java at $JAVA_DIR"
+  log "Installing Redis via package manager..."
+  if command -v apt-get &>/dev/null; then
+    apt-get update -qq && apt-get install -y -qq redis-server
+  elif command -v yum &>/dev/null; then
+    yum install -y -q redis
+  elif command -v dnf &>/dev/null; then
+    dnf install -y -q redis
+  else
+    err "No known package manager found. Install Redis manually."
+  fi
 }
 
-install_kafka() {
-  if [ -x "$KAFKA_DIR/bin/kafka-server-start.sh" ]; then
-    log "Kafka already installed at $KAFKA_DIR"
+ensure_redis_running() {
+  if command -v redis-cli &>/dev/null && redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    log "Redis already running"
     return
   fi
-
-  local archive="$DOWNLOADS_DIR/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
-  
-  if [ -f "$archive" ]; then
-    log "Using cached file: $archive"
-  else
-    local primary_url="$KAFKA_DOWNLOAD_URL"
-    local archive_url="https://archive.apache.org/dist/kafka/${KAFKA_VERSION}/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
-    
-    log "Attempting to download Kafka from primary mirror..."
-    if curl -fL "$primary_url" -o "$archive"; then
-      log "Downloaded Kafka successfully from primary mirror."
-    else
-      warn "Primary mirror returned error (404 or network drop). Retrying via Apache Archive..."
-      rm -f "$archive" 2>/dev/null || true
-      if curl -fL "$archive_url" -o "$archive"; then
-        log "Downloaded Kafka successfully from Apache Archive Backup."
-      else
-        err "Failed to download Kafka from all available repositories."
-        exit 1
-      fi
-    fi
+  log "Starting Redis..."
+  if command -v systemctl &>/dev/null; then
+    systemctl start redis-server 2>/dev/null || systemctl start redis 2>/dev/null || true
   fi
-
-  extract_tar_to_dir "$archive" "$RUNTIME_ROOT" "$KAFKA_DIR"
-  log "Installed Kafka at $KAFKA_DIR"
+  if ! redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    redis-server --daemonize yes --port "$REDIS_PORT" --bind 127.0.0.1 2>/dev/null || true
+  fi
+  sleep 1
+  if redis-cli -h 127.0.0.1 -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    log "Redis is running on port $REDIS_PORT"
+  else
+    err "Redis failed to start"
+  fi
 }
 
 install_postgres() {
@@ -545,71 +526,12 @@ EOF
   sync_env "$database_url"
 }
 
-generate_kafka_config() {
-  mkdir -p "$CONFIG_DIR/kafka" "$RUNTIME_ROOT/kafka-data"
-  cat > "$CONFIG_DIR/kafka/server.properties" <<EOF
-process.roles=broker,controller
-node.id=1
-listeners=PLAINTEXT://127.0.0.1:${KAFKA_PORT},CONTROLLER://127.0.0.1:${KAFKA_CONTROLLER_PORT}
-advertised.listeners=PLAINTEXT://127.0.0.1:${KAFKA_PORT}
-controller.listener.names=CONTROLLER
-listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-controller.quorum.voters=1@127.0.0.1:${KAFKA_CONTROLLER_PORT}
-num.network.threads=3
-num.io.threads=8
-socket.send.buffer.bytes=102400
-socket.receive.buffer.bytes=102400
-socket.request.max.bytes=104857600
-log.dirs=${RUNTIME_ROOT}/kafka-data
-num.partitions=3
-offsets.topic.replication.factor=1
-transaction.state.log.replication.factor=1
-transaction.state.log.min.isr=1
-group.initial.rebalance.delay.ms=0
-auto.create.topics.enable=true
-EOF
-}
-
-ensure_kafka_running() {
-  local kafka_storage="$KAFKA_DIR/bin/kafka-storage.sh"
-  local kafka_start="$KAFKA_DIR/bin/kafka-server-start.sh"
-  local kafka_api_versions="$KAFKA_DIR/bin/kafka-broker-api-versions.sh"
-
-  if [ ! -f "$KAFKA_CLUSTER_ID_FILE" ]; then
-    echo "$KAFKA_CLUSTER_ID" > "$KAFKA_CLUSTER_ID_FILE"
-  fi
-
-  if [ ! -f "$RUNTIME_ROOT/kafka-data/meta.properties" ]; then
-    "$kafka_storage" format -t "$(cat "$KAFKA_CLUSTER_ID_FILE")" -c "$CONFIG_DIR/kafka/server.properties" >/dev/null
-  fi
-
-  if [ -f "$RUN_DIR/kafka.pid" ] && kill -0 "$(cat "$RUN_DIR/kafka.pid")" >/dev/null 2>&1; then
-    log "Kafka already running"
-  else
-    nohup "$kafka_start" "$CONFIG_DIR/kafka/server.properties" > "$KAFKA_LOG_FILE" 2>&1 &
-    echo $! > "$RUN_DIR/kafka.pid"
-  fi
-
-  for _ in $(seq 1 45); do
-    if "$kafka_api_versions" --bootstrap-server "127.0.0.1:${KAFKA_PORT}" >/dev/null 2>&1; then
-      return
-    fi
-    sleep 1
-  done
-
-  err "Kafka failed to become ready. Check: $KAFKA_LOG_FILE"
-  exit 1
-}
-
 sync_env() {
   local database_url="$1"
-  local kafka_bootstrap="127.0.0.1:${KAFKA_PORT}"
   local env_file="$PROJECT_ROOT/.env"
 
   cleanup_env_backups
   set_env_value "$env_file" "LOCAL_RUNTIME_ROOT" "$LOCAL_RUNTIME_ROOT_VALUE"
-  set_env_value "$env_file" "JAVA_HOME" "$JAVA_DIR"
-  set_env_value "$env_file" "KAFKA_BOOTSTRAP_SERVERS" "$kafka_bootstrap"
   set_env_value "$env_file" "DATABASE_URL" "$database_url"
   cleanup_env_backups
 }
@@ -619,28 +541,20 @@ main() {
   require_cmd tar
   require_cmd python3
 
-  export JAVA_HOME="$JAVA_DIR"
-  export PATH="$JAVA_DIR/bin:$PATH"
-
-  log "Project root: $PROJECT_ROOT"
-  log "Runtime root: $RUNTIME_ROOT"
-
   log "Project root: $PROJECT_ROOT"
   log "Runtime root: $RUNTIME_ROOT"
 
   stop_postgres_if_running
-  install_java
-  install_kafka
+  install_redis
   install_postgres
   init_postgres_data
   ensure_postgres_running
-  generate_kafka_config
-  ensure_kafka_running
+  ensure_redis_running
 
   log "Completed local runtime setup."
-  echo "DATABASE_URL and KAFKA_BOOTSTRAP_SERVERS have been synced to .env"
+  echo "DATABASE_URL has been synced to .env"
   echo "PostgreSQL: 127.0.0.1:$POSTGRES_PORT"
-  echo "Kafka: 127.0.0.1:$KAFKA_PORT"
+  echo "Redis: 127.0.0.1:$REDIS_PORT"
 }
 
 main "$@"

@@ -43,15 +43,14 @@ else {
 }
 $env:LOCAL_RUNTIME_ROOT = $RuntimeRootEnvValue
 
-$KafkaDir = Join-Path $RuntimeRoot 'kafka'
 $PostgresDir = Join-Path $RuntimeRoot 'postgres'
 $RuntimeRunDir = Join-Path $RuntimeRoot 'run'
-$RuntimeConfigDir = Join-Path $RuntimeRoot 'config'
 $PostgresCredentialsFile = Join-Path $PostgresDir 'credentials.env'
 
-$KafkaPidFile = Join-Path $RuntimeRunDir 'kafka.pid'
-$ZookeeperPidFile = Join-Path $RuntimeRunDir 'zookeeper.pid'
 $PostgresPidFile = Join-Path $RuntimeRunDir 'postgres.pid'
+$RedisDir = Join-Path $RuntimeRoot 'redis'
+$RedisPidFile = Join-Path $RuntimeRunDir 'redis.pid'
+$RedisPort = if ($env:REDIS_PORT) { $env:REDIS_PORT } else { '6379' }
 $PostgresDataDir = Join-Path $PostgresDir 'data'
 
 $PostgresPort = if ($env:POSTGRES_PORT) {
@@ -70,40 +69,7 @@ else {
 
     if ($credentialsPort) { $credentialsPort } else { '55432' }
 }
-$KafkaPort = if ($env:KAFKA_PORT) { $env:KAFKA_PORT } else { '59092' }
-$ZookeeperPort = if ($env:ZOOKEEPER_PORT) { $env:ZOOKEEPER_PORT } else { '2181' }
 
-function Test-KafkaKRaftMode {
-    $kafkaConfig = Join-Path $RuntimeConfigDir 'kafka/server.properties'
-    if (-not (Test-Path $kafkaConfig)) {
-        return $false
-    }
-
-    $content = Get-Content $kafkaConfig -Raw
-    if ($content -match '(?m)^\s*process\.roles\s*=') {
-        return $true
-    }
-    if ($content -match '(?m)^\s*controller\.quorum\.voters\s*=') {
-        return $true
-    }
-
-    return $false
-}
-
-function Get-ZookeeperClientPort {
-    $zookeeperConfig = Join-Path $KafkaDir 'config/zookeeper.properties'
-    if (-not (Test-Path $zookeeperConfig)) {
-        return [int]$ZookeeperPort
-    }
-
-    foreach ($line in (Get-Content $zookeeperConfig -ErrorAction SilentlyContinue)) {
-        if ($line -match '^\s*clientPort\s*=\s*(\d+)\s*$') {
-            return [int]$Matches[1]
-        }
-    }
-
-    return [int]$ZookeeperPort
-}
 
 function Test-TcpPortOpen {
     param(
@@ -236,27 +202,6 @@ function Stop-ProcessByPidFile {
     Remove-Item -LiteralPath $PidFilePath -Force -ErrorAction SilentlyContinue
 }
 
-function Stop-RuntimeJavaProcesses {
-    param(
-        [Parameter(Mandatory = $true)][string]$ServiceName,
-        [Parameter(Mandatory = $true)][string]$MatchToken
-    )
-
-    $runtimeKafkaToken = $KafkaDir.ToLower().Replace('\', '/')
-    $matchToken = $MatchToken.ToLower()
-    $javaProcs = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue
-    foreach ($proc in $javaProcs) {
-        $cmd = "$($proc.CommandLine)"
-        if (-not $cmd) { continue }
-
-        $cmdNorm = $cmd.ToLower().Replace('\', '/')
-        if (-not $cmdNorm.Contains($runtimeKafkaToken)) { continue }
-        if (-not $cmdNorm.Contains($matchToken)) { continue }
-
-        Stop-ProcessGracefulThenForce -ProcessId ([int]$proc.ProcessId) -ServiceName $ServiceName
-    }
-}
-
 function Stop-RuntimePostgresProcesses {
     $runtimePostgresToken = $PostgresDir.ToLower().Replace('\', '/')
     $postgresProcs = Get-CimInstance Win32_Process -Filter "Name='postgres.exe'" -ErrorAction SilentlyContinue
@@ -297,24 +242,26 @@ function Stop-Postgres {
     Stop-RuntimePostgresProcesses
 }
 
-function Stop-Zookeeper {
-    Stop-ProcessByPidFile -ServiceName 'Zookeeper' -PidFilePath $ZookeeperPidFile
-    Stop-RuntimeJavaProcesses -ServiceName 'Zookeeper' -MatchToken 'zookeeper'
-}
+function Stop-Redis {
+    Stop-ProcessByPidFile -ServiceName 'Redis' -PidFilePath $RedisPidFile
 
-function Stop-Kafka {
-    Stop-ProcessByPidFile -ServiceName 'Kafka' -PidFilePath $KafkaPidFile
-    Stop-RuntimeJavaProcesses -ServiceName 'Kafka' -MatchToken 'kafka.kafka'
+    $runtimeRedisToken = $RedisDir.ToLower().Replace('\', '/')
+    $redisProcs = Get-CimInstance Win32_Process -Filter "Name='redis-server.exe'" -ErrorAction SilentlyContinue
+    foreach ($proc in $redisProcs) {
+        $cmd = "$($proc.CommandLine)"
+        if (-not $cmd) { continue }
+
+        $cmdNorm = $cmd.ToLower().Replace('\', '/')
+        if (-not $cmdNorm.Contains($runtimeRedisToken)) { continue }
+
+        Stop-ProcessGracefulThenForce -ProcessId ([int]$proc.ProcessId) -ServiceName 'Redis'
+    }
 }
 
 function Assert-InfraStopped {
-    $shouldCheckZookeeper = -not (Test-KafkaKRaftMode)
-    $zookeeperClientPort = Get-ZookeeperClientPort
-
     $checks = @(
         @{ Name = 'PostgreSQL'; Port = [int]$PostgresPort; Enabled = $true },
-        @{ Name = 'Kafka'; Port = [int]$KafkaPort; Enabled = $true },
-        @{ Name = 'Zookeeper'; Port = [int]$zookeeperClientPort; Enabled = $shouldCheckZookeeper }
+        @{ Name = 'Redis'; Port = [int]$RedisPort; Enabled = $true }
     )
 
     $failures = @()
@@ -338,13 +285,10 @@ Write-Host '  Azuris Local Infra Teardown (Windows)'
 Write-Host '==============================================='
 Write-Host "Project root: $ProjectRoot"
 
-Stop-Kafka
-Stop-Zookeeper
 Stop-Postgres
-Stop-RuntimeJavaProcesses -ServiceName 'Kafka/Zookeeper leftover' -MatchToken 'kafka'
-Stop-RuntimeJavaProcesses -ServiceName 'Kafka/Zookeeper leftover' -MatchToken 'zookeeper'
+Stop-Redis
 Stop-RuntimePostgresProcesses
 
 Assert-InfraStopped
 
-Write-Host '[OK] Local Kafka/Zookeeper/PostgreSQL teardown complete.'
+Write-Host '[OK] Local Redis/PostgreSQL teardown complete.'

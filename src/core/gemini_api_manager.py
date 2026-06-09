@@ -9,45 +9,10 @@ import threading
 from typing import Any, Optional, Dict, List, Tuple
 
 from google import genai
-from openai import APIConnectionError
+from google.genai import types as genai_types
 
 from src.core.config import logger
 from src.core.api_router import get_api_router
-from src.core.custom_endpoint import normalize_custom_endpoint
-
-class CustomFunctionCall:
-    def __init__(self, name, args, id=None):
-        self.name = name
-        self.args = args
-        self.id = id
-
-class CustomAPIWrapperPart:
-    def __init__(self, text=None, function_call=None):
-        self.text = text
-        self.function_call = function_call
-
-class CustomAPIWrapperContent:
-    def __init__(self, parts):
-        self.parts = parts
-
-class CustomAPIWrapperCandidate:
-    def __init__(self, parts, finish_reason=None):
-        self.content = CustomAPIWrapperContent(parts)
-        self.finish_reason = finish_reason
-
-class CustomAPIWrapperResponse:
-    def __init__(self, parts, finish_reason=None):
-        self.candidates = [CustomAPIWrapperCandidate(parts, finish_reason=finish_reason)]
-        
-    @property
-    def text(self):
-        if not self.candidates or not self.candidates[0].content.parts:
-            return ""
-        text_parts = [
-            part.text for part in self.candidates[0].content.parts 
-            if getattr(part, 'text', None) is not None
-        ]
-        return "".join(text_parts)
 
 
 class GeminiApiManager:
@@ -75,11 +40,10 @@ class GeminiApiManager:
     # --- Key selection ---
 
     async def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]]]:
-        if preferred_model_alias and not self.api_router.is_custom_model_alias(preferred_model_alias):
+        if preferred_model_alias:
             if not self.api_router._allow_provider_request("gemini"):
                 self.logger.warning("Gemini circuit breaker OPEN; no gemini key will be reserved.")
                 return None, None, None, None
-        if preferred_model_alias:
             reservation = await self.api_router.get_next_key_for_model_reservation(preferred_model_alias)
         else:
             reservation = await self.api_router.get_next_key_reservation()
@@ -105,10 +69,6 @@ class GeminiApiManager:
             chosen_key = random.choice(best_candidates)
             self.key_status[chosen_key]['usage'] += 1
             fallback_alias = preferred_model_alias or self.api_router.get_preferred_model()
-
-            # Prevent custom models from being used with standard Gemini keys during legacy fallback
-            if self.api_router.is_custom_model_alias(fallback_alias):
-                fallback_alias = "gemini-flash-35"
 
             legacy_reservation = {
                 "key": chosen_key,
@@ -195,7 +155,7 @@ class GeminiApiManager:
 
     @staticmethod
     def _is_connection_error(error: Exception) -> bool:
-        return isinstance(error, APIConnectionError)
+        return isinstance(error, (ConnectionError, TimeoutError, OSError))
 
     @staticmethod
     def _is_invalid_key_error(error_str: str) -> bool:
@@ -226,37 +186,22 @@ class GeminiApiManager:
     def _get_or_create_gemini_client(
         self,
         api_key: str,
-        provider: str = "gemini",
-        endpoint: Optional[str] = None,
     ):
-        provider = str(provider or "gemini").strip().lower()
-        if provider == "openai":
-            raw_endpoint = str(endpoint or getattr(self.config, "OPENAI_CUSTOM_ENDPOINT", "") or "").strip()
-            normalized_endpoint = normalize_custom_endpoint(raw_endpoint)
-            cache_key = ("openai", normalized_endpoint, api_key)
-        else:
-            normalized_endpoint = ""
-            cache_key = ("gemini", api_key)
+        base_url = getattr(self.config, "GEMINI_BASE_URL", "") or ""
+        cache_key = ("gemini", base_url, api_key)
 
         with self._gemini_clients_lock:
             existing = self._gemini_clients.get(cache_key)
             if existing is not None:
                 return existing
 
-            if provider == "openai":
-                self.logger.info(f"🔄 Chuyển sang sử dụng custom API (OpenAI endpoint) với key: ...{api_key[-4:]}")
-                from openai import AsyncOpenAI, Timeout
-
-                client = AsyncOpenAI(
+            if base_url:
+                client = genai.Client(
                     api_key=api_key,
-                    base_url=normalized_endpoint,
-                    timeout=Timeout(120.0, connect=10.0),
-                    max_retries=1,
+                    http_options=genai_types.HttpOptions(base_url=base_url),
                 )
-                self._gemini_clients[cache_key] = client
-                return client
-
-            client = genai.Client(api_key=api_key)
+            else:
+                client = genai.Client(api_key=api_key)
             self._gemini_clients[cache_key] = client
             return client
 
@@ -376,71 +321,6 @@ class GeminiApiManager:
                     chunks.append(text)
         return "\n".join(chunks)
 
-    @staticmethod
-    def _local_endpoint_port(endpoint_value: str) -> Optional[int]:
-        raw_endpoint = str(endpoint_value or "").strip().lower()
-        if not raw_endpoint:
-            return None
-        try:
-            parts = urlsplit(raw_endpoint)
-        except Exception:
-            return None
-        host = (parts.hostname or "").lower()
-        if host not in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}:
-            return None
-        return parts.port
-
-    @classmethod
-    def _is_lm_studio_endpoint(cls, provider: str, endpoint: Optional[str], endpoint_preset: Optional[str]) -> bool:
-        provider_value = str(provider or "gemini").strip().lower()
-        endpoint_preset_value = str(endpoint_preset or "").strip().lower()
-        return provider_value == "openai" and (
-            endpoint_preset_value == "lm_studio" or cls._local_endpoint_port(endpoint or "") == 1234
-        )
-
-    @classmethod
-    def _is_local_openai_endpoint(cls, provider: str, endpoint: Optional[str], endpoint_preset: Optional[str]) -> bool:
-        provider_value = str(provider or "gemini").strip().lower()
-        endpoint_preset_value = str(endpoint_preset or "").strip().lower()
-        return provider_value == "openai" and (
-            endpoint_preset_value in {"lm_studio", "ollama"} or cls._local_endpoint_port(endpoint or "") in {1234, 11434}
-        )
-
-    @staticmethod
-    def _has_lm_studio_correction_signal(text: str) -> bool:
-        lowered = str(text or "").lower()
-        no_diacritics = "".join(
-            ch for ch in unicodedata.normalize("NFD", lowered)
-            if unicodedata.category(ch) != "Mn"
-        )
-        normalized = re.sub(r"[^a-z0-9\s=]", " ", no_diacritics)
-        normalized = re.sub(r"\s+", " ", normalized).strip()
-        markers = (
-            "latest user correction",
-            "lm studio user correction",
-            "bia",
-            "sai roi",
-            "khong phai",
-            "khong dung",
-            "nham",
-            "y toi la",
-            "dinh chinh",
-            "wrong",
-            "correction",
-        )
-        if any(marker in normalized for marker in markers):
-            return True
-        return bool(re.search(r"\b[a-z0-9]{2,12}\s+la\s+.+\bma\b", normalized))
-
-    @staticmethod
-    def _lm_studio_correction_guard() -> str:
-        return (
-            "[LM STUDIO LOCAL CORRECTION GUARD]\n"
-            "Tin nhắn user mới nhất có dấu hiệu sửa lỗi hoặc phủ định. "
-            "Ưu tiên correction mới nhất hơn lịch sử/assistant cũ. "
-            "Không lặp lại fact đã bị user bác bỏ; nếu không chắc, nói không chắc hoặc hỏi lại."
-        )
-
     async def _acquire_gemini_quota(
         self,
         messages: List[Dict[str, Any]],
@@ -462,9 +342,6 @@ class GeminiApiManager:
         generation_config: Dict[str, Any],
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
-        provider: str = "gemini",
-        endpoint: Optional[str] = None,
-        endpoint_preset: Optional[str] = None,
     ):
         request_config = dict(generation_config)
         request_config["system_instruction"] = system_instruction
@@ -472,260 +349,126 @@ class GeminiApiManager:
         if tools:
             request_config["tools"] = tools
 
-        client = self._get_or_create_gemini_client(api_key, provider=provider, endpoint=endpoint)
+        client = self._get_or_create_gemini_client(api_key)
 
-        if type(client).__name__ == "AsyncOpenAI":
-            # Map Gemini format to OpenAI format
-            openai_messages = [{"role": "system", "content": system_instruction}]
+        sdk_contents = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                sdk_contents.append(msg)
+                continue
 
-            for msg in messages:
-                if isinstance(msg, dict):
-                    gemini_role = msg.get("role")
-                    if gemini_role == "model":
-                        role = "assistant"
-                    elif gemini_role == "function":
-                        role = "tool"
-                    else:
-                        role = "user"
-                        
-                    parts = msg.get("parts", [])
-                    
-                    if role == "tool":
-                        # Map function_response parts to OpenAI tool responses
-                        for part in parts:
-                            if isinstance(part, dict) and "function_response" in part:
-                                func_res = part["function_response"]
-                                tool_msg = {
-                                    "role": "tool",
-                                    "name": func_res.get("name", ""),
-                                    "content": str(func_res.get("response", {}).get("content", ""))
-                                }
-                                if "id" in func_res:
-                                    tool_msg["tool_call_id"] = func_res["id"]
-                                openai_messages.append(tool_msg)
-                        continue # Tool parts handled
-                        
-                    # Standard user/assistant message mapping
-                    has_images = any(isinstance(p, dict) and "inline_data" in p for p in parts)
-                    if has_images and role == "user":
-                        import base64
-                        content_list = []
-                        for part in parts:
-                            if isinstance(part, dict):
-                                if "text" in part:
-                                    content_list.append({"type": "text", "text": part["text"]})
-                                elif "inline_data" in part:
-                                    inline = part["inline_data"]
-                                    base64_str = base64.b64encode(inline["data"]).decode("utf-8")
-                                    content_list.append({
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:{inline['mime_type']};base64,{base64_str}"
-                                        }
-                                    })
-                        openai_messages.append({"role": role, "content": content_list})
-                    else:
-                        if parts and isinstance(parts[0], dict) and "text" in parts[0]:
-                            content = parts[0]["text"]
-                        elif parts and isinstance(parts[0], str):
-                            content = parts[0]
-                        else:
-                            content = str(parts)
-                        openai_messages.append({"role": role, "content": content})
-                else:
-                    openai_messages.append({"role": "user", "content": str(msg)})
+            role = msg.get("role")
+            parts = msg.get("parts", [])
+            sdk_parts = []
 
-            is_lm_studio_endpoint = self._is_lm_studio_endpoint(provider, endpoint, endpoint_preset)
-            is_local_endpoint = self._is_local_openai_endpoint(provider, endpoint, endpoint_preset)
-            if is_local_endpoint:
-                flattened = self._flatten_prompt_text(messages)
-                combined = f"{system_instruction}\n\n{flattened}" if flattened else system_instruction
-                combined = (combined or "").strip() or "Tiếp tục."
-                if is_lm_studio_endpoint and self._has_lm_studio_correction_signal(combined):
-                    combined = f"{self._lm_studio_correction_guard()}\n\n{combined}"
-                if is_lm_studio_endpoint and tools:
-                    combined += (
-                        "\n\n[CẦU NỐI TOOL CHO LM STUDIO]\n"
-                        "Không dùng native OpenAI tools trong request LM Studio này. "
-                        "Nếu cần công cụ, chỉ trả về đúng một dòng theo mẫu `TOOL_CALL: tên_tool(tham_số=\"giá trị\")` và không thêm chữ khác.\n"
-                        "Mẫu hợp lệ: `TOOL_CALL: web_search(query=\"từ khóa cần tìm\")`, "
-                        "`TOOL_CALL: get_weather(city=\"Hanoi\")`, "
-                        "`TOOL_CALL: calculate(equation=\"2+2\")`, "
-                        "`TOOL_CALL: retrieve_notes(query=\"chủ đề\")`, "
-                        "`TOOL_CALL: save_note(note_content=\"nội dung\", source=\"chat_inference\")`, "
-                        "`TOOL_CALL: delete_note(note_id=\"id\")`, "
-                        "`TOOL_CALL: image_recognition(image_url=\"url\", question=\"câu hỏi\")`.\n"
-                        "Khi đã có kết quả công cụ trong hội thoại, hãy dùng kết quả đó để kết luận và không gọi lại cùng công cụ nếu không cần."
-                    )
-                openai_messages = [{"role": "user", "content": combined}]
-            else:
-                non_system_msgs = [m for m in openai_messages if m.get("role") != "system"]
-                has_user_msg = any(
-                    m.get("role") == "user" and m.get("content") not in (None, "", [])
-                    for m in non_system_msgs
-                )
-                last_role = non_system_msgs[-1].get("role") if non_system_msgs else "system"
-                if not has_user_msg or last_role == "tool":
-                    openai_messages.append({"role": "user", "content": "Tiếp tục."})
-
-            # Map Gemini tools to OpenAI tools
-            openai_tools = None
-            if tools:
-                openai_tools = []
-                for t in tools:
-                    for decl in getattr(t, "function_declarations", []):
-                        def map_schema(schema):
-                            if not schema: return {}
-                            res = {"type": getattr(schema, "type", "object").lower()}
-                            if res["type"] == "type_unspecified" or not res["type"]: res["type"] = "object"
-                            if hasattr(schema, "type") and hasattr(schema.type, "name"):
-                                res["type"] = schema.type.name.lower()
-                                if res["type"] in ["double", "number"]: res["type"] = "number"
-                            if hasattr(schema, "description") and schema.description: res["description"] = schema.description
-                            if hasattr(schema, "properties") and schema.properties:
-                                res["properties"] = {k: map_schema(v) for k, v in schema.properties.items()}
-                            if hasattr(schema, "required") and schema.required: res["required"] = schema.required
-                            if hasattr(schema, "items") and schema.items: res["items"] = map_schema(schema.items)
-                            if hasattr(schema, "enum") and schema.enum: res["enum"] = schema.enum
-                            return res
-
-                        tool = {
-                            "type": "function",
-                            "function": {
-                                "name": decl.name,
-                                "description": getattr(decl, "description", ""),
-                                "parameters": map_schema(getattr(decl, "parameters", None))
-                            }
-                        }
-                        openai_tools.append(tool)
-
-            # Make OpenAI call natively async
-            create_kwargs = {
-                "model": model_name,
-                "messages": openai_messages,
-                "temperature": generation_config.get("temperature", 0.7),
-                "max_tokens": generation_config.get("max_output_tokens", 2000),
-                "top_p": generation_config.get("top_p", 0.95),
-            }
-            if openai_tools and not is_lm_studio_endpoint:
-                create_kwargs["tools"] = openai_tools
-
-            create_kwargs["stream"] = True
-            create_kwargs["extra_body"] = {"web_search": False}
-            try:
-                stream = await client.chat.completions.create(**create_kwargs)
-            except APIConnectionError:
-                self._mark_key_as_failed(
-                    api_key,
-                    model_alias=model_name,
-                    duration=120,
-                    reason="endpoint_down",
-                )
-                raise
-
-            content = ""
-            finish_reason = "stop"
-            import json
-            partial_tool_calls = {}
-            async for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                if delta.content:
-                    content += delta.content
-                if delta.tool_calls:
-                    for tc in delta.tool_calls:
-                        idx = tc.index
-                        if idx not in partial_tool_calls:
-                            partial_tool_calls[idx] = {
-                                "id": tc.id or "",
-                                "function": {"name": "", "arguments": ""},
-                                "type": "function",
-                            }
-                        if tc.function:
-                            if tc.function.name:
-                                partial_tool_calls[idx]["function"]["name"] += tc.function.name
-                            if tc.function.arguments:
-                                partial_tool_calls[idx]["function"]["arguments"] += tc.function.arguments
-                        if tc.id:
-                            partial_tool_calls[idx]["id"] = tc.id
-                if chunk.choices[0].finish_reason:
-                    finish_reason = chunk.choices[0].finish_reason
-
-            parts = []
-            if content:
-                parts.append(CustomAPIWrapperPart(text=content))
-
-            for tc_dict in partial_tool_calls.values():
-                args_dict = {}
-                try:
-                    args_dict = json.loads(tc_dict["function"]["arguments"])
-                except Exception as e:
-                    self.logger.error(f"OpenAI Wrapper: Failed to parse JSON args for tool {tc_dict['function']['name']}: {e}")
-                    args_dict = {
-                        "_parsing_error": str(e),
-                        "_raw_arguments": tc_dict["function"]["arguments"],
-                    }
-                func_call = CustomFunctionCall(tc_dict["function"]["name"], args_dict, id=tc_dict.get("id"))
-                parts.append(CustomAPIWrapperPart(function_call=func_call))
-
-            if not parts:
-                parts.append(CustomAPIWrapperPart(text=""))
-
-            return CustomAPIWrapperResponse(parts=parts, finish_reason=finish_reason)
-            
-        else:
-            from google.genai import types
-
-            sdk_contents = []
-            for msg in messages:
-                if not isinstance(msg, dict):
-                    sdk_contents.append(msg)
-                    continue
-
-                role = msg.get("role")
-                parts = msg.get("parts", [])
-                sdk_parts = []
-
-                for part in parts:
-                    if isinstance(part, dict):
-                        if "text" in part:
-                            sdk_parts.append(types.Part.from_text(text=part["text"]))
-                        elif "inline_data" in part:
-                            inline = part["inline_data"]
-                            sdk_parts.append(types.Part.from_bytes(
-                                data=inline["data"],
-                                mime_type=inline["mime_type"]
-                            ))
-                        elif "function_response" in part:
-                            fr = part["function_response"]
-                            sdk_parts.append(types.Part(
-                                function_response=types.FunctionResponse(
-                                    name=fr.get("name"),
-                                    response=fr.get("response", {})
-                                )
-                            ))
-                        elif "function_call" in part:
-                            fc = part["function_call"]
-                            sdk_parts.append(types.Part(
-                                function_call=types.FunctionCall(
-                                    name=fc.get("name"),
-                                    args=fc.get("args")
-                                )
-                            ))
-                        else:
-                            sdk_parts.append(part)
+            for part in parts:
+                if isinstance(part, dict):
+                    if "text" in part:
+                        sdk_parts.append(genai_types.Part.from_text(text=part["text"]))
+                    elif "inline_data" in part:
+                        inline = part["inline_data"]
+                        sdk_parts.append(genai_types.Part.from_bytes(
+                            data=inline["data"],
+                            mime_type=inline["mime_type"]
+                        ))
+                    elif "function_response" in part:
+                        fr = part["function_response"]
+                        sdk_parts.append(genai_types.Part(
+                            function_response=genai_types.FunctionResponse(
+                                name=fr.get("name"),
+                                response=fr.get("response", {})
+                            )
+                        ))
+                    elif "function_call" in part:
+                        fc = part["function_call"]
+                        sdk_parts.append(genai_types.Part(
+                            function_call=genai_types.FunctionCall(
+                                name=fc.get("name"),
+                                args=fc.get("args")
+                            )
+                        ))
                     else:
                         sdk_parts.append(part)
+                else:
+                    sdk_parts.append(part)
 
-                sdk_contents.append(types.Content(role=role, parts=sdk_parts))
+            sdk_contents.append(genai_types.Content(role=role, parts=sdk_parts))
 
-            return await asyncio.to_thread(
-                client.models.generate_content,
-                model=model_name,
-                contents=sdk_contents,
-                config=request_config,
-            )
+        return await asyncio.to_thread(
+            client.models.generate_content,
+            model=model_name,
+            contents=sdk_contents,
+            config=request_config,
+        )
+
+    async def _generate_gemini_content_stream(
+        self,
+        api_key: str,
+        model_name: str,
+        system_instruction: str,
+        generation_config: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Any]] = None,
+    ):
+        request_config = dict(generation_config)
+        request_config["system_instruction"] = system_instruction
+        request_config["safety_settings"] = self.config.SAFETY_SETTINGS
+        if tools:
+            request_config["tools"] = tools
+
+        client = self._get_or_create_gemini_client(api_key)
+
+        sdk_contents = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                sdk_contents.append(msg)
+                continue
+
+            role = msg.get("role")
+            parts = msg.get("parts", [])
+            sdk_parts = []
+
+            for part in parts:
+                if isinstance(part, dict):
+                    if "text" in part:
+                        sdk_parts.append(genai_types.Part.from_text(text=part["text"]))
+                    elif "inline_data" in part:
+                        inline = part["inline_data"]
+                        sdk_parts.append(genai_types.Part.from_bytes(
+                            data=inline["data"],
+                            mime_type=inline["mime_type"]
+                        ))
+                    elif "function_response" in part:
+                        fr = part["function_response"]
+                        sdk_parts.append(genai_types.Part(
+                            function_response=genai_types.FunctionResponse(
+                                name=fr.get("name"),
+                                response=fr.get("response", {})
+                            )
+                        ))
+                    elif "function_call" in part:
+                        fc = part["function_call"]
+                        sdk_parts.append(genai_types.Part(
+                            function_call=genai_types.FunctionCall(
+                                name=fc.get("name"),
+                                args=fc.get("args")
+                            )
+                        ))
+                    else:
+                        sdk_parts.append(part)
+                else:
+                    sdk_parts.append(part)
+
+            sdk_contents.append(genai_types.Content(role=role, parts=sdk_parts))
+
+        stream = await asyncio.to_thread(
+            client.models.generate_content_stream,
+            model=model_name,
+            contents=sdk_contents,
+            config=request_config,
+        )
+        for chunk in stream:
+            yield chunk
 
 
     async def call_gemini_direct(self, prompt: str) -> str:
@@ -766,9 +509,6 @@ class GeminiApiManager:
                     generation_config=generation_config,
                     messages=messages,
                     tools=None,
-                    provider=(reservation or {}).get("provider", "gemini"),
-                    endpoint=(reservation or {}).get("endpoint"),
-                    endpoint_preset=(reservation or {}).get("endpoint_preset"),
                 )
                 
                 self._commit_selected_key(reservation)

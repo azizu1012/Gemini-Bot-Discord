@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
 from src.core.config import logger, Config
-from src.services.kafka_service import KafkaService
+from src.services.redis_service import RedisStreamService
 from src.database.repository import DatabaseRepository
 from src.core.api_router import get_api_router
 from src.core.gemini_api_manager import GeminiApiManager
@@ -56,7 +56,7 @@ class DummyAttachment:
 class MessageHandler:
     """Worker core message processing with Gemini API integration.
 
-    In Phase 5 architecture, this is purely a Kafka consumer/producer that doesn't
+    In the current architecture, this is purely a Redis Streams consumer/producer that doesn't
     interact directly with Discord APIs.
     """
 
@@ -68,7 +68,7 @@ class MessageHandler:
 
         # Tools and API setup
         self.note_mgr = NoteManager(self.db_repo)
-        self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="worker")
+        self.kafka_service = RedisStreamService(redis_url=self.config.REDIS_URL, client_id="worker")
         self.search_subtask_client = SearchSubtaskClient(self.kafka_service)
         self.tools_mgr = ToolsManager(
             note_mgr=self.note_mgr,
@@ -91,7 +91,7 @@ class MessageHandler:
         ok = await self.kafka_service.publish("discord-outgoing", payload=payload, key=user_id)
         if not ok:
             action = payload.get("action") or payload.get("type") or "unknown"
-            raise RuntimeError(f"Failed to publish outgoing Kafka payload action={action} user={user_id}")
+            raise RuntimeError(f"Failed to publish outgoing Redis payload action={action} user={user_id}")
         return ok
 
     async def _download_file(self, url: str) -> Optional[bytes]:
@@ -260,7 +260,8 @@ class MessageHandler:
 
         lines = ["[ADMIN CROSS-USER EVIDENCE] Verified rows:"]
         for i, row in enumerate(rows, start=1):
-            lines.append(f"{i}. user={row.get('user_id')} | content={row.get('content')[:100]}")
+            content = row.get('content') or ''
+            lines.append(f"{i}. user={row.get('user_id')} | content={content[:100]}")
         return "\n".join(lines)
 
     def _split_text(self, text: str, limit: int = 1800) -> List[str]:
@@ -284,7 +285,7 @@ class MessageHandler:
         return chunks
 
     async def start_worker(self):
-        """Start the Kafka consumer and listen for incoming messages."""
+        """Start the Redis Streams consumer and listen for incoming messages."""
         self.logger.info("Starting Worker...")
 
         await self.db_repo.init_db()
@@ -293,7 +294,7 @@ class MessageHandler:
             await self.kafka_service.start_producer()
             consumer = await self.kafka_service.start_consumer("discord-incoming", group_id="azuris_worker_group")
         except Exception as e:
-            self.logger.error(f"Failed to start worker Kafka services: {e}")
+            self.logger.error(f"Failed to start worker Redis services: {e}")
             await self.shutdown()
             return
 
@@ -307,7 +308,7 @@ class MessageHandler:
             self.logger.info("Worker task cancelled")
             raise
         except Exception as e:
-            self.logger.error(f"Error in Kafka consumer loop: {e}")
+            self.logger.error(f"Error in Redis consumer loop: {e}")
         finally:
             await self.shutdown()
 
@@ -324,20 +325,20 @@ class MessageHandler:
             self.logger.warning(f"Failed to close DB pool cleanly: {e}")
 
     async def process_message(self, payload: dict):
-        """Process a single message payload from Kafka."""
+        """Process a single message payload from Redis."""
         msg_type = payload.get("type")
         user_id = payload.get('user_id')
 
-        # Handle cache invalidation events via Kafka
+        # Handle cache invalidation events via Redis
         if msg_type == "invalidate_cache":
             if user_id:
                 self.cache_mgr.invalidate_chat_history(user_id)
-                self.logger.info(f"[CACHE] Invalidated chat history cache for user {user_id} via Kafka event.")
+                self.logger.info(f"[CACHE] Invalidated chat history cache for user {user_id} via Redis event.")
             return
 
         if msg_type == "invalidate_all_cache":
             self.cache_mgr.clear_all_caches()
-            self.logger.info("[CACHE] Cleared all in-memory caches via Kafka event.")
+            self.logger.info("[CACHE] Cleared all in-memory caches via Redis event.")
             return
 
         if not user_id:
@@ -348,7 +349,7 @@ class MessageHandler:
             return
 
         content = payload.get('content', '').strip()
-        self.logger.info(f"[KAFKA-RECV] Consumed message from 'discord-incoming' | User: {user_id} | MsgID: {payload.get('message_id')} | Content Length: {len(content)}")
+        self.logger.info(f"[REDIS-RECV] Consumed message from 'discord-incoming' | User: {user_id} | MsgID: {payload.get('message_id')} | Content Length: {len(content)}")
 
         try:
             is_admin = await self.premium_mgr.is_admin_user(user_id)
@@ -566,7 +567,7 @@ class MessageHandler:
             }
             await self._publish_outgoing(reply_payload, user_id)
 
-            self.logger.info(f"Published outgoing reply_batch ({len(chunks)} chunks) to Kafka for user {user_id}")
+            self.logger.info(f"Published outgoing reply_batch ({len(chunks)} chunks) to Redis for user {user_id}")
 
         except Exception as e:
             self.logger.error(f"Error processing message for {user_id}: {e}")
@@ -596,10 +597,10 @@ class MessageHandler:
                 await self.db_repo.clear_user_processing_state(user_id)
 
     async def process_slash_command(self, payload: dict):
-        """Process a slash command payload from Kafka."""
+        """Process a slash command payload from Redis."""
         command = payload.get("command")
         user_id = payload.get("user_id")
-        self.logger.info(f"[KAFKA-RECV] Consumed slash command '{command}' from 'discord-incoming' | User: {user_id}")
+        self.logger.info(f"[REDIS-RECV] Consumed slash command '{command}' from 'discord-incoming' | User: {user_id}")
 
         try:
             if command == "imagine":
@@ -632,115 +633,22 @@ class MessageHandler:
             }, user_id)
             return
 
-        def _should_use_image_endpoint(model_id: str) -> bool:
-            model = str(model_id or "").strip().lower()
-            if model.startswith("gpt-image"):
-                return True
-            return model in {"grok-imagine-image", "grok-imagine-image-quality"}
-
-        def _extract_base64_from_text(text: str) -> Optional[bytes]:
-            if not text:
-                return None
-            try:
-                payload = json.loads(text)
-                if isinstance(payload, dict):
-                    b64_value = payload.get("image_base64") or payload.get("b64_json") or payload.get("image")
-                    if b64_value:
-                        return base64.b64decode(b64_value)
-            except Exception:
-                pass
-
-            data_url_match = re.search(r"data:image/[^;]+;base64,([A-Za-z0-9+/=\r\n]+)", text)
-            if data_url_match:
-                return base64.b64decode(data_url_match.group(1))
-
-            candidates = re.findall(r"[A-Za-z0-9+/=]{800,}", text)
-            if not candidates:
-                return None
-            candidate = max(candidates, key=len)
-            try:
-                return base64.b64decode(candidate)
-            except Exception:
-                return None
-
-        def _extract_base64_from_content(content: Any) -> Optional[bytes]:
-            if content is None:
-                return None
-            if isinstance(content, list):
-                for item in content:
-                    if isinstance(item, dict):
-                        image_url = item.get("image_url") or {}
-                        url_value = image_url.get("url") if isinstance(image_url, dict) else None
-                        if url_value:
-                            extracted = _extract_base64_from_text(url_value)
-                            if extracted:
-                                return extracted
-                        text_value = item.get("text")
-                        if text_value:
-                            extracted = _extract_base64_from_text(str(text_value))
-                            if extracted:
-                                return extracted
-                    elif isinstance(item, str):
-                        extracted = _extract_base64_from_text(item)
-                        if extracted:
-                            return extracted
-                return None
-            if isinstance(content, dict):
-                text_value = content.get("text") or content.get("content")
-                return _extract_base64_from_text(str(text_value or ""))
-            return _extract_base64_from_text(str(content))
-
-        async def _generate_image_via_chat_completion(client: Any, model_id: str, prompt_text: str) -> Optional[bytes]:
-            system_prompt = (
-                "Bạn là mô hình tạo ảnh. Hãy trả về duy nhất dữ liệu base64 PNG (không markdown, không chú thích, "
-                "không thêm chữ). Nếu trả JSON, hãy dùng khóa image_base64."
-            )
-            response = await client.chat.completions.create(
-                model=model_id,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": prompt_text},
-                ],
-                temperature=0.2,
-                max_tokens=4096,
-            )
-            msg = response.choices[0].message if response.choices else None
-            if not msg:
-                return None
-            return _extract_base64_from_content(getattr(msg, "content", None))
-
         max_attempts = 3
         success = False
         error_message = ""
         image_bytes = None
-        selected_models = await self.api_router.get_selected_model_aliases()
-        custom_image_model_id = selected_models.get("image_generator_model_id")
-        custom_image_alias = self.api_router.custom_model_alias(custom_image_model_id) if custom_image_model_id else None
-        image_model_for_log = custom_image_model_id or "imagen-3.0-generate-002"
 
         for attempt in range(1, max_attempts + 1):
-            if custom_image_alias:
-                reservation = await self.api_router.get_next_key_for_model_reservation(custom_image_alias)
-                if not reservation:
-                    error_message = "Không có custom API key/model image generator khả dụng. Hãy chạy /health_check hoặc chọn lại /custom_api_config."
-                    self.logger.error("No custom API key/model available for image generation.")
-                    break
-                api_key = reservation.get("key")
-                final_alias = reservation.get("model_alias", custom_image_alias)
-                model_id = self.api_router.get_model_id(final_alias)
-            else:
-                api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash-35")
+            api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash-35")
 
             if not api_key:
                 error_message = "Không có API keys khả dụng."
                 self.logger.error("No API keys available for image generation.")
                 break
 
-            # Throttle API request
             await self.api_mgr._throttle_api_request(api_key)
 
             try:
-                # Acquire quota (0 output tokens as it is image generation)
                 has_quota = await self.api_mgr._acquire_gemini_quota(
                     messages=[{"role": "user", "parts": [{"text": prompt}]}],
                     max_output_tokens=0,
@@ -754,64 +662,7 @@ class MessageHandler:
 
                 self.logger.info(f"Generating image on key ...{api_key[-4:]} with prompt: '{prompt}' (Attempt {attempt}/{max_attempts})")
 
-                client = self.api_mgr._get_or_create_gemini_client(
-                    api_key,
-                    provider=(reservation or {}).get("provider", "gemini"),
-                    endpoint=(reservation or {}).get("endpoint"),
-                )
-
-                if custom_image_model_id:
-                    if type(client).__name__ != "AsyncOpenAI":
-                        error_message = "Custom image generator cần custom OpenAI-compatible key hợp lệ."
-                        self.logger.warning(error_message)
-                        break
-                    if _should_use_image_endpoint(custom_image_model_id):
-                        image_size = os.getenv("CUSTOM_IMAGE_SIZE", "1024x1024")
-                        try:
-                            response = await client.images.generate(
-                                model=custom_image_model_id,
-                                prompt=prompt,
-                                n=1,
-                                size=image_size,
-                                response_format="b64_json",
-                            )
-                        except TypeError:
-                            response = await client.images.generate(
-                                model=custom_image_model_id,
-                                prompt=prompt,
-                                n=1,
-                                size=image_size,
-                            )
-                        data_items = getattr(response, "data", None) or []
-                        first_item = data_items[0] if data_items else None
-                        b64_json = getattr(first_item, "b64_json", None) if first_item else None
-                        image_url = getattr(first_item, "url", None) if first_item else None
-                        if not b64_json and isinstance(first_item, dict):
-                            b64_json = first_item.get("b64_json")
-                            image_url = first_item.get("url")
-                        if b64_json:
-                            image_bytes = base64.b64decode(b64_json)
-                        elif image_url:
-                            image_bytes = await self._download_file(image_url)
-                    else:
-                        image_bytes = await _generate_image_via_chat_completion(
-                            client=client,
-                            model_id=custom_image_model_id,
-                            prompt_text=prompt,
-                        )
-
-                    if image_bytes:
-                        self.api_mgr._commit_selected_key(reservation)
-                        success = True
-                        break
-
-                    error_message = "Custom image API returned an empty response."
-                    continue
-
-                if type(client).__name__ == "AsyncOpenAI":
-                    self.logger.warning("OpenAI custom endpoint client detected, skipping for image generation.")
-                    self.api_mgr._mark_key_as_failed(api_key, final_alias, reason="unavailable", reservation=reservation, duration=5)
-                    continue
+                client = self.api_mgr._get_or_create_gemini_client(api_key)
 
                 from google.genai import types
 
@@ -836,7 +687,6 @@ class MessageHandler:
                     elif generated_image.rai_filtered_reason:
                         error_message = f"Ảnh bị chặn bởi bộ lọc an toàn AI (RAI): {generated_image.rai_filtered_reason}"
                         self.logger.warning(f"Image generation safety filtered on key ...{api_key[-4:]}: {generated_image.rai_filtered_reason}")
-                        # Not a key failure, it's prompt safety. So we shouldn't retry or mark key failed.
                         break
 
                 error_message = "Google API returned an empty response."
@@ -848,7 +698,7 @@ class MessageHandler:
                     error=e,
                     user_id=user_id,
                     model_alias=final_alias,
-                    model_name=image_model_for_log,
+                    model_name="imagen-3.0-generate-002",
                     api_key=api_key,
                     attempt=attempt,
                     max_attempts=max_attempts
@@ -899,7 +749,7 @@ class MessageHandler:
                 "file_base64": base64_image_str,
                 "file_name": local_filename,
                 "embed_title": f"🎨 {prompt[:200]}",
-                "embed_footer": f"Tạo bởi {custom_image_model_id}" if custom_image_model_id else "Tạo bởi Gemini Imagen 3"
+                "embed_footer": "Tạo bởi Gemini Imagen 3"
             }, user_id)
         else:
             await self._publish_outgoing({

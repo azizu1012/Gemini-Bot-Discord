@@ -2,17 +2,17 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from src.core.config import logger, Config
-from src.services.kafka_service import KafkaService
+from src.services.redis_service import RedisStreamService
 from src.tools.tools import ToolsManager
 
 
 class SearchSubtaskWorker:
-    """Kafka worker to handle search-subtasks and publish results to search-results."""
+    """Worker to handle search-subtasks via Redis Streams and publish results to search-results."""
 
     def __init__(self, config: Config):
         self.config = config
         self.logger = logger
-        self.kafka_service = KafkaService(bootstrap_servers=self.config.KAFKA_BOOTSTRAP_SERVERS, client_id="search-subtasks")
+        self.kafka_service = RedisStreamService(redis_url=self.config.REDIS_URL, client_id="search-subtasks")
         self.tools_mgr = ToolsManager(enable_search_subtasks=False)
         self._consume_task: Optional[asyncio.Task] = None
 
@@ -22,7 +22,7 @@ class SearchSubtaskWorker:
             await self.kafka_service.start_producer()
             consumer = await self.kafka_service.start_consumer("search-subtasks", group_id="azuris_search_subtasks")
         except Exception as e:
-            self.logger.error(f"Failed to start SearchSubtaskWorker Kafka services: {e}")
+            self.logger.error(f"Failed to start SearchSubtaskWorker Redis services: {e}")
             await self.shutdown()
             return
 
