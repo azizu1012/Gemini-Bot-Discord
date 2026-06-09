@@ -114,6 +114,7 @@ class RedisStreamService:
                 decode_responses=False,
                 socket_connect_timeout=5,
                 socket_timeout=10,
+                protocol=2,
             )
             await asyncio.wait_for(self._redis.ping(), timeout=8)
             self.logger.info(f"Redis Streams producer started for {self.client_id}")

@@ -330,6 +330,7 @@ class DatabaseRepository:
     async def sync_env_api_keys(self, conn: Optional[asyncpg.Connection] = None) -> Dict[str, int]:
         env_keys = self._collect_env_keys()
         openai_keys = [key for key, provider in env_keys if provider == "openai"]
+        gemini_keys = [key for key, provider in env_keys if provider == "gemini"]
 
         async def run(target_conn) -> Dict[str, int]:
             provider_config = await target_conn.fetchrow(
@@ -405,7 +406,22 @@ class DatabaseRepository:
                     openai_keys,
                 )
                 deactivated = self._command_count(result)
-            return {"upserted": upserted, "openai_deactivated": deactivated}
+
+            deactivated_gemini = 0
+            if gemini_keys:
+                result = await target_conn.execute(
+                    """
+                    UPDATE api_key_pool
+                    SET is_active = FALSE,
+                        cooldown_until = NULL
+                    WHERE provider = 'gemini'
+                      AND api_key <> ALL($1::text[])
+                      AND is_active = TRUE
+                    """,
+                    gemini_keys,
+                )
+                deactivated_gemini = self._command_count(result)
+            return {"upserted": upserted, "openai_deactivated": deactivated, "gemini_deactivated": deactivated_gemini}
 
         if conn is not None:
             return await run(conn)

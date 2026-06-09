@@ -196,9 +196,13 @@ class GeminiApiManager:
                 return existing
 
             if base_url:
+                headers = {}
+                if getattr(self.config, "ROUTER_AUTH_KEY", None):
+                    headers["Authorization"] = f"Bearer {self.config.ROUTER_AUTH_KEY}"
+                
                 client = genai.Client(
                     api_key=api_key,
-                    http_options=genai_types.HttpOptions(base_url=base_url),
+                    http_options=genai_types.HttpOptions(base_url=base_url, headers=headers),
                 )
             else:
                 client = genai.Client(api_key=api_key)

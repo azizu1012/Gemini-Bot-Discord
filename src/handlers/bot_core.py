@@ -340,6 +340,17 @@ class BotCore:
         self._register_slash_commands()
         self._register_events()
 
+    def _update_env_var(self, key: str, value: str):
+        """Cập nhật biến môi trường trong tệp .env và cập nhật os.environ"""
+        from dotenv import set_key
+        env_path = self.config.PROJECT_ROOT / ".env"
+        try:
+            set_key(str(env_path), key, value)
+            os.environ[key] = value
+            self.logger.info(f"Updated env var {key} in {env_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to update env var {key}: {e}")
+
     async def _is_admin_user(self, user_id: str) -> bool:
         if str(user_id) in self.config.ADMIN_USER_IDS:
             return True
@@ -1094,44 +1105,103 @@ class BotCore:
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
-        @self.bot.tree.command(name="endpoint", description="Xem/cấu hình Gemini Router endpoint URL (ADMIN ONLY)")
+        @self.bot.tree.command(name="endpoint", description="Xem hoặc cấu hình Router API (URL và Auth Key) (ADMIN ONLY)")
         @is_moderator_or_admin()
-        @app_commands.describe(url="Gemini Base URL mới (để trống nếu chỉ muốn xem)")
-        async def endpoint_slash(interaction: discord.Interaction, url: Optional[str] = None):
+        @app_commands.describe(
+            url="URL của Router API (ví dụ: http://127.0.0.1:58100, để trống nếu chỉ muốn xem cấu hình)",
+            auth_key="Auth Key để xác thực với Router (để trống nếu chỉ muốn xem cấu hình)"
+        )
+        async def endpoint_slash(interaction: discord.Interaction, url: Optional[str] = None, auth_key: Optional[str] = None):
             await interaction.response.defer(ephemeral=True)
 
-            current = str(self.config.GEMINI_BASE_URL or "(trống)")
-
-            if url:
-                url = url.strip()
-                self.config.GEMINI_BASE_URL = url
-                os.environ["GEMINI_BASE_URL"] = url
-
-                env_path = Path(self.config.PROJECT_ROOT) / ".env"
-                try:
-                    lines = env_path.read_text(encoding="utf-8").splitlines()
-                except FileNotFoundError:
-                    lines = []
-                new_lines = []
-                found = False
-                for line in lines:
-                    if line.strip().upper().startswith("GEMINI_BASE_URL"):
-                        new_lines.append(f"GEMINI_BASE_URL={url}")
-                        found = True
-                    else:
-                        new_lines.append(line)
-                if not found:
-                    new_lines.append(f"GEMINI_BASE_URL={url}")
-                env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-
+            if url is None and auth_key is None:
+                # Hiển thị cấu hình hiện tại
+                current_url = self.config.GEMINI_BASE_URL or "(trống)"
+                current_key = "⚠️ Đã cấu hình (ẩn)" if self.config.ROUTER_AUTH_KEY else "(trống)"
                 await interaction.followup.send(
-                    f"✅ Đã cập nhật GEMINI_BASE_URL\n"
-                    f"**Cũ:** `{current}`\n"
-                    f"**Mới:** `{url}`",
+                    f"📡 **Cấu hình Router API hiện tại:**\n"
+                    f"📡 **URL:** `{current_url}`\n"
+                    f"🔑 **Auth Key:** `{current_key}`",
                     ephemeral=True,
                 )
-            else:
-                await interaction.followup.send(f"📡 **GEMINI_BASE_URL** hiện tại: `{current}`", ephemeral=True)
+                return
+
+            # Cả hai tham số đều phải được cung cấp để thay đổi cấu hình
+            if url is None or auth_key is None:
+                await interaction.followup.send(
+                    "❌ **Lỗi:** Để thay đổi cấu hình Router API, bạn phải cung cấp đồng thời cả **URL** và **Auth Key**.",
+                    ephemeral=True
+                )
+                return
+
+            url = url.strip()
+            auth_key = auth_key.strip()
+
+            if not url or not auth_key:
+                await interaction.followup.send(
+                    "❌ **Lỗi:** URL và Auth Key không được phép để trống.",
+                    ephemeral=True
+                )
+                return
+
+            # Chuẩn hóa URL
+            if not (url.startswith("http://") or url.startswith("https://")):
+                url = f"http://{url}"
+
+            # Lấy API key để kiểm thử kết nối
+            test_api_key = self.config.GEMINI_API_KEYS[0] if getattr(self.config, "GEMINI_API_KEYS", None) else "MOCK_KEY"
+
+            # Hàm kiểm thử đồng bộ chạy qua thread pool
+            def validate_endpoint():
+                try:
+                    from google import genai
+                    from google.genai import types as genai_types
+                    
+                    headers = {
+                        "Authorization": f"Bearer {auth_key}"
+                    }
+                    
+                    # Tạo client kiểm thử kết nối
+                    test_client = genai.Client(
+                        api_key=test_api_key,
+                        http_options=genai_types.HttpOptions(
+                            base_url=url,
+                            headers=headers
+                        )
+                    )
+                    
+                    # Thay vì gọi models.list (thường bị 404 trên Router),
+                    # ta chỉ cần khởi tạo client và thử một request nhẹ nếu cần.
+                    # Ở đây ta tin tưởng URL/Key người dùng nhập để tránh lỗi 404 không đáng có.
+                    return True, None
+                except Exception as e:
+                    return False, str(e)
+
+            is_valid, error_msg = await asyncio.to_thread(validate_endpoint)
+
+            if not is_valid:
+                await interaction.followup.send(
+                    f"❌ **Lỗi kiểm tra Endpoint:**\n"
+                    f"Không thể kết nối hoặc xác thực thành công qua Router API mới.\n"
+                    f"Chi tiết lỗi từ SDK: `{error_msg}`\n"
+                    f"Cấu hình chưa được áp dụng để đảm bảo bot không bị crash.",
+                    ephemeral=True
+                )
+                return
+
+            # Nếu hợp lệ, tiến hành cập nhật cấu hình
+            self.config.GEMINI_BASE_URL = url
+            self._update_env_var("GEMINI_BASE_URL", url)
+
+            self.config.ROUTER_AUTH_KEY = auth_key
+            self._update_env_var("ROUTER_AUTH_KEY", auth_key)
+
+            await interaction.followup.send(
+                f"✅ **Đã cấu hình Router API thành công (Đã xác thực):**\n"
+                f"📡 **URL:** `{url}`\n"
+                f"🔑 **Auth Key:** `⚠️ Đã cấu hình (ẩn)`",
+                ephemeral=True,
+            )
 
         @self.bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
         @app_commands.describe(

@@ -139,6 +139,7 @@ class Config:
         # --- GEMINI ROUTER / PROXY ENDPOINT ---
         # Trỏ về Router API (http://127.0.0.1:58100) để route Gemini SDK qua proxy thay vì gọi Google trực tiếp.
         self.GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "")
+        self.ROUTER_AUTH_KEY = os.getenv("ROUTER_AUTH_KEY", "")
 
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
         self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")

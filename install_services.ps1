@@ -372,7 +372,7 @@ function Install-Redis {
     }
 
     $archive = Join-Path $DownloadsDir 'redis-windows-x64.zip'
-    $redisUrl = 'https://github.com/microsoftarchive/redis/releases/download/win-3.2.100/Redis-x64-3.2.100.zip'
+    $redisUrl = 'https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip'
 
     New-Item -ItemType Directory -Force -Path $RedisDir | Out-Null
     Get-FileIfMissing $redisUrl $archive
