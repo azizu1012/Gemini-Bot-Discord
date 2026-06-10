@@ -83,3 +83,5 @@ Project_structure.txt
 progress_report.md
 test_find_bot.ps1
 test/
+node_modules/
+
