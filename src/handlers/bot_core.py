@@ -1148,34 +1148,71 @@ class BotCore:
             if not (url.startswith("http://") or url.startswith("https://")):
                 url = f"http://{url}"
 
-            # Lấy API key để kiểm thử kết nối
-            test_api_key = self.config.GEMINI_API_KEYS[0] if getattr(self.config, "GEMINI_API_KEYS", None) else "MOCK_KEY"
-
             # Hàm kiểm thử đồng bộ chạy qua thread pool
             def validate_endpoint():
                 try:
                     from google import genai
                     from google.genai import types as genai_types
-                    
+                    from google.genai.errors import APIError
+                    import httpx
+
                     headers = {
                         "Authorization": f"Bearer {auth_key}"
                     }
-                    
-                    # Tạo client kiểm thử kết nối
+
+                    # Tạo client kiểm thử kết nối bằng chính auth_key làm api_key.
+                    # Router API Proxy sẽ nhận auth_key này và tự xoay key thực tế bên trong,
+                    # không nhận Google API Key từ Bot gửi lên nữa.
                     test_client = genai.Client(
-                        api_key=test_api_key,
+                        api_key=auth_key,
                         http_options=genai_types.HttpOptions(
                             base_url=url,
                             headers=headers
                         )
                     )
-                    
-                    # Thay vì gọi models.list (thường bị 404 trên Router),
-                    # ta chỉ cần khởi tạo client và thử một request nhẹ nếu cần.
-                    # Ở đây ta tin tưởng URL/Key người dùng nhập để tránh lỗi 404 không đáng có.
-                    return True, None
+
+                    # Thử thực hiện cuộc gọi metadata siêu nhẹ để kiểm tra kết nối thực tế
+                    try:
+                        test_client.models.get(model="gemini-2.5-flash")
+                        return True, None
+                    except APIError as api_err:
+                        # Phân tích mã lỗi APIError
+                        # Lỗi 401 Unauthorized luôn là do sai Router Auth Key
+                        if getattr(api_err, "code", None) == 401 or "unauthorized" in str(api_err).lower():
+                            return False, "Xác thực thất bại (401 Unauthorized) - Vui lòng kiểm tra lại Auth Key."
+
+                        # Fallback nếu Router không hỗ trợ models.get (404)
+                        if getattr(api_err, "code", None) == 404 or "not found" in str(api_err).lower():
+                            try:
+                                test_client.models.generate_content(
+                                    model="gemini-2.5-flash",
+                                    contents="ping"
+                                )
+                                return True, None
+                            except APIError as fallback_err:
+                                # Kiểm tra lỗi 401 Unauthorized trước tiên ở fallback
+                                if getattr(fallback_err, "code", None) == 401 or "unauthorized" in str(fallback_err).lower():
+                                    return False, "Xác thực thất bại (401 Unauthorized) - Vui lòng kiểm tra lại Auth Key."
+
+                                err_str = str(fallback_err).lower()
+                                if "api_key_invalid" in err_str or "api key not valid" in err_str:
+                                    return True, None
+                                return False, f"Lỗi API từ Router: {fallback_err.message if hasattr(fallback_err, 'message') else str(fallback_err)}"
+                            except Exception as fallback_other:
+                                return False, f"Lỗi kết nối fallback: {str(fallback_other)}"
+
+                        # Nếu là lỗi API Key từ Google (đi qua Router thành công)
+                        err_str = str(api_err).lower()
+                        if "api_key_invalid" in err_str or "api key not valid" in err_str:
+                            return True, None
+
+                        return False, f"Lỗi từ Router API (Code {getattr(api_err, 'code', None)}): {api_err.message if hasattr(api_err, 'message') else str(api_err)}"
+
+                    except (httpx.ConnectError, httpx.ConnectTimeout, Exception) as conn_err:
+                        return False, f"Không thể kết nối vật lý đến Router URL: {str(conn_err)}"
+
                 except Exception as e:
-                    return False, str(e)
+                    return False, f"Lỗi khởi tạo SDK: {str(e)}"
 
             is_valid, error_msg = await asyncio.to_thread(validate_endpoint)
 

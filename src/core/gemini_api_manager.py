@@ -196,12 +196,16 @@ class GeminiApiManager:
                 return existing
 
             if base_url:
+                # Khi dùng Router API Proxy, ta dùng chính ROUTER_AUTH_KEY làm api_key cho SDK,
+                # vì Router API Proxy tự quản lý và xoay key thực tế bên trong.
+                # Không truyền Google API Key (api_key) thực tế của Bot lên nữa để tránh lỗi.
+                router_key = getattr(self.config, "ROUTER_AUTH_KEY", "") or api_key
                 headers = {}
-                if getattr(self.config, "ROUTER_AUTH_KEY", None):
-                    headers["Authorization"] = f"Bearer {self.config.ROUTER_AUTH_KEY}"
-                
+                if router_key:
+                    headers["Authorization"] = f"Bearer {router_key}"
+
                 client = genai.Client(
-                    api_key=api_key,
+                    api_key=router_key,
                     http_options=genai_types.HttpOptions(base_url=base_url, headers=headers),
                 )
             else:

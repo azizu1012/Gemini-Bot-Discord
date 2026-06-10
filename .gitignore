@@ -78,3 +78,8 @@ Project_structure.txt
 
 # OS specific
 .DS_Store
+
+# Temporary progress report and script
+progress_report.md
+test_find_bot.ps1
+test/
