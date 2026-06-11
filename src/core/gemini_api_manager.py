@@ -4,6 +4,7 @@ import random
 import traceback
 import re
 import unicodedata
+import base64
 from urllib.parse import urlsplit
 import threading
 from typing import Any, Optional, Dict, List, Tuple
@@ -412,11 +413,20 @@ class GeminiApiManager:
                         ))
                     elif "function_call" in part:
                         fc = part["function_call"]
+                        thought = part.get("thought")
+                        thought_sig = part.get("thought_signature") or part.get("thoughtSignature")
+                        if isinstance(thought_sig, str):
+                            try:
+                                thought_sig = base64.b64decode(thought_sig)
+                            except Exception:
+                                thought_sig = thought_sig.encode("utf-8")
                         sdk_parts.append(genai_types.Part(
                             function_call=genai_types.FunctionCall(
                                 name=fc.get("name"),
                                 args=fc.get("args")
-                            )
+                            ),
+                            thought=thought,
+                            thought_signature=thought_sig
                         ))
                     else:
                         sdk_parts.append(part)
@@ -482,11 +492,20 @@ class GeminiApiManager:
                         ))
                     elif "function_call" in part:
                         fc = part["function_call"]
+                        thought = part.get("thought")
+                        thought_sig = part.get("thought_signature") or part.get("thoughtSignature")
+                        if isinstance(thought_sig, str):
+                            try:
+                                thought_sig = base64.b64decode(thought_sig)
+                            except Exception:
+                                thought_sig = thought_sig.encode("utf-8")
                         sdk_parts.append(genai_types.Part(
                             function_call=genai_types.FunctionCall(
                                 name=fc.get("name"),
                                 args=fc.get("args")
-                            )
+                            ),
+                            thought=thought,
+                            thought_signature=thought_sig
                         ))
                     else:
                         sdk_parts.append(part)
