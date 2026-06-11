@@ -1173,7 +1173,7 @@ class BotCore:
 
                     # Thử thực hiện cuộc gọi metadata siêu nhẹ để kiểm tra kết nối thực tế
                     try:
-                        test_client.models.get(model="gemini-2.5-flash")
+                        test_client.models.get(model="gemini-flash")
                         return True, None
                     except APIError as api_err:
                         # Phân tích mã lỗi APIError
@@ -1181,11 +1181,15 @@ class BotCore:
                         if getattr(api_err, "code", None) == 401 or "unauthorized" in str(api_err).lower():
                             return False, "Xác thực thất bại (401 Unauthorized) - Vui lòng kiểm tra lại Auth Key."
 
+                        # Nếu Router lỗi 500 (Internal Server Error), nghĩa là URL và Auth Key đúng nhưng Router có lỗi nội bộ
+                        if getattr(api_err, "code", None) == 500 or "internal server error" in str(api_err).lower():
+                            return True, None
+
                         # Fallback nếu Router không hỗ trợ models.get (404)
                         if getattr(api_err, "code", None) == 404 or "not found" in str(api_err).lower():
                             try:
                                 test_client.models.generate_content(
-                                    model="gemini-2.5-flash",
+                                    model="gemini-flash",
                                     contents="ping"
                                 )
                                 return True, None
@@ -1193,6 +1197,10 @@ class BotCore:
                                 # Kiểm tra lỗi 401 Unauthorized trước tiên ở fallback
                                 if getattr(fallback_err, "code", None) == 401 or "unauthorized" in str(fallback_err).lower():
                                     return False, "Xác thực thất bại (401 Unauthorized) - Vui lòng kiểm tra lại Auth Key."
+
+                                # Nếu Router lỗi 500 ở fallback
+                                if getattr(fallback_err, "code", None) == 500 or "internal server error" in str(fallback_err).lower():
+                                    return True, None
 
                                 err_str = str(fallback_err).lower()
                                 if "api_key_invalid" in err_str or "api key not valid" in err_str:

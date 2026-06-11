@@ -13,26 +13,20 @@ from datetime import datetime, timedelta
 # Router sẽ tự động chọn model available theo priority
 # ============================================================================
 AVAILABLE_MODELS = {
-    "gemini-flash-35": {
-        "display": "Gemini Flash Latest",
+    "gemini-flash": {
+        "display": "Gemini Flash",
         "priority": 1,
-        "model_id": os.getenv('GEMINI_FLASH_35_MODEL', 'gemini-3.5-flash'),
-        "rpm": int(os.getenv('GEMINI_FLASH_35_RPM', '5')),
-        "tpm": int(os.getenv('GEMINI_FLASH_35_TPM', '250000')),
-        "rpd": int(os.getenv('GEMINI_FLASH_35_RPD', '20')),
-    },
-    "gemini-flash-30": {
-        "display": "Gemini Flash 3.0 Latest",
-        "priority": 1,
-        "model_id": os.getenv('GEMINI_FLASH_30_MODEL', 'gemini-3-flash-preview'),
-        "rpm": int(os.getenv('GEMINI_FLASH_30_RPM', '5')),
-        "tpm": int(os.getenv('GEMINI_FLASH_30_TPM', '250000')),
-        "rpd": int(os.getenv('GEMINI_FLASH_30_RPD', '20')),
+        "model_id": os.getenv('GEMINI_FLASH_MODEL', 'gemini-flash'),
+        "direct_model_id": os.getenv('GEMINI_FLASH_DIRECT_MODEL', ''),
+        "rpm": int(os.getenv('GEMINI_FLASH_RPM', '5')),
+        "tpm": int(os.getenv('GEMINI_FLASH_TPM', '250000')),
+        "rpd": int(os.getenv('GEMINI_FLASH_RPD', '20')),
     },
     "gemini-flash-lite": {
-        "display": "Gemini Flash Lite Latest",
+        "display": "Gemini Flash Lite",
         "priority": 2,
-        "model_id": os.getenv('GEMINI_FLASH_LITE_MODEL', 'gemini-3.1-flash-lite'),
+        "model_id": os.getenv('GEMINI_FLASH_LITE_MODEL', 'gemini-flash-lite'),
+        "direct_model_id": os.getenv('GEMINI_FLASH_LITE_DIRECT_MODEL', 'gemini-flash-lite-lasted'),
         "rpm": int(os.getenv('GEMINI_FLASH_LITE_RPM', '15')),
         "tpm": int(os.getenv('GEMINI_FLASH_LITE_TPM', '250000')),
         "rpd": int(os.getenv('GEMINI_FLASH_LITE_RPD', '500')),
@@ -40,7 +34,7 @@ AVAILABLE_MODELS = {
 }
 
 # Priority list (sorted) - Router sẽ thử từ trên xuống
-MODEL_PRIORITY = ["gemini-flash-35", "gemini-flash-30", "gemini-flash-lite"]
+MODEL_PRIORITY = ["gemini-flash", "gemini-flash-lite"]
 
 
 # ============================================================================
@@ -58,9 +52,9 @@ GEMINI_LIMITER_FIXED_OVERHEAD = int(os.getenv('GEMINI_LIMITER_FIXED_OVERHEAD', '
 GEMINI_LIMITER_SAFETY_FACTOR = float(os.getenv('GEMINI_LIMITER_SAFETY_FACTOR', '1.25'))
 
 DEFAULT_REASONING_MODEL_ALIAS = os.getenv('REASONING_MODEL_ALIAS', 'gemini-flash-lite').strip() or 'gemini-flash-lite'
-DEFAULT_FINAL_MODEL_ALIAS = os.getenv('FINAL_MODEL_ALIAS', 'gemini-flash-35').strip() or 'gemini-flash-35'
+DEFAULT_FINAL_MODEL_ALIAS = os.getenv('FINAL_MODEL_ALIAS', 'gemini-flash').strip() or 'gemini-flash'
 DEFAULT_FALLBACK_MODEL_ALIAS = os.getenv('FALLBACK_MODEL_ALIAS', DEFAULT_REASONING_MODEL_ALIAS).strip() or DEFAULT_REASONING_MODEL_ALIAS
-VISION_MODEL_ALIAS = 'gemini-flash-35'
+VISION_MODEL_ALIAS = 'gemini-flash'
 
 @dataclass 
 class BotRouterConfig:

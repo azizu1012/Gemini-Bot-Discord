@@ -41,7 +41,7 @@ class APIRouter:
         # Priority order for auto selection
         self.model_priority = [m for m in MODEL_PRIORITY if m in AVAILABLE_MODELS]
         self.active_models = list(self.model_priority)
-        self.current_model = self.model_priority[0] if self.model_priority else "gemini-flash-35"
+        self.current_model = self.model_priority[0] if self.model_priority else "gemini-flash"
 
         # Build priority groups for same-priority rotation
         self._priority_groups: Dict[int, List[str]] = {}
@@ -115,27 +115,40 @@ class APIRouter:
         return False
 
     def get_model_id(self, model_alias: Optional[str]) -> str:
+        is_router_mode = bool(os.getenv("GEMINI_BASE_URL", "")) and bool(os.getenv("ROUTER_AUTH_KEY", ""))
+
+        def _resolve(cfg: dict) -> str | None:
+            if is_router_mode:
+                return str(cfg["model_id"]) if cfg.get("model_id") else None
+            else:
+                direct = cfg.get("direct_model_id")
+                if direct:
+                    return str(direct)
+                return str(cfg["model_id"]) if cfg.get("model_id") else None
+
         if model_alias and model_alias in AVAILABLE_MODELS:
-            model_id = AVAILABLE_MODELS[model_alias].get("model_id")
-            if model_id:
-                return str(model_id)
+            resolved = _resolve(AVAILABLE_MODELS[model_alias])
+            if resolved:
+                return resolved
 
         fallback_alias = self.get_preferred_model()
         if fallback_alias in AVAILABLE_MODELS:
-            fallback_id = AVAILABLE_MODELS[fallback_alias].get("model_id")
-            if fallback_id:
-                return str(fallback_id)
+            resolved = _resolve(AVAILABLE_MODELS[fallback_alias])
+            if resolved:
+                return resolved
 
         for alias in MODEL_PRIORITY:
             cfg = AVAILABLE_MODELS.get(alias)
-            if cfg and cfg.get("model_id"):
-                return str(cfg["model_id"])
+            if cfg:
+                resolved = _resolve(cfg)
+                if resolved:
+                    return resolved
 
         raise RuntimeError("No Gemini model_id configured in AVAILABLE_MODELS.")
 
     async def get_selected_model_aliases(self, force_refresh: bool = False) -> Dict[str, Optional[str]]:
         default_reasoning = DEFAULT_REASONING_MODEL_ALIAS if DEFAULT_REASONING_MODEL_ALIAS in AVAILABLE_MODELS else "gemini-flash-lite"
-        default_final = DEFAULT_FINAL_MODEL_ALIAS if DEFAULT_FINAL_MODEL_ALIAS in AVAILABLE_MODELS else "gemini-flash-35"
+        default_final = DEFAULT_FINAL_MODEL_ALIAS if DEFAULT_FINAL_MODEL_ALIAS in AVAILABLE_MODELS else "gemini-flash"
         default_fallback = DEFAULT_FALLBACK_MODEL_ALIAS if DEFAULT_FALLBACK_MODEL_ALIAS in AVAILABLE_MODELS else default_reasoning
         return {
             "reasoning": default_reasoning,

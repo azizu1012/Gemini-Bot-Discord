@@ -639,7 +639,7 @@ class MessageHandler:
         image_bytes = None
 
         for attempt in range(1, max_attempts + 1):
-            api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash-35")
+            api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash")
 
             if not api_key:
                 error_message = "Không có API keys khả dụng."

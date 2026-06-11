@@ -735,7 +735,11 @@ class GeminiPipeline:
 
     async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
         MAX_RETRIES = max(5, self.config.FINAL_MAX_API_RETRIES)
-        final_model_alias = self.final_model_alias
+        # Nếu chưa cấu hình Router API (ROUTER_AUTH_KEY rỗng) → dùng lite model cho cả final
+        if not getattr(self.config, "ROUTER_AUTH_KEY", "") and getattr(self.config, "GEMINI_BASE_URL", ""):
+            final_model_alias = self.fallback_model_alias
+        else:
+            final_model_alias = self.final_model_alias
 
         if tool_results and not _is_tool_result_sufficient(tool_results):
             if self.config.SEARCH_ALLOW_PARTIAL_ANSWER and _has_minimum_search_evidence(tool_results):
@@ -820,47 +824,13 @@ class GeminiPipeline:
 
                 self.logger.info(f"Final output for user {user_id} ({model_name}, attempt {attempt + 1}/{MAX_RETRIES})")
 
-                stream_generator = self.api_mgr._generate_gemini_content_stream(
+                response = await self.api_mgr._generate_gemini_content(
                     api_key=api_key,
                     model_name=model_name,
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
                 )
-
-                full_text_parts = []
-                finish_reason = "stop"
-                async for chunk in stream_generator:
-                    if hasattr(chunk, "candidates") and chunk.candidates:
-                        cand = chunk.candidates[0]
-                        if cand.content and cand.content.parts:
-                            for part in cand.content.parts:
-                                if part.text:
-                                    full_text_parts.append(part.text)
-                        if getattr(cand, "finish_reason", None):
-                            finish_reason = cand.finish_reason
-
-                accumulated_text = "".join(full_text_parts)
-
-                # Construct Mock Response
-                class MockPart:
-                    def __init__(self, text):
-                        self.text = text
-                class MockContent:
-                    def __init__(self, text):
-                        self.parts = [MockPart(text)]
-                class MockCandidate:
-                    def __init__(self, text, finish_reason):
-                        self.content = MockContent(text)
-                        class MockFinishReason:
-                            def __init__(self, name):
-                                self.name = name
-                        self.finish_reason = MockFinishReason(finish_reason)
-                class MockResponse:
-                    def __init__(self, text, finish_reason):
-                        self.candidates = [MockCandidate(text, finish_reason)]
-
-                response = MockResponse(accumulated_text, finish_reason)
                 self.api_mgr._commit_selected_key(key_reservation)
 
                 candidate = response.candidates[0] if response.candidates else None

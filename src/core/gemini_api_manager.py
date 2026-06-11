@@ -36,6 +36,7 @@ class GeminiApiManager:
         self.api_key_history_lock = threading.Lock()
         self._gemini_clients: Dict[Any, Any] = {}
         self._gemini_clients_lock = threading.Lock()
+        self.router_bypass_until = 0.0
 
     # --- Key selection ---
 
@@ -92,11 +93,15 @@ class GeminiApiManager:
         # We enforce a short delay, but do not exhaust/affect router quota for this key.
         is_503 = reason == "unavailable"
 
+        if reason == "endpoint_down":
+            self.router_bypass_until = time.time() + 30
+            self.logger.warning("⚠️ [ROUTER-DOWN] Router API endpoint is unreachable. Bypassing Router and calling Google directly for 30 seconds.")
+
         model = model_alias or self.api_router.get_current_model()
         pool = (reservation or {}).get("pool", "main")
         counter_key = (reservation or {}).get("counter_key")
 
-        if pool != "legacy" and not is_503:
+        if pool != "legacy" and not is_503 and reason != "endpoint_down":
             if permanently_exhaust:
                 self.api_router.mark_key_exhausted(key, model, pool=pool, counter_key=counter_key)
             else:
@@ -114,6 +119,8 @@ class GeminiApiManager:
             self.logger.warning(f"🚫 API Key ...{key[-4:]} marked invalid and excluded for current quota cycle.")
         elif is_503:
             self.logger.warning(f"⚠️ API Key ...{key[-4:]} delayed for {duration}s due to Google Server 503 (Unavailable).")
+        elif reason == "endpoint_down":
+            self.logger.warning(f"🔌 Connection to Router failed. API Key ...{key[-4:]} marked cooldown for {duration}s.")
         else:
             self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to rate limit/quota.")
 
@@ -155,7 +162,14 @@ class GeminiApiManager:
 
     @staticmethod
     def _is_connection_error(error: Exception) -> bool:
+        error_str = str(error)
+        if isinstance(error, TypeError) and "'<=' not supported" in error_str and "NoneType" in error_str:
+            return True
+        error_class = type(error).__name__
+        if any(marker in error_class for marker in ("ConnectError", "ConnectTimeout", "ReadTimeout", "ReadError", "TimeoutException", "NetworkError")):
+            return True
         return isinstance(error, (ConnectionError, TimeoutError, OSError))
+
 
     @staticmethod
     def _is_invalid_key_error(error_str: str) -> bool:
@@ -188,6 +202,9 @@ class GeminiApiManager:
         api_key: str,
     ):
         base_url = getattr(self.config, "GEMINI_BASE_URL", "") or ""
+        if time.time() < getattr(self, "router_bypass_until", 0.0):
+            base_url = ""
+
         cache_key = ("gemini", base_url, api_key)
 
         with self._gemini_clients_lock:
@@ -196,18 +213,17 @@ class GeminiApiManager:
                 return existing
 
             if base_url:
-                # Khi dùng Router API Proxy, ta dùng chính ROUTER_AUTH_KEY làm api_key cho SDK,
-                # vì Router API Proxy tự quản lý và xoay key thực tế bên trong.
-                # Không truyền Google API Key (api_key) thực tế của Bot lên nữa để tránh lỗi.
-                router_key = getattr(self.config, "ROUTER_AUTH_KEY", "") or api_key
-                headers = {}
-                if router_key:
-                    headers["Authorization"] = f"Bearer {router_key}"
-
-                client = genai.Client(
-                    api_key=router_key,
-                    http_options=genai_types.HttpOptions(base_url=base_url, headers=headers),
-                )
+                router_key = getattr(self.config, "ROUTER_AUTH_KEY", "")
+                if not router_key:
+                    # ROUTER_AUTH_KEY rỗng → không gửi Google Key lên Router,
+                    # quay về xoay vòng key cơ bản qua Google trực tiếp
+                    client = genai.Client(api_key=api_key)
+                else:
+                    headers = {"Authorization": f"Bearer {router_key}"}
+                    client = genai.Client(
+                        api_key=router_key,
+                        http_options=genai_types.HttpOptions(base_url=base_url, headers=headers, timeout=15000),
+                    )
             else:
                 client = genai.Client(api_key=api_key)
             self._gemini_clients[cache_key] = client
@@ -351,6 +367,9 @@ class GeminiApiManager:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
     ):
+        if time.time() < getattr(self, "router_bypass_until", 0.0):
+            model_name = "gemini-flash-lite-latest"
+
         request_config = dict(generation_config)
         request_config["system_instruction"] = system_instruction
         request_config["safety_settings"] = self.config.SAFETY_SETTINGS
@@ -418,6 +437,9 @@ class GeminiApiManager:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
     ):
+        if time.time() < getattr(self, "router_bypass_until", 0.0):
+            model_name = "gemini-flash-lite-latest"
+
         request_config = dict(generation_config)
         request_config["system_instruction"] = system_instruction
         request_config["safety_settings"] = self.config.SAFETY_SETTINGS
@@ -530,6 +552,8 @@ class GeminiApiManager:
                     self._mark_key_as_failed(api_key, final_alias, reason="rate_limit", reservation=reservation)
                 elif self._is_unavailable_error(error_str):
                     self._mark_key_as_failed(api_key, final_alias, reason="unavailable", reservation=reservation, duration=5)
+                elif self._is_connection_error(e):
+                    self._mark_key_as_failed(api_key, final_alias, reason="endpoint_down", reservation=reservation, duration=120)
                 else:
                     self.logger.error(f"call_gemini_direct failed on attempt {attempt}: {e}")
                     
