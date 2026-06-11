@@ -140,6 +140,7 @@ class Config:
         # Trỏ về Router API (http://127.0.0.1:58100) để route Gemini SDK qua proxy thay vì gọi Google trực tiếp.
         self.GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "")
         self.ROUTER_AUTH_KEY = os.getenv("ROUTER_AUTH_KEY", "")
+        self.GEMINI_TIMEOUT_MS = self._get_int("GEMINI_TIMEOUT_MS", 60000, min_value=5000)
 
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
         self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -317,6 +318,7 @@ SEARCH_ALLOW_PARTIAL_ANSWER = config.SEARCH_ALLOW_PARTIAL_ANSWER
 PROJECT_ROOT = str(config.PROJECT_ROOT)
 LOG_PATH = config.LOG_PATH
 DONATE_ENCRYPTION_KEY = config.DONATE_ENCRYPTION_KEY
+GEMINI_TIMEOUT_MS = config.GEMINI_TIMEOUT_MS
 
 
 # Global DB pool

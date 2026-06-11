@@ -222,7 +222,11 @@ class GeminiApiManager:
                     headers = {"Authorization": f"Bearer {router_key}"}
                     client = genai.Client(
                         api_key=router_key,
-                        http_options=genai_types.HttpOptions(base_url=base_url, headers=headers, timeout=15000),
+                        http_options=genai_types.HttpOptions(
+                            base_url=base_url,
+                            headers=headers,
+                            timeout=self.config.GEMINI_TIMEOUT_MS
+                        ),
                     )
             else:
                 client = genai.Client(api_key=api_key)
