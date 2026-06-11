@@ -395,39 +395,46 @@ class GeminiApiManager:
 
             for part in parts:
                 if isinstance(part, dict):
+                    thought = part.get("thought")
+                    thought_sig = part.get("thought_signature") or part.get("thoughtSignature")
+                    if isinstance(thought_sig, str):
+                        try:
+                            thought_sig = base64.b64decode(thought_sig)
+                        except Exception:
+                            thought_sig = thought_sig.encode("utf-8")
+
+                    part_kwargs = {}
+                    if thought is not None:
+                        part_kwargs["thought"] = thought
+                    if thought_sig is not None:
+                        part_kwargs["thought_signature"] = thought_sig
+
                     if "text" in part:
-                        sdk_parts.append(genai_types.Part.from_text(text=part["text"]))
+                        part_kwargs["text"] = part["text"]
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "inline_data" in part:
                         inline = part["inline_data"]
-                        sdk_parts.append(genai_types.Part.from_bytes(
+                        part_kwargs["inline_data"] = genai_types.Blob(
                             data=inline["data"],
                             mime_type=inline["mime_type"]
-                        ))
+                        )
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_response" in part:
                         fr = part["function_response"]
-                        sdk_parts.append(genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name=fr.get("name"),
-                                response=fr.get("response", {})
-                            )
-                        ))
+                        part_kwargs["function_response"] = genai_types.FunctionResponse(
+                            name=fr.get("name"),
+                            response=fr.get("response", {})
+                        )
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_call" in part:
                         fc = part["function_call"]
-                        thought = part.get("thought")
-                        thought_sig = part.get("thought_signature") or part.get("thoughtSignature")
-                        if isinstance(thought_sig, str):
-                            try:
-                                thought_sig = base64.b64decode(thought_sig)
-                            except Exception:
-                                thought_sig = thought_sig.encode("utf-8")
-                        sdk_parts.append(genai_types.Part(
-                            function_call=genai_types.FunctionCall(
-                                name=fc.get("name"),
-                                args=fc.get("args")
-                            ),
-                            thought=thought,
-                            thought_signature=thought_sig
-                        ))
+                        part_kwargs["function_call"] = genai_types.FunctionCall(
+                            name=fc.get("name"),
+                            args=fc.get("args")
+                        )
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                    elif thought is not None or thought_sig is not None:
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     else:
                         sdk_parts.append(part)
                 else:
@@ -474,39 +481,46 @@ class GeminiApiManager:
 
             for part in parts:
                 if isinstance(part, dict):
+                    thought = part.get("thought")
+                    thought_sig = part.get("thought_signature") or part.get("thoughtSignature")
+                    if isinstance(thought_sig, str):
+                        try:
+                            thought_sig = base64.b64decode(thought_sig)
+                        except Exception:
+                            thought_sig = thought_sig.encode("utf-8")
+
+                    part_kwargs = {}
+                    if thought is not None:
+                        part_kwargs["thought"] = thought
+                    if thought_sig is not None:
+                        part_kwargs["thought_signature"] = thought_sig
+
                     if "text" in part:
-                        sdk_parts.append(genai_types.Part.from_text(text=part["text"]))
+                        part_kwargs["text"] = part["text"]
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "inline_data" in part:
                         inline = part["inline_data"]
-                        sdk_parts.append(genai_types.Part.from_bytes(
+                        part_kwargs["inline_data"] = genai_types.Blob(
                             data=inline["data"],
                             mime_type=inline["mime_type"]
-                        ))
+                        )
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_response" in part:
                         fr = part["function_response"]
-                        sdk_parts.append(genai_types.Part(
-                            function_response=genai_types.FunctionResponse(
-                                name=fr.get("name"),
-                                response=fr.get("response", {})
-                            )
-                        ))
+                        part_kwargs["function_response"] = genai_types.FunctionResponse(
+                            name=fr.get("name"),
+                            response=fr.get("response", {})
+                        )
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_call" in part:
                         fc = part["function_call"]
-                        thought = part.get("thought")
-                        thought_sig = part.get("thought_signature") or part.get("thoughtSignature")
-                        if isinstance(thought_sig, str):
-                            try:
-                                thought_sig = base64.b64decode(thought_sig)
-                            except Exception:
-                                thought_sig = thought_sig.encode("utf-8")
-                        sdk_parts.append(genai_types.Part(
-                            function_call=genai_types.FunctionCall(
-                                name=fc.get("name"),
-                                args=fc.get("args")
-                            ),
-                            thought=thought,
-                            thought_signature=thought_sig
-                        ))
+                        part_kwargs["function_call"] = genai_types.FunctionCall(
+                            name=fc.get("name"),
+                            args=fc.get("args")
+                        )
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                    elif thought is not None or thought_sig is not None:
+                        sdk_parts.append(genai_types.Part(**part_kwargs))
                     else:
                         sdk_parts.append(part)
                 else:
