@@ -421,9 +421,18 @@ class GeminiApiManager:
                         sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_response" in part:
                         fr = part["function_response"]
+                        # Đảm bảo response truyền cho API luôn là một dict
+                        raw_response = fr.get("response", {})
+                        if not isinstance(raw_response, dict):
+                            raw_response = {"content": str(raw_response)}
+                        elif "content" not in raw_response:
+                            # Nếu response là dict trống hoặc không có key 'content', đảm bảo có cấu trúc đúng
+                            if not raw_response:
+                                raw_response = {"content": ""}
+
                         part_kwargs["function_response"] = genai_types.FunctionResponse(
                             name=fr.get("name"),
-                            response=fr.get("response", {})
+                            response=raw_response
                         )
                         sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_call" in part:
@@ -507,9 +516,18 @@ class GeminiApiManager:
                         sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_response" in part:
                         fr = part["function_response"]
+                        # Đảm bảo response truyền cho API luôn là một dict
+                        raw_response = fr.get("response", {})
+                        if not isinstance(raw_response, dict):
+                            raw_response = {"content": str(raw_response)}
+                        elif "content" not in raw_response:
+                            # Nếu response là dict trống hoặc không có key 'content', đảm bảo có cấu trúc đúng
+                            if not raw_response:
+                                raw_response = {"content": ""}
+
                         part_kwargs["function_response"] = genai_types.FunctionResponse(
                             name=fr.get("name"),
-                            response=fr.get("response", {})
+                            response=raw_response
                         )
                         sdk_parts.append(genai_types.Part(**part_kwargs))
                     elif "function_call" in part:

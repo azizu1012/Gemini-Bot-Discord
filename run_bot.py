@@ -51,7 +51,7 @@ _ensure_preferred_interpreter()
 
 from src.core.config import get_config, logger
 from src.core.preflight import emit_startup_banner, run_preflight_checks
-from src.handlers.bot_core import BotCore
+from src.handlers.discord.bot_core import BotCore
 from src.handlers.message_handler import MessageHandler
 from src.services.search_subtask_worker import SearchSubtaskWorker
 
