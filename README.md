@@ -1,5 +1,7 @@
 # 🤖 AZURIS DISCORD ASSISTANT BOT
 
+> 📖 **Tài liệu kỹ thuật đầy đủ:** Xem [`DOCUMENTATION.md`](DOCUMENTATION.md) — Nguồn Sự Thật Kỹ Thuật duy nhất.
+
 **Azuris** là một trợ lý AI tiên tiến hoạt động trên nền tảng Discord, được xây dựng trên kiến trúc hướng sự kiện phân tán (**Event-Driven Distributed Architecture**) sử dụng **PostgreSQL**, **Redis Streams**, và pipeline lập luận đa bước của **Google Gemini**. 
 
 Hệ thống được thiết kế tối ưu hóa cho cả môi trường VPS cá nhân và doanh nghiệp vừa với cơ chế tự cấp phát hạ tầng cục bộ (**Zero-Docker Local Runtime**).

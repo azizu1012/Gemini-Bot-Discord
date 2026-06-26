@@ -69,12 +69,19 @@ src/.runtime/kafka-data/
 *.cleaned
 *.swap
 
+# CodeGraph index
+.codegraph/
+
 # Internal project docs (AI agent handoff, not for public)
 CLAUDE.md
 GEMINI.md
 AGENT_HANDOFF_PROJECT_CONTEXT.md
 PROJECT_INFO.txt
 Project_structure.txt
+DOCUMENTATION.md
+
+# Docs folder (never commit)
+docs/
 
 # OS specific
 .DS_Store
