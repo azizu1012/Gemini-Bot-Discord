@@ -16,7 +16,7 @@ from src.core.config import Config, logger
 from src.database.repository import DatabaseRepository
 from src.managers.cleanup_manager import CleanupManager
 from src.services.health_checker import get_health_checker
-from src.services.redis_service import RedisStreamService
+from src.services.redis_service import RedisStreamService, RedisStreamConsumer
 from src.voice.voice_lock import VoiceLockManager
 
 # Import Slash Commands Registration
@@ -48,6 +48,7 @@ class BotCore:
         self.kafka_service = RedisStreamService(redis_url=self.config.REDIS_URL, client_id="bot-core")
         self.active_interactions: Dict[str, discord.Interaction] = {}
         self.active_typing_tasks: Dict[str, asyncio.Task] = {}
+        self._outgoing_consumer: Optional[RedisStreamConsumer] = None
         self._outgoing_queues: Dict[str, asyncio.Queue] = {}
         self._outgoing_senders: Dict[str, asyncio.Task] = {}
         self._delivery_state: Dict[str, Dict[str, Any]] = {}
@@ -60,7 +61,7 @@ class BotCore:
         redis_url = os.getenv("REDIS_URL")
         if redis_url:
             try:
-                import redis.asyncio as aioredis
+                import redis.asyncio as aioredis  # type: ignore[reportMissingImports]
                 self._redis_client = aioredis.from_url(redis_url, decode_responses=True)
                 self.logger.info("Redis detected! Centralized Lock mode is ENABLED for BotCore.")
             except Exception as e:
@@ -359,7 +360,7 @@ class BotCore:
                 channel = resolved_channel
 
         try:
-            return await channel.fetch_message(reference.message_id)
+            return await channel.fetch_message(reference.message_id)  # type: ignore[union-attr]
         except (discord.NotFound, discord.Forbidden):
             return None
         except Exception as e:
@@ -400,7 +401,11 @@ class BotCore:
     async def setup_redis(self):
         try:
             await self.kafka_service.start_producer()
-            await self.kafka_service.start_consumer("discord-outgoing", group_id="azuris_bot_dispatcher_group")
+            consumer = await self.kafka_service.start_consumer("discord-outgoing", group_id="azuris_bot_dispatcher_group")
+            self._outgoing_consumer = consumer
+            reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
+            if reclaimed:
+                self.logger.info(f"Reclaimed {len(reclaimed)} pending outgoing messages on startup")
             self._consume_task = asyncio.create_task(self.consume_outgoing_loop())
         except Exception as e:
             self.logger.error(f"Failed to start BotCore Redis services: {e}")
@@ -416,6 +421,7 @@ class BotCore:
         try:
             async for msg in consumer:
                 payload = msg.value
+                payload['_consumer_entry_id'] = msg.entry_id
                 asyncio.create_task(self.handle_outgoing_payload(payload))
         except asyncio.CancelledError:
             self.logger.info("BotCore Redis consumer loop cancelled")
@@ -449,7 +455,9 @@ class BotCore:
                     self._cancel_typing_task(user_id)
 
             elif action == "slash_reply":
-                interaction_id = payload.get("interaction_id")
+                interaction_id: Optional[str] = payload.get("interaction_id")
+                if not interaction_id:
+                    return
                 content = payload.get("content")
                 ephemeral = bool(payload.get("ephemeral", False))
                 files = []
@@ -472,11 +480,11 @@ class BotCore:
                 interaction = self.active_interactions.pop(interaction_id, None)
                 if interaction:
                     self.logger.info(f"Delivering slash_reply for interaction {interaction_id} to user {interaction.user.id}")
-                    content = await self._sanitize_mentions(content, interaction.channel, payload.get("allow_user_mentions") or [])
+                    content = await self._sanitize_mentions(content or "", interaction.channel, payload.get("allow_user_mentions") or [])  # type: ignore[arg-type]
                     if files:
-                        await interaction.followup.send(content=content, embed=embed, files=files, ephemeral=ephemeral)
+                        await interaction.followup.send(content=content, embed=embed, files=files, ephemeral=ephemeral)  # type: ignore[arg-type]
                     else:
-                        await interaction.followup.send(content=content, ephemeral=ephemeral)
+                        await interaction.followup.send(content=content, ephemeral=ephemeral)  # type: ignore[arg-type]
                     self._cancel_typing_task(str(interaction.user.id))
                 else:
                     self.logger.warning(f"Could not find active interaction for ID {interaction_id}")
@@ -530,16 +538,21 @@ class BotCore:
 
     async def _process_outgoing_payload(self, payload: dict) -> None:
         action = payload.get("action")
-        if not action:
+        if action not in ("reply", "reply_batch"):
             return
 
-        if action == "reply_batch":
-            await self._process_reply_batch(payload)
-            return
+        entry_id_str = payload.pop('_consumer_entry_id', None)
 
-        if action == "reply":
-            await self._process_reply(payload)
-            return
+        try:
+            if action == "reply_batch":
+                await self._process_reply_batch(payload)
+            else:
+                await self._process_reply(payload)
+        except Exception:
+            raise
+        else:
+            if entry_id_str and self._outgoing_consumer:
+                await self._outgoing_consumer.ack_id(entry_id_str)
 
     async def _process_reply(self, payload: dict) -> None:
         channel_id_str = payload.get("channel_id")
@@ -556,7 +569,7 @@ class BotCore:
 
         content = payload.get("content")
         allow_user_mentions = payload.get("allow_user_mentions") or []
-        content = await self._sanitize_mentions(content, channel, allow_user_mentions)
+        content = await self._sanitize_mentions(content, channel, allow_user_mentions)  # type: ignore[arg-type]
         ref_id_str = payload.get("reference_message_id")
 
         reference = None
@@ -568,7 +581,7 @@ class BotCore:
             )
 
         sent_message = await self._send_message_with_retry(
-            channel,
+            channel,  # type: ignore[arg-type]
             content=content,
             reference=reference,
             mention_author=False,
@@ -636,12 +649,12 @@ class BotCore:
             if idx < start_index or idx in sent_set:
                 continue
             content = item.get("content")
-            content = await self._sanitize_mentions(content, channel, allow_user_mentions)
+            content = await self._sanitize_mentions(content, channel, allow_user_mentions)  # type: ignore[arg-type]
             sent_ok = False
             if idx == 0 and chunk_total == 1 and mode_hint == "edit_then_batch":
                 placeholder = "..."
                 sent_message = await self._send_message_with_retry(
-                    channel,
+                    channel,  # type: ignore[arg-type]
                     content=placeholder,
                     reference=reference,
                     mention_author=False,
@@ -657,7 +670,7 @@ class BotCore:
                         sent_ok = True
                     else:
                         fallback = await self._send_message_with_retry(
-                            channel,
+                            channel,  # type: ignore[arg-type]
                             content=content,
                             reference=None,
                             mention_author=False,
@@ -666,7 +679,7 @@ class BotCore:
                         sent_ok = fallback is not None
             else:
                 sent_message = await self._send_message_with_retry(
-                    channel,
+                    channel,  # type: ignore[arg-type]
                     content=content,
                     reference=reference if idx == 0 else None,
                     mention_author=False,
@@ -698,7 +711,10 @@ class BotCore:
         base_delay: float = 0.35,
     ) -> Optional[discord.Message]:
         async def _do_send():
-            return await channel.send(content=content, reference=reference, mention_author=mention_author)
+            kwargs: Dict[str, Any] = {"content": content, "mention_author": mention_author}
+            if reference is not None:
+                kwargs["reference"] = reference
+            return await channel.send(**kwargs)  # type: ignore[arg-type]
 
         try:
             return await self._run_with_retry(_do_send, label, max_attempts, base_delay)
@@ -781,7 +797,9 @@ class BotCore:
     def _register_events(self):
         @self.bot.event
         async def on_ready():
-            self.logger.info(f"Bot logged in as {self.bot.user.name} (ID: {self.bot.user.id})")
+            bot_user = self.bot.user
+            if bot_user:
+                self.logger.info(f"Bot logged in as {bot_user.name} (ID: {bot_user.id})")
 
             await self.db_repo.init_db()
             try:

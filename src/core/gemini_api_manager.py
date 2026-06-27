@@ -455,7 +455,7 @@ class GeminiApiManager:
             client.models.generate_content,
             model=model_name,
             contents=sdk_contents,
-            config=request_config,
+            config=request_config,  # type: ignore[arg-type]
         )
 
     async def _generate_gemini_content_stream(
@@ -550,7 +550,7 @@ class GeminiApiManager:
             client.models.generate_content_stream,
             model=model_name,
             contents=sdk_contents,
-            config=request_config,
+            config=request_config,  # type: ignore[arg-type]
         )
         for chunk in stream:
             yield chunk
@@ -597,7 +597,9 @@ class GeminiApiManager:
                 )
                 
                 self._commit_selected_key(reservation)
-                return response.text if response else "Error calling LLM."
+                if response is None or response.text is None:
+                    return "Error calling LLM."
+                return response.text
                 
             except Exception as e:
                 error_str = str(e)

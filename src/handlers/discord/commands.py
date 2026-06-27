@@ -271,7 +271,7 @@ def register_slash_commands(bot_core_instance):
                     async def auto_delete():
                         await asyncio.sleep(120)
                         try:
-                            await msg.delete()
+                            await msg.delete()  # type: ignore[union-attr]
                         except (discord.NotFound, discord.Forbidden):
                             pass
 
@@ -373,6 +373,9 @@ def register_slash_commands(bot_core_instance):
             }
 
             info = donate_platforms.get("anhtr_momo")
+            if not info:
+                await interaction.followup.send("Thông tin donate không khả dụng.", ephemeral=True)
+                return
             encrypted_path = Path(config.PROJECT_ROOT) / "assets" / "encrypted" / info["file"]
 
             if not encrypted_path.exists():
@@ -608,7 +611,7 @@ def register_slash_commands(bot_core_instance):
         app_commands.Choice(name="PayPal", value="paypal"),
         app_commands.Choice(name="Momo - Anh Tr", value="anhtr_momo"),
     ])
-    async def donate_slash(interaction: discord.Interaction, platform: app_commands.Choice[str] = None):
+    async def donate_slash(interaction: discord.Interaction, platform: Optional[app_commands.Choice[str]] = None):
         await interaction.response.defer()
 
         selected = platform.value if platform else "kofi"
@@ -653,7 +656,7 @@ def register_slash_commands(bot_core_instance):
         async def auto_delete():
             await asyncio.sleep(120)
             try:
-                await msg.delete()
+                await msg.delete()  # type: ignore[union-attr]
             except (discord.NotFound, discord.Forbidden):
                 pass
 

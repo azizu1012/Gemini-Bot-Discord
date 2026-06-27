@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
 from src.core.config import logger, Config
-from src.services.redis_service import RedisStreamService
+from src.services.redis_service import RedisStreamService, RedisStreamConsumer, _RedisMsg
 from src.database.repository import DatabaseRepository
 from src.core.api_router import get_api_router
 from src.core.gemini_api_manager import GeminiApiManager
@@ -32,25 +32,6 @@ from src.services.file_index_service import (
 from src.services.search_subtask_client import SearchSubtaskClient
 from src.managers.cleanup_manager import CleanupManager
 from src.core.prompt_loader import build_identity_capability_prompt
-
-
-class DummyAttachment:
-    """Mock discord attachment details passed from Gateway."""
-    def __init__(
-        self,
-        url: str,
-        filename: str,
-        size: int = 10 * 1024 * 1024,
-        attachment_id: str = "",
-        content_type: str = "",
-        proxy_url: str = "",
-    ):
-        self.url = url
-        self.filename = filename
-        self.size = size
-        self.id = attachment_id
-        self.content_type = content_type
-        self.proxy_url = proxy_url
 
 
 class MessageHandler:
@@ -85,6 +66,7 @@ class MessageHandler:
         self.file_parser = FileParserService(cleanup_mgr=CleanupManager())
         self.file_chunk_dir = self.config.FILE_CHUNK_DIR
         self._image_download_sem = asyncio.Semaphore(3)
+        self._incoming_consumer: Optional[RedisStreamConsumer] = None
 
 
     async def _publish_outgoing(self, payload: Dict[str, Any], user_id: Optional[str]) -> bool:
@@ -98,7 +80,8 @@ class MessageHandler:
         try:
             import aiohttp
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as response:
+                timeout_obj = aiohttp.ClientTimeout(total=15)
+                async with session.get(url, timeout=timeout_obj) as response:
                     if response.status == 200:
                         return await response.read()
         except Exception as e:
@@ -293,17 +276,21 @@ class MessageHandler:
         try:
             await self.kafka_service.start_producer()
             consumer = await self.kafka_service.start_consumer("discord-incoming", group_id="azuris_worker_group")
+            self._incoming_consumer = consumer
         except Exception as e:
             self.logger.error(f"Failed to start worker Redis services: {e}")
             await self.shutdown()
             return
 
+        reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
+        if reclaimed:
+            self.logger.info(f"Reclaimed {len(reclaimed)} pending messages from dead consumers on startup")
+
         self.logger.info("Worker started. Listening for messages...")
 
         try:
             async for msg in consumer:
-                payload = msg.value
-                asyncio.create_task(self.process_message(payload))
+                asyncio.create_task(self.process_message(msg))
         except asyncio.CancelledError:
             self.logger.info("Worker task cancelled")
             raise
@@ -324,8 +311,9 @@ class MessageHandler:
         except Exception as e:
             self.logger.warning(f"Failed to close DB pool cleanly: {e}")
 
-    async def process_message(self, payload: dict):
-        """Process a single message payload from Redis."""
+    async def process_message(self, msg: _RedisMsg):
+        """Process a single message from Redis Streams."""
+        payload = msg.value
         msg_type = payload.get("type")
         user_id = payload.get('user_id')
 
@@ -334,18 +322,28 @@ class MessageHandler:
             if user_id:
                 self.cache_mgr.invalidate_chat_history(user_id)
                 self.logger.info(f"[CACHE] Invalidated chat history cache for user {user_id} via Redis event.")
+            if self._incoming_consumer:
+                await self._incoming_consumer.ack(msg)
             return
 
         if msg_type == "invalidate_all_cache":
             self.cache_mgr.clear_all_caches()
             self.logger.info("[CACHE] Cleared all in-memory caches via Redis event.")
+            if self._incoming_consumer:
+                await self._incoming_consumer.ack(msg)
             return
 
         if not user_id:
+            if self._incoming_consumer:
+                await self._incoming_consumer.ack(msg)
             return
 
         if msg_type == "slash_command":
-            await self.process_slash_command(payload)
+            try:
+                await self.process_slash_command(payload)
+            finally:
+                if self._incoming_consumer:
+                    await self._incoming_consumer.ack(msg)
             return
 
         content = payload.get('content', '').strip()
@@ -421,17 +419,10 @@ class MessageHandler:
                 if filename.endswith(SUPPORTED_TEXT_EXTS):
                     try:
                         doc_id = str(uuid.uuid4())
-                        dummy_att = DummyAttachment(
+                        file_meta = await self.file_parser.prepare_file_for_indexing(
                             url,
                             original_filename,
-                            int(att.get("size") or 10 * 1024 * 1024),
-                            str(att.get("id") or ""),
-                            str(att.get("content_type") or ""),
-                            str(att.get("proxy_url") or ""),
-                        )
-
-                        file_meta = await self.file_parser.prepare_file_for_indexing(
-                            dummy_att,
+                            size=int(att.get("size") or 10 * 1024 * 1024),
                             base_name=doc_id,
                             chunk_dir=os.path.join(self.file_chunk_dir, doc_id),
                         )
@@ -531,9 +522,9 @@ class MessageHandler:
                 self.logger.info(f"[CACHE HIT] Loaded chat history for user {user_id} from in-memory RAM cache.")
 
             messages = []
-            for msg in history:
-                role = "model" if msg["role"] == "assistant" else msg["role"]
-                messages.append({"role": role, "parts": [{"text": msg["content"]}]})
+            for hist_msg in history:
+                role = "model" if hist_msg["role"] == "assistant" else hist_msg["role"]
+                messages.append({"role": role, "parts": [{"text": hist_msg["content"]}]})
 
             # Tin nhắn user cuối cùng chứa text và toàn bộ inline_data của ảnh tải được
             user_parts = [{"text": user_message}]
@@ -568,16 +559,23 @@ class MessageHandler:
             await self._publish_outgoing(reply_payload, user_id)
 
             self.logger.info(f"Published outgoing reply_batch ({len(chunks)} chunks) to Redis for user {user_id}")
+            if self._incoming_consumer:
+                await self._incoming_consumer.ack(msg)
 
         except Exception as e:
             self.logger.error(f"Error processing message for {user_id}: {e}")
-            await self._publish_outgoing({
-                "action": "reply",
-                "channel_id": payload.get('channel_id'),
-                "user_id": user_id,
-                "content": "Hệ thống đang bận, vui lòng thử lại sau! 😓",
-                "reference_message_id": payload.get('message_id')
-            }, user_id)
+            try:
+                await self._publish_outgoing({
+                    "action": "reply",
+                    "channel_id": payload.get('channel_id'),
+                    "user_id": user_id,
+                    "content": "Hệ thống đang bận, vui lòng thử lại sau! 😓",
+                    "reference_message_id": payload.get('message_id')
+                }, user_id)
+            except Exception:
+                pass
+            if self._incoming_consumer:
+                await self._incoming_consumer.ack(msg)
         finally:
             if user_id:
                 try:
@@ -617,7 +615,9 @@ class MessageHandler:
         import os
         from pathlib import Path
 
-        user_id = payload.get("user_id")
+        user_id: Optional[str] = payload.get("user_id")
+        if not user_id:
+            return
         prompt = payload.get("prompt")
         interaction_id = payload.get("interaction_id")
         channel_id = payload.get("channel_id")

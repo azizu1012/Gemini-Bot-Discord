@@ -289,9 +289,10 @@ class NoteManager:
                     else:
                         metadata = {}
 
+                    meta_dict = metadata if isinstance(metadata, dict) else {}
                     meta_str = (
-                        f"Loại: {metadata.get('type', note.get('note_type', 'N/A'))}, "
-                        f"Nguồn: {metadata.get('source', 'N/A')}, "
+                        f"Loại: {meta_dict.get('type', note.get('note_type', 'N/A'))}, "
+                        f"Nguồn: {meta_dict.get('source', 'N/A')}, "
                         f"Scope: {note.get('scope', 'user')}"
                     )
                 except Exception:

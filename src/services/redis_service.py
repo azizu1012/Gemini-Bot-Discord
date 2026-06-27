@@ -3,7 +3,7 @@ import json
 import os
 from typing import Any, Dict, Optional, AsyncIterator
 
-from redis.asyncio import Redis
+from redis.asyncio import Redis  # type: ignore[reportMissingImports]
 from src.core.config import logger
 
 
@@ -41,13 +41,20 @@ class RedisStreamConsumer:
                 result = await self._redis.xreadgroup(
                     self._group,
                     self._consumer_name,
-                    {self._stream: '>'},
+                    {self._stream: '0'},
                     count=1,
-                    block=2000,
                 )
                 if not result:
-                    await asyncio.sleep(0.05)
-                    continue
+                    result = await self._redis.xreadgroup(
+                        self._group,
+                        self._consumer_name,
+                        {self._stream: '>'},
+                        count=1,
+                        block=2000,
+                    )
+                    if not result:
+                        await asyncio.sleep(0.05)
+                        continue
 
                 for stream_entry in result:
                     stream_name_bytes = stream_entry[0]
@@ -73,8 +80,6 @@ class RedisStreamConsumer:
                         if isinstance(eid, bytes):
                             eid = eid.decode('utf-8')
 
-                        await self._redis.xack(self._stream, self._group, entry_id)
-
                         return _RedisMsg(value, key, str(eid))
 
             except asyncio.CancelledError:
@@ -84,6 +89,75 @@ class RedisStreamConsumer:
                 await asyncio.sleep(1)
 
         raise StopAsyncIteration
+
+    async def ack(self, msg: _RedisMsg) -> bool:
+        return await self.ack_id(msg.entry_id)
+
+    async def ack_id(self, entry_id: str) -> bool:
+        eid = entry_id
+        if isinstance(eid, bytes):
+            eid = eid.decode('utf-8')
+        try:
+            await self._redis.xack(self._stream, self._group, eid)
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to ACK entry '{entry_id}' on '{self._stream}': {e}")
+            return False
+
+    async def reclaim_pending(self, min_idle_ms: int = 30000) -> list[_RedisMsg]:
+        reclaimed: list[_RedisMsg] = []
+        try:
+            result = await self._redis.xpending(self._stream, self._group)
+            if not result or result[0] == 0:
+                return reclaimed
+
+            entries = await self._redis.xpending_range(
+                self._stream, self._group, min='-', max='+', count=50
+            )
+
+            msg_ids: list[str] = []
+            for entry in entries:
+                msg_id = entry.get(b'message_id', entry.get('message_id', b''))
+                if isinstance(msg_id, bytes):
+                    msg_id = msg_id.decode('utf-8')
+                idle_ms = entry.get(b'time_since_delivered', entry.get('time_since_delivered', 0))
+                if isinstance(idle_ms, bytes):
+                    idle_ms = int(idle_ms.decode('utf-8'))
+                else:
+                    idle_ms = int(idle_ms) if idle_ms else 0
+                if idle_ms >= min_idle_ms:
+                    msg_ids.append(str(msg_id))
+
+            if not msg_ids:
+                return reclaimed
+
+            claimed = await self._redis.xclaim(
+                self._stream, self._group, self._consumer_name, min_idle_ms, msg_ids
+            )
+
+            for stream_entry in claimed:
+                _ = stream_entry[0]
+                entries_list = stream_entry[1]
+                for eid, fields in entries_list:
+                    raw_key = fields.get(b'key') or fields.get('key') or b''
+                    if isinstance(raw_key, bytes):
+                        key = raw_key.decode('utf-8')
+                    else:
+                        key = str(raw_key)
+                    raw_value = fields.get(b'value') or fields.get('value')
+                    if raw_value is None:
+                        continue
+                    if isinstance(raw_value, bytes):
+                        raw_value = raw_value.decode('utf-8')
+                    value = json.loads(str(raw_value))
+                    eid_str = eid.decode('utf-8') if isinstance(eid, bytes) else str(eid)
+                    reclaimed.append(_RedisMsg(value, key, eid_str))
+
+            self._logger.info(f"Reclaimed {len(reclaimed)} pending entries on '{self._stream}'")
+        except Exception as e:
+            self._logger.warning(f"PEL reclaim error on '{self._stream}': {e}")
+
+        return reclaimed
 
     async def stop(self):
         self._running = False
@@ -116,6 +190,7 @@ class RedisStreamService:
                 socket_timeout=10,
                 protocol=2,
             )
+            assert self._redis is not None
             await asyncio.wait_for(self._redis.ping(), timeout=8)
             self.logger.info(f"Redis Streams producer started for {self.client_id}")
         except Exception as e:
@@ -127,6 +202,7 @@ class RedisStreamService:
         """Start a Redis Streams consumer with consumer group."""
         if self._redis is None:
             await self.start_producer()
+            assert self._redis is not None
 
         stream = str(stream)
         group_id = str(group_id)

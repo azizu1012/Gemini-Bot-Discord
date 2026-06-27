@@ -4,7 +4,7 @@ import os
 import uuid
 from typing import Optional, List, Dict, Any, Tuple
 
-import asyncpg
+import asyncpg  # type: ignore[reportMissingImports]
 
 from src.core.config import logger
 

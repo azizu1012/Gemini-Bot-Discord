@@ -96,7 +96,7 @@ class GlobalNoteView(discord.ui.View):
                 return
             await select_interaction.response.send_message(_format_note_detail(selected_note), ephemeral=True)
 
-        select.callback = on_select
+        select.callback = on_select  # type: ignore[attr-defined]
         self._select = select
         self.add_item(select)
 
@@ -115,8 +115,8 @@ class GlobalNoteView(discord.ui.View):
                 self._rebuild_components()
             await btn_interaction.response.edit_message(content=self.summary_text(), view=self)
 
-        prev_button.callback = on_prev
-        next_button.callback = on_next
+        prev_button.callback = on_prev  # type: ignore[attr-defined]
+        next_button.callback = on_next  # type: ignore[attr-defined]
         self.add_item(prev_button)
         self.add_item(next_button)
 
@@ -205,7 +205,7 @@ class GlobalNoteDemoteView(discord.ui.View):
                 ephemeral=True,
             )
 
-        select.callback = on_select
+        select.callback = on_select  # type: ignore[attr-defined]
         self._select = select
         self.add_item(select)
 
@@ -224,8 +224,8 @@ class GlobalNoteDemoteView(discord.ui.View):
                 self._rebuild_components()
             await btn_interaction.response.edit_message(content=self.summary_text(), view=self)
 
-        prev_button.callback = on_prev
-        next_button.callback = on_next
+        prev_button.callback = on_prev  # type: ignore[attr-defined]
+        next_button.callback = on_next  # type: ignore[attr-defined]
         self.add_item(prev_button)
         self.add_item(next_button)
 

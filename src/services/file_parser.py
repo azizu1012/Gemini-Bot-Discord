@@ -1,4 +1,3 @@
-import discord
 import os
 import aiohttp
 import csv
@@ -69,15 +68,15 @@ class FileParserService:
             name = name[:120].rstrip("._")
         return name
 
-    async def parse_attachment(self, attachment: discord.Attachment, base_name: str = "") -> Optional[Dict[str, str]]:
+    async def parse_attachment(self, url: str, filename: str, size: int = 0, proxy_url: str = "", base_name: str = "") -> Optional[Dict[str, str]]:
         """Parse and extract text from attachment."""
-        filename = attachment.filename
         safe_filename = base_name or self._safe_filename(filename)
         local_path = os.path.join(self.storage_path, safe_filename)
         
-        local_path, download_error = await self._download_attachment(attachment, local_path)
+        local_path, download_error = await self._download_attachment(url, filename, size, local_path)
         if download_error:
             return {"filename": filename, "content": download_error}
+        assert local_path is not None
         
         # STEP 2: Extract text
         extracted_text = ""
@@ -143,19 +142,22 @@ class FileParserService:
 
     async def prepare_file_for_indexing(
         self,
-        attachment: discord.Attachment,
+        url: str,
+        filename: str,
+        size: int = 0,
+        proxy_url: str = "",
         base_name: str = "",
         chunk_dir: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Download and chunk a file for indexing."""
-        filename = attachment.filename
         safe_filename = base_name or self._safe_filename(filename)
         local_path = os.path.join(self.storage_path, safe_filename)
         resolved_chunk_dir = chunk_dir or os.path.join(self.storage_path, f"{safe_filename}_chunks")
 
-        local_path, download_error = await self._download_attachment(attachment, local_path)
+        local_path, download_error = await self._download_attachment(url, filename, size, local_path)
         if download_error:
             return {"filename": filename, "error": download_error}
+        assert local_path is not None
 
         file_extension = os.path.splitext(filename)[1].lower()
 
@@ -178,20 +180,19 @@ class FileParserService:
             self.logger.error(f"Index prep failed for '{filename}': {e}")
             return {"filename": filename, "error": f"[LỖI: Không thể chuẩn bị file để index: {e}]"}
 
-    async def _download_attachment(self, attachment: discord.Attachment, local_path: str) -> Tuple[Optional[str], Optional[str]]:
-        attachment_size = int(getattr(attachment, "size", 0) or 0)
-        if attachment_size > self.MAX_FILE_SIZE_BYTES:
+    async def _download_attachment(self, url: str, filename: str, size: int, local_path: str) -> Tuple[Optional[str], Optional[str]]:
+        if size > self.MAX_FILE_SIZE_BYTES:
             self.logger.warning(
-                f"File {attachment.filename} ({(attachment_size / 1024 / 1024):.2f} MB) too large. Skipping."
+                f"File {filename} ({(size / 1024 / 1024):.2f} MB) too large. Skipping."
             )
             return None, f"[LỖI: File quá lớn, giới hạn {self.MAX_FILE_SIZE_BYTES // 1024 // 1024}MB]"
 
-        download_url = getattr(attachment, "url", "") or getattr(attachment, "proxy_url", "")
+        download_url = url
         if not download_url:
             return None, "[LỖI: Discord không cung cấp URL tải file]"
 
         try:
-            required_space_mb = (attachment_size // (1024 * 1024)) + 10
+            required_space_mb = (size // (1024 * 1024)) + 10
             if self.cleanup_mgr.get_disk_free_space_mb() < required_space_mb:
                 self.logger.warning(f"Disk full. Cannot download new file. Need {required_space_mb}MB.")
                 return None, "[LỖI: Server sắp hết bộ nhớ. Vui lòng thử lại sau.]"
@@ -539,6 +540,8 @@ class FileParserService:
         truncated = False
         page_start = 1
 
+        if pypdf is None:
+            return [], False
         reader = pypdf.PdfReader(path)
         for page_idx, page in enumerate(reader.pages, start=1):
             text = page.extract_text() or ""
