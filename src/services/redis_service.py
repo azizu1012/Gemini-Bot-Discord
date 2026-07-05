@@ -41,23 +41,16 @@ class RedisStreamConsumer:
                 result = await self._redis.xreadgroup(
                     self._group,
                     self._consumer_name,
-                    {self._stream: '0'},
+                    {self._stream: '>'},
                     count=1,
+                    block=2000,
                 )
                 if not result:
-                    result = await self._redis.xreadgroup(
-                        self._group,
-                        self._consumer_name,
-                        {self._stream: '>'},
-                        count=1,
-                        block=2000,
-                    )
-                    if not result:
-                        await asyncio.sleep(0.05)
-                        continue
+                    await asyncio.sleep(0.05)
+                    continue
 
+                # result = [(stream, [(entry_id, {key: val, value: ...})])]
                 for stream_entry in result:
-                    stream_name_bytes = stream_entry[0]
                     entries = stream_entry[1]
                     for entry_id, fields in entries:
                         if not self._running:
