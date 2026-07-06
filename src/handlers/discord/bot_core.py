@@ -449,7 +449,7 @@ class BotCore:
                 channel = self.bot.get_channel(channel_id)
                 if not channel:
                     channel = await self.bot.fetch_channel(channel_id)
-                if channel and bool(payload.get("typing")):
+                if channel and bool(payload.get("typing")) and user_id in self.active_typing_tasks:
                     await self.bot.http.send_typing(channel.id)
                 if channel and not bool(payload.get("typing")):
                     self._cancel_typing_task(user_id)
@@ -602,6 +602,8 @@ class BotCore:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
             return
+
+        self._cancel_typing_task(user_id)
 
         reply_group_id = str(payload.get("reply_group_id") or payload.get("reference_message_id") or "unknown")
         allow_user_mentions = payload.get("allow_user_mentions") or []
@@ -916,6 +918,11 @@ class BotCore:
                 sources = ",".join(sorted({str(item.get("source", "unknown")) for item in attachment_payloads}))
                 self.logger.info(f"Collected {len(attachment_payloads)} attachment(s) for message {message.id} from {sources}")
 
+            reference_content = None
+            referenced_msg = await self._resolve_referenced_message(message)
+            if referenced_msg:
+                reference_content = referenced_msg.content
+
             payload = {
                 "message_id": str(message.id),
                 "channel_id": str(message.channel.id),
@@ -927,6 +934,7 @@ class BotCore:
                 "is_dm": is_dm,
                 "mentions": [str(m.id) for m in message.mentions],
                 "reference_message_id": str(message.reference.message_id) if message.reference else None,
+                "reference_content": reference_content,
                 "attachments": attachment_payloads,
             }
 

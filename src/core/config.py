@@ -129,7 +129,11 @@ class Config:
         if not self.GEMINI_API_KEYS:
             self.logger.error("Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.")
         else:
-            self.logger.info(f"✅ Đã thiết lập {len(self.GEMINI_API_KEYS)} Gemini API keys cho Smart Rotation.")
+            router_mode = bool(os.getenv("ROUTER_AUTH_KEY", "")) and bool(os.getenv("GEMINI_BASE_URL", ""))
+            if router_mode:
+                self.logger.info(f"✅ Chế độ Router — auth key duy nhất, {len(self.GEMINI_API_KEYS)} Google key dự phòng.")
+            else:
+                self.logger.info(f"✅ Chế độ Direct — xoay vòng {len(self.GEMINI_API_KEYS)} Google Gemini API keys.")
 
         # --- SEARCH API KEYS ---
         # --- OPENAI / CUSTOM ENDPOINT ---
@@ -167,7 +171,7 @@ class Config:
         self.MODERATOR_USER_IDS = [i.strip() for i in self.MODERATOR_ID_RAW.split(",") if i.strip()] if self.MODERATOR_ID_RAW else []
 
         # --- PRODUCTION STABILITY TUNING ---
-        self.REASONING_MAX_API_RETRIES = self._get_int("REASONING_MAX_API_RETRIES", 3, min_value=1, max_value=6)
+        self.REASONING_MAX_API_RETRIES = self._get_int("REASONING_MAX_API_RETRIES", 5, min_value=1, max_value=6)
         self.REASONING_MAX_LOOPS = self._get_int("REASONING_MAX_LOOPS", 3, min_value=1, max_value=6)
         self.FINAL_MAX_API_RETRIES = self._get_int("FINAL_MAX_API_RETRIES", 3, min_value=1, max_value=6)
         self.FALLBACK_MAX_API_RETRIES = self._get_int("FALLBACK_MAX_API_RETRIES", 2, min_value=1, max_value=5)

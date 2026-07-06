@@ -209,3 +209,11 @@ Bypass Router 30s khi ConnectError. Timeout 15000ms (int).
 - **`FileParserService` không còn phụ thuộc `discord`**: `_download_attachment`, `parse_attachment`, `prepare_file_for_indexing` nhận `url: str`, `filename: str`, `size: int` trực tiếp thay vì `discord.Attachment`
 - **Xoá `import discord` khỏi `file_parser.py`**: Module thuần utility, không biết gì về Discord model
 - **Caller sửa native**: `message_handler.py` gọi `prepare_file_for_indexing(url, filename, size=...)` trực tiếp, không qua DummyAttachment wrapper
+
+### Session 16 — Router 500 isolation + google-genai 2.8.0
+- **Xoá `router_bypass_until`**: Loại bỏ hybrid fallback router→Google direct khỏi `gemini_api_manager.py`
+- **Xoá 500→endpoint_down handlers**: 3 handler trong `gemini_pipeline.py` removed — không còn fallback router→direct khi 500
+- **Fix config.py log**: Hiển thị "Router mode" / "Direct mode" thay vì "Smart Rotation" gây hiểu nhầm
+- **Upgrade google-genai**: `1.52.0` → `2.8.0` (khớp version router, internal tenacity retry mạnh hơn)
+- **Clean test scripts**: Xoá 14 test script tạm thời khỏi project root
+- **Router fix**: `handle_error` trong router không còn raise RuntimeError cho `bad_request`/`project_denied` — freeze key + thử key tiếp theo, không ngắt retry loop

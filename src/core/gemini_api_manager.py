@@ -37,26 +37,24 @@ class GeminiApiManager:
         self.api_key_history_lock = threading.Lock()
         self._gemini_clients: Dict[Any, Any] = {}
         self._gemini_clients_lock = threading.Lock()
-        self.router_bypass_until = 0.0
+
 
     # --- Key selection ---
 
     async def _get_best_api_key(self, preferred_model_alias: Optional[str] = None) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]]]:
+        router_key = getattr(self.config, "ROUTER_AUTH_KEY", "")
+        base_url = getattr(self.config, "GEMINI_BASE_URL", "") or ""
+
+        if base_url and router_key:
+            model_alias = preferred_model_alias or "gemini-flash-lite"
+            model_id = self.api_router.get_model_id(model_alias)
+            return router_key, model_id, model_alias, {"pool": "router", "key": router_key}
+
         if preferred_model_alias:
             if not self.api_router._allow_provider_request("gemini"):
                 self.logger.warning("Gemini circuit breaker OPEN; no gemini key will be reserved.")
                 return None, None, None, None
-            reservation = await self.api_router.get_next_key_for_model_reservation(preferred_model_alias)
-        else:
-            reservation = await self.api_router.get_next_key_reservation()
 
-        if reservation:
-            api_key = reservation.get("key")
-            model_alias = reservation.get("model_alias")
-            if api_key and model_alias:
-                return api_key, self.api_router.get_model_id(model_alias), model_alias, reservation
-
-        self.logger.warning("⚠️ Router exhausted, trying legacy key selection...")
         with self.key_lock:
             now = time.time()
             active_keys = [k for k, v in self.key_status.items() if v['frozen_until'] < now]
@@ -70,7 +68,7 @@ class GeminiApiManager:
 
             chosen_key = random.choice(best_candidates)
             self.key_status[chosen_key]['usage'] += 1
-            fallback_alias = preferred_model_alias or self.api_router.get_preferred_model()
+            fallback_alias = preferred_model_alias or "gemini-flash-lite"
 
             legacy_reservation = {
                 "key": chosen_key,
@@ -90,27 +88,12 @@ class GeminiApiManager:
         permanently_exhaust: bool = False,
         reservation: Optional[Dict[str, Any]] = None,
     ):
-        # 503 Unavailable is a transient Google server error, not a quota limit.
-        # We enforce a short delay, but do not exhaust/affect router quota for this key.
         is_503 = reason == "unavailable"
-
-        if reason == "endpoint_down":
-            self.router_bypass_until = time.time() + 30
-            self.logger.warning("⚠️ [ROUTER-DOWN] Router API endpoint is unreachable. Bypassing Router and calling Google directly for 30 seconds.")
-
-        model = model_alias or self.api_router.get_current_model()
         pool = (reservation or {}).get("pool", "main")
-        counter_key = (reservation or {}).get("counter_key")
 
-        if pool != "legacy" and not is_503 and reason != "endpoint_down":
-            if permanently_exhaust:
-                self.api_router.mark_key_exhausted(key, model, pool=pool, counter_key=counter_key)
-            else:
-                self.api_router.mark_key_cooldown(key, model, duration, pool=pool, counter_key=counter_key)
-
-        provider = (reservation or {}).get("provider", "gemini")
-        if provider == "gemini" and reason in {"rate_limit", "unavailable", "empty_candidate", "quota"}:
-            self.api_router.record_provider_failure("gemini", reason)
+        if pool == "router":
+            self.logger.warning(f"🔌 Router key ...{key[-4:]} failed ({reason}), skipping cooldown.")
+            return
 
         with self.key_lock:
             if key in self.key_status:
@@ -120,19 +103,14 @@ class GeminiApiManager:
             self.logger.warning(f"🚫 API Key ...{key[-4:]} marked invalid and excluded for current quota cycle.")
         elif is_503:
             self.logger.warning(f"⚠️ API Key ...{key[-4:]} delayed for {duration}s due to Google Server 503 (Unavailable).")
-        elif reason == "endpoint_down":
-            self.logger.warning(f"🔌 Connection to Router failed. API Key ...{key[-4:]} marked cooldown for {duration}s.")
         else:
             self.logger.warning(f"❄️ API Key ...{key[-4:]} frozen for {duration}s due to rate limit/quota.")
 
     def _commit_selected_key(self, reservation: Optional[Dict[str, Any]]) -> None:
         if not reservation:
             return
-        if reservation.get("pool") == "legacy":
+        if reservation.get("pool") in ("legacy", "router"):
             return
-        self.api_router.commit_key_usage(reservation)
-        if reservation.get("provider") == "gemini":
-            self.api_router.record_provider_success("gemini")
 
     # --- Error classification ---
 
@@ -202,33 +180,29 @@ class GeminiApiManager:
         self,
         api_key: str,
     ):
+        router_key = getattr(self.config, "ROUTER_AUTH_KEY", "")
         base_url = getattr(self.config, "GEMINI_BASE_URL", "") or ""
-        if time.time() < getattr(self, "router_bypass_until", 0.0):
-            base_url = ""
 
-        cache_key = ("gemini", base_url, api_key)
+        use_router = bool(base_url and router_key and api_key == router_key)
+        effective_base = base_url if use_router else ""
+
+        cache_key = ("gemini", effective_base, api_key)
 
         with self._gemini_clients_lock:
             existing = self._gemini_clients.get(cache_key)
             if existing is not None:
                 return existing
 
-            if base_url:
-                router_key = getattr(self.config, "ROUTER_AUTH_KEY", "")
-                if not router_key:
-                    # ROUTER_AUTH_KEY rỗng → không gửi Google Key lên Router,
-                    # quay về xoay vòng key cơ bản qua Google trực tiếp
-                    client = genai.Client(api_key=api_key)
-                else:
-                    headers = {"Authorization": f"Bearer {router_key}"}
-                    client = genai.Client(
-                        api_key=router_key,
-                        http_options=genai_types.HttpOptions(
-                            base_url=base_url,
-                            headers=headers,
-                            timeout=self.config.GEMINI_TIMEOUT_MS
-                        ),
-                    )
+            if use_router:
+                headers = {"Authorization": f"Bearer {router_key}"}
+                client = genai.Client(
+                    api_key=router_key,
+                    http_options=genai_types.HttpOptions(
+                        base_url=base_url,
+                        headers=headers,
+                        timeout=self.config.GEMINI_TIMEOUT_MS
+                    ),
+                )
             else:
                 client = genai.Client(api_key=api_key)
             self._gemini_clients[cache_key] = client
@@ -372,18 +346,19 @@ class GeminiApiManager:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
     ):
-        if time.time() < getattr(self, "router_bypass_until", 0.0):
-            model_name = "gemini-flash-lite-latest"
-
         request_config = dict(generation_config)
-        request_config["system_instruction"] = system_instruction
         request_config["safety_settings"] = self.config.SAFETY_SETTINGS
         if tools:
             request_config["tools"] = tools
 
         client = self._get_or_create_gemini_client(api_key)
 
-        sdk_contents = []
+        def _strip_nulls(d: dict) -> dict:
+            return {k: v for k, v in d.items() if v is not None}
+
+        sdk_contents: list = []
+        if system_instruction:
+            sdk_contents.append({"role": "user", "parts": [{"text": system_instruction}]})
         for msg in messages:
             if not isinstance(msg, dict):
                 sdk_contents.append(msg)
@@ -391,7 +366,7 @@ class GeminiApiManager:
 
             role = msg.get("role")
             parts = msg.get("parts", [])
-            sdk_parts = []
+            sdk_parts: list = []
 
             for part in parts:
                 if isinstance(part, dict):
@@ -403,59 +378,49 @@ class GeminiApiManager:
                         except Exception:
                             thought_sig = thought_sig.encode("utf-8")
 
-                    part_kwargs = {}
+                    part_dict: dict = {}
                     if thought is not None:
-                        part_kwargs["thought"] = thought
+                        part_dict["thought"] = thought
                     if thought_sig is not None:
-                        part_kwargs["thought_signature"] = thought_sig
+                        part_dict["thought_signature"] = thought_sig
 
                     if "text" in part:
-                        part_kwargs["text"] = part["text"]
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["text"] = part["text"]
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif "inline_data" in part:
                         inline = part["inline_data"]
-                        part_kwargs["inline_data"] = genai_types.Blob(
-                            data=inline["data"],
-                            mime_type=inline["mime_type"]
-                        )
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["inline_data"] = {"data": inline["data"], "mime_type": inline["mime_type"]}
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif "function_response" in part:
                         fr = part["function_response"]
-                        # Đảm bảo response truyền cho API luôn là một dict
                         raw_response = fr.get("response", {})
                         if not isinstance(raw_response, dict):
                             raw_response = {"content": str(raw_response)}
                         elif "content" not in raw_response:
-                            # Nếu response là dict trống hoặc không có key 'content', đảm bảo có cấu trúc đúng
                             if not raw_response:
                                 raw_response = {"content": ""}
-
-                        part_kwargs["function_response"] = genai_types.FunctionResponse(
-                            name=fr.get("name"),
-                            response=raw_response
-                        )
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["function_response"] = {"name": fr.get("name"), "response": raw_response}
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif "function_call" in part:
                         fc = part["function_call"]
-                        part_kwargs["function_call"] = genai_types.FunctionCall(
-                            name=fc.get("name"),
-                            args=fc.get("args")
-                        )
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["function_call"] = {"name": fc.get("name"), "args": fc.get("args")}
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif thought is not None or thought_sig is not None:
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        sdk_parts.append(_strip_nulls(part_dict))
                     else:
                         sdk_parts.append(part)
                 else:
                     sdk_parts.append(part)
 
-            sdk_contents.append(genai_types.Content(role=role, parts=sdk_parts))
+            sdk_contents.append({"role": role, "parts": sdk_parts})
+
+        generate_content_config = genai_types.GenerateContentConfig(**request_config)
 
         return await asyncio.to_thread(
             client.models.generate_content,
             model=model_name,
             contents=sdk_contents,
-            config=request_config,  # type: ignore[arg-type]
+            config=generate_content_config,
         )
 
     async def _generate_gemini_content_stream(
@@ -467,18 +432,19 @@ class GeminiApiManager:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
     ):
-        if time.time() < getattr(self, "router_bypass_until", 0.0):
-            model_name = "gemini-flash-lite-latest"
-
         request_config = dict(generation_config)
-        request_config["system_instruction"] = system_instruction
         request_config["safety_settings"] = self.config.SAFETY_SETTINGS
         if tools:
             request_config["tools"] = tools
 
         client = self._get_or_create_gemini_client(api_key)
 
-        sdk_contents = []
+        def _strip_nulls(d: dict) -> dict:
+            return {k: v for k, v in d.items() if v is not None}
+
+        sdk_contents: list = []
+        if system_instruction:
+            sdk_contents.append({"role": "user", "parts": [{"text": system_instruction}]})
         for msg in messages:
             if not isinstance(msg, dict):
                 sdk_contents.append(msg)
@@ -486,7 +452,7 @@ class GeminiApiManager:
 
             role = msg.get("role")
             parts = msg.get("parts", [])
-            sdk_parts = []
+            sdk_parts: list = []
 
             for part in parts:
                 if isinstance(part, dict):
@@ -498,59 +464,49 @@ class GeminiApiManager:
                         except Exception:
                             thought_sig = thought_sig.encode("utf-8")
 
-                    part_kwargs = {}
+                    part_dict: dict = {}
                     if thought is not None:
-                        part_kwargs["thought"] = thought
+                        part_dict["thought"] = thought
                     if thought_sig is not None:
-                        part_kwargs["thought_signature"] = thought_sig
+                        part_dict["thought_signature"] = thought_sig
 
                     if "text" in part:
-                        part_kwargs["text"] = part["text"]
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["text"] = part["text"]
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif "inline_data" in part:
                         inline = part["inline_data"]
-                        part_kwargs["inline_data"] = genai_types.Blob(
-                            data=inline["data"],
-                            mime_type=inline["mime_type"]
-                        )
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["inline_data"] = {"data": inline["data"], "mime_type": inline["mime_type"]}
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif "function_response" in part:
                         fr = part["function_response"]
-                        # Đảm bảo response truyền cho API luôn là một dict
                         raw_response = fr.get("response", {})
                         if not isinstance(raw_response, dict):
                             raw_response = {"content": str(raw_response)}
                         elif "content" not in raw_response:
-                            # Nếu response là dict trống hoặc không có key 'content', đảm bảo có cấu trúc đúng
                             if not raw_response:
                                 raw_response = {"content": ""}
-
-                        part_kwargs["function_response"] = genai_types.FunctionResponse(
-                            name=fr.get("name"),
-                            response=raw_response
-                        )
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["function_response"] = {"name": fr.get("name"), "response": raw_response}
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif "function_call" in part:
                         fc = part["function_call"]
-                        part_kwargs["function_call"] = genai_types.FunctionCall(
-                            name=fc.get("name"),
-                            args=fc.get("args")
-                        )
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        part_dict["function_call"] = {"name": fc.get("name"), "args": fc.get("args")}
+                        sdk_parts.append(_strip_nulls(part_dict))
                     elif thought is not None or thought_sig is not None:
-                        sdk_parts.append(genai_types.Part(**part_kwargs))
+                        sdk_parts.append(_strip_nulls(part_dict))
                     else:
                         sdk_parts.append(part)
                 else:
                     sdk_parts.append(part)
 
-            sdk_contents.append(genai_types.Content(role=role, parts=sdk_parts))
+            sdk_contents.append({"role": role, "parts": sdk_parts})
+
+        stream_config = genai_types.GenerateContentConfig(**request_config)
 
         stream = await asyncio.to_thread(
             client.models.generate_content_stream,
             model=model_name,
             contents=sdk_contents,
-            config=request_config,  # type: ignore[arg-type]
+            config=stream_config,
         )
         for chunk in stream:
             yield chunk

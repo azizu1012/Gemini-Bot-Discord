@@ -125,6 +125,63 @@ Khi chỉ đọc `'>'`, mỗi message chỉ được deliver một lần duy nh�
 
 ---
 
+---
+
+## INC-004: Router 500 random khi 1 key pool có vấn đề
+
+**Ngày:** 2026-07-06
+**Mức độ:** High — Bot vẫn chạy được nhờ retry, nhưng response chậm hơn.
+
+### Triệu chứng
+- Bot nhận 500 từ Router không định kỳ (khoảng 40-60% request).
+- 500 xuất hiện cả trên request đầu tiên lẫn sau tool-calling.
+- Bot vẫn trả lời được sau 1-2 lần retry.
+- 500 từ router có message `{'message': 'Internal Server Error', 'status': 'Internal Server Error'}` — generic FastAPI error, không có detail.
+
+### Nguyên nhân gốc rễ
+
+**File:** `src/core/providers/gemini/utils.py` — function `handle_error`
+
+Router có cơ chế retry pool key (MAX_RETRIES=12, quét toàn bộ pool). Tuy nhiên, `handle_error` xử lý `bad_request` (code 400, như "API key not valid") và `project_denied` (code 403, GCP project bị deny) bằng cách **raise RuntimeError ngay lập tức**, không thử key tiếp theo:
+
+```python
+# Code cũ (bug)
+if reason == "bad_request":
+    raise RuntimeError(f"bad_request: {error_text[:500]}")
+if reason == "project_denied":
+    raise RuntimeError(f"project_denied: {error_text[:300]}")
+```
+
+Khi RuntimeError thoát ra ngoài `call_gemini`, FastAPI bắt và trả 500 mặc định, mất hết detail message gốc.
+
+### Cách khắc phục
+
+**Sửa đổi tại `src/core/providers/gemini/utils.py`:**
+
+1. `bad_request` → freeze key 3600s + penalty, `return` (thử key tiếp theo)
+2. `project_denied` → freeze key 3600s + penalty, `return` (thử key tiếp theo)
+
+```python
+# Code mới (fixed)
+if reason == "bad_request":
+    router.freeze_key(api_key, config.KEY_INVALID_COOLDOWN_SECONDS, model_id, "bad_request")
+    apply_error_penalty(api_key, "bad_request", model_id)
+    logger.warning("Key ...%s bad_request, frozen + penalty", api_key[-4:])
+    await asyncio.sleep(config.GEMINI_API_KEY_INTERVAL)
+    return
+if reason == "project_denied":
+    router.freeze_key(api_key, config.KEY_INVALID_COOLDOWN_SECONDS, model_id, "project_denied")
+    apply_error_penalty(api_key, "project_denied", model_id)
+    logger.warning("Key ...%s project_denied, frozen + penalty", api_key[-4:])
+    await asyncio.sleep(config.GEMINI_API_KEY_INTERVAL)
+    return
+```
+
+### Tác dụng phụ
+- Pool vẫn còn key invalid → thi thoảng vẫn tốn thời gian scan key chết. Cần dọn key pool thủ công để tối ưu hoàn toàn.
+
+---
+
 ## Checklist kiểm tra khi bot không hồi đáp
 
 1. **Check CPU**: process Python `run_bot` > 50% CPU → có thể đang spin.

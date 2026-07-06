@@ -290,7 +290,7 @@ class MessageHandler:
 
         try:
             async for msg in consumer:
-                asyncio.create_task(self.process_message(msg))
+                await self.process_message(msg)
         except asyncio.CancelledError:
             self.logger.info("Worker task cancelled")
             raise
@@ -484,7 +484,11 @@ class MessageHandler:
             if intent_cues:
                 content += "\n\n" + "\n".join(intent_cues)
 
-            user_message = content + attachment_data
+            reference_content = payload.get("reference_content")
+            if reference_content:
+                user_message = f"[Trả lời tin nhắn: {reference_content}]\n{content}{attachment_data}"
+            else:
+                user_message = content + attachment_data
 
             # 6. Database Logs & RAM Cache (done with final consolidated message)
             await self.db_repo.log_message_db(user_id, "user", user_message)
