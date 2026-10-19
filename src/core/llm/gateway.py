@@ -1,4 +1,4 @@
-"""LLMGateway — façade thay thế GeminiApiManager.
+"""LLMGateway — façade thay thế cơ chế quản lý API key cũ (đã xóa).
 
 Không quản lý key rotation/quota (router_api bên ngoài lo phần đó).
 - generate(): resolve slot theo role; lỗi transient (role != "fallback") thử thêm 1 lần
