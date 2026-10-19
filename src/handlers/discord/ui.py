@@ -2,6 +2,7 @@ import os
 from typing import Any, Dict, List, Optional
 import discord
 from src.database.repository import DatabaseRepository
+from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key
 
 
 def _flatten_note_preview(note: Dict[str, Any], max_len: int = 80) -> str:
@@ -272,3 +273,291 @@ class ImageHistoryView(discord.ui.View):
     def __init__(self, history: List[Dict[str, Any]]):
         super().__init__(timeout=300)
         self.add_item(ImageHistorySelect(history))
+
+
+# ══════════════════════════════════════════════════════════════
+# Endpoint & model picker UI (endpoint-only refactor)
+# ══════════════════════════════════════════════════════════════
+
+MODELS_PER_PAGE = 25
+
+SLOT_ORDER = ("reasoning", "final", "fallback", "vision")
+SLOT_LABELS = {
+    "reasoning": "🧠 Reasoning",
+    "final": "✍️ Final",
+    "fallback": "🪂 Fallback",
+    "vision": "👁️ Vision",
+}
+
+
+def normalize_models(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Chuẩn hóa + dedupe + sort danh sách model trả về từ adapter."""
+    seen: Dict[str, Dict[str, Any]] = {}
+    for item in raw or []:
+        model_id = str((item or {}).get("id") or "").strip()
+        if not model_id or model_id in seen:
+            continue
+        display = str((item or {}).get("name") or "").strip() or model_id
+        seen[model_id] = {"id": model_id, "name": display}
+    return sorted(seen.values(), key=lambda m: m["id"].lower())
+
+
+def filter_models(models: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    q = (query or "").strip().lower()
+    if not q:
+        return list(models)
+    return [
+        m for m in models
+        if q in str(m.get("id") or "").lower() or q in str(m.get("name") or "").lower()
+    ]
+
+
+def paginate_models(models: List[Dict[str, Any]], page: int, page_size: int = MODELS_PER_PAGE) -> List[Dict[str, Any]]:
+    if page < 0:
+        page = 0
+    start = page * page_size
+    return list(models[start:start + page_size])
+
+
+def total_model_pages(count: int, page_size: int = MODELS_PER_PAGE) -> int:
+    return max(1, (count + page_size - 1) // page_size)
+
+
+class ModelPickerView(discord.ui.View):
+    """Picker 1 slot: select 25 model/trang + Trước/Sau + Tìm kiếm + Để trống + Xác nhận."""
+
+    def __init__(self, *, models: List[Dict[str, Any]], slot: str):
+        super().__init__(timeout=300)
+        self.models = list(models)
+        self.slot = slot
+        self.query = ""
+        self.page = 0
+        self.selected_model_id: Optional[str] = None
+        self.skipped = False
+        self.confirmed = False
+        self._build()
+
+    @property
+    def filtered(self) -> List[Dict[str, Any]]:
+        return filter_models(self.models, self.query)
+
+    @property
+    def total_pages(self) -> int:
+        return total_model_pages(len(self.filtered))
+
+    @property
+    def page_models(self) -> List[Dict[str, Any]]:
+        return paginate_models(self.filtered, self.page)
+
+    def apply_query(self, query: str) -> None:
+        self.query = query or ""
+        self.page = 0
+        self._build()
+
+    def summary_embed(self) -> discord.Embed:
+        label = SLOT_LABELS.get(self.slot, self.slot)
+        description = f"Trang {self.page + 1}/{self.total_pages} · {len(self.filtered)} model"
+        if self.query:
+            description += f"\n🔍 Từ khóa: `{self.query}`"
+        embed = discord.Embed(title=f"Chọn model cho slot {label}", description=description, color=discord.Color.blurple())
+        current = self.selected_model_id or "(chưa chọn — có thể bấm 🚫 Để trống)"
+        embed.add_field(name="Model đang chọn", value=f"`{current}`", inline=False)
+        return embed
+
+    def _build(self) -> None:
+        self.clear_items()
+        page_models = self.page_models
+        if page_models:
+            options = []
+            for m in page_models:
+                label = str(m.get("id") or "")[:100]
+                desc = str(m.get("name") or "")[:100]
+                options.append(discord.SelectOption(label=label, description=desc if desc != label else None, value=label))
+            select = discord.ui.Select(
+                placeholder=f"Chọn model (trang {self.page + 1}/{self.total_pages})",
+                options=options,
+            )
+
+            async def on_select(interaction: discord.Interaction):
+                self.selected_model_id = select.values[0]
+                await interaction.response.edit_message(embed=self.summary_embed(), view=self)
+
+            select.callback = on_select  # type: ignore[attr-defined]
+            self.add_item(select)
+
+        prev_button = discord.ui.Button(label="◀ Trước", style=discord.ButtonStyle.secondary, disabled=self.page <= 0)
+        next_button = discord.ui.Button(label="Sau ▶", style=discord.ButtonStyle.secondary, disabled=self.page >= self.total_pages - 1)
+        search_button = discord.ui.Button(label="🔍 Tìm kiếm", style=discord.ButtonStyle.primary)
+        skip_button = discord.ui.Button(label="🚫 Để trống", style=discord.ButtonStyle.secondary)
+        confirm_button = discord.ui.Button(label="✅ Xác nhận", style=discord.ButtonStyle.success)
+
+        async def on_prev(interaction: discord.Interaction):
+            self.page = max(0, self.page - 1)
+            self._build()
+            await interaction.response.edit_message(embed=self.summary_embed(), view=self)
+
+        async def on_next(interaction: discord.Interaction):
+            self.page = min(self.total_pages - 1, self.page + 1)
+            self._build()
+            await interaction.response.edit_message(embed=self.summary_embed(), view=self)
+
+        async def on_search(interaction: discord.Interaction):
+            await interaction.response.send_modal(SearchModal(self))
+
+        async def on_skip(interaction: discord.Interaction):
+            self.selected_model_id = None
+            self.skipped = True
+            self.confirmed = True
+            self.stop()
+            await interaction.response.edit_message(content="🚫 Đã chọn để trống — sẽ áp default rule.", embed=None, view=None)
+
+        async def on_confirm(interaction: discord.Interaction):
+            if not self.selected_model_id:
+                await interaction.response.send_message("Hãy chọn model trong menu, hoặc bấm 🚫 Để trống.", ephemeral=True)
+                return
+            self.confirmed = True
+            self.stop()
+            await interaction.response.edit_message(content=f"✅ Đã chọn `{self.selected_model_id}`.", embed=None, view=None)
+
+        prev_button.callback = on_prev  # type: ignore[attr-defined]
+        next_button.callback = on_next  # type: ignore[attr-defined]
+        search_button.callback = on_search  # type: ignore[attr-defined]
+        skip_button.callback = on_skip  # type: ignore[attr-defined]
+        confirm_button.callback = on_confirm  # type: ignore[attr-defined]
+        self.add_item(prev_button)
+        self.add_item(next_button)
+        self.add_item(search_button)
+        self.add_item(skip_button)
+        self.add_item(confirm_button)
+
+
+class SearchModal(discord.ui.Modal, title="🔍 Tìm kiếm model"):
+    keyword = discord.ui.TextInput(label="Từ khóa (khớp id hoặc tên)", required=False, max_length=100)
+
+    def __init__(self, view: ModelPickerView):
+        super().__init__(timeout=300)
+        self.picker = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.picker.apply_query(str(self.keyword.value or ""))
+        await interaction.response.edit_message(embed=self.picker.summary_embed(), view=self.picker)
+
+
+class SDKChoiceView(discord.ui.View):
+    """2 nút chọn SDK; `on_choose(interaction, sdk)` do nơi gọi cung cấp."""
+
+    def __init__(self, on_choose):
+        super().__init__(timeout=300)
+        self._on_choose = on_choose
+        genai_button = discord.ui.Button(label="Google genAI", style=discord.ButtonStyle.primary)
+        openai_button = discord.ui.Button(label="OpenAI-compatible", style=discord.ButtonStyle.secondary)
+
+        async def on_genai(interaction: discord.Interaction):
+            await self._on_choose(interaction, "genai")
+
+        async def on_openai(interaction: discord.Interaction):
+            await self._on_choose(interaction, "openai")
+
+        genai_button.callback = on_genai  # type: ignore[attr-defined]
+        openai_button.callback = on_openai  # type: ignore[attr-defined]
+        self.add_item(genai_button)
+        self.add_item(openai_button)
+
+
+class EndpointConfigModal(discord.ui.Modal, title="Cấu hình Endpoint"):
+    def __init__(self, *, flow: "EndpointConfigFlow", sdk: str, default_url: str):
+        super().__init__(timeout=300)
+        self.flow = flow
+        self.sdk = sdk
+        self.url_input = discord.ui.TextInput(label="Base URL", default=default_url, required=True)
+        self.key_input = discord.ui.TextInput(label="API Key", required=True)
+        self.add_item(self.url_input)
+        self.add_item(self.key_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = str(self.url_input.value or "").strip()
+        key = str(self.key_input.value or "").strip()
+        if not url or not key:
+            await interaction.response.send_message("❌ URL và Key không được để trống.", ephemeral=True)
+            return
+        await self.flow.configure(interaction, self.sdk, url, key)
+
+
+class EndpointConfigFlow:
+    """Điều phối /endpoint config: SDK → modal URL/Key → validate + fetch models → picker 4 slot → lưu DB."""
+
+    def __init__(self, *, gateway, resolver, db_repo, config, admin_user_id: str):
+        self.gateway = gateway
+        self.resolver = resolver
+        self.db_repo = db_repo
+        self.config = config
+        self.admin_user_id = admin_user_id
+
+    async def start(self, interaction: discord.Interaction) -> None:
+        await interaction.followup.send(
+            "🧭 Chọn SDK cho endpoint mới:",
+            view=SDKChoiceView(self._on_sdk_choose),
+            ephemeral=True,
+        )
+
+    async def _on_sdk_choose(self, interaction: discord.Interaction, sdk: str) -> None:
+        default_url = DEFAULT_BASE_URLS.get(sdk, "")
+        await interaction.response.send_modal(EndpointConfigModal(flow=self, sdk=sdk, default_url=default_url))
+
+    async def configure(self, interaction: discord.Interaction, sdk: str, base_url: str, api_key: str) -> None:
+        try:
+            raw_models = await self.gateway.list_models_for(sdk=sdk, base_url=base_url, api_key=api_key)
+        except Exception as e:
+            await interaction.response.send_message(
+                f"❌ Không kết nối/không lấy được model list từ endpoint:\n`{str(e)[:300]}`\nCấu hình CHƯA được lưu.",
+                ephemeral=True,
+            )
+            return
+
+        models = normalize_models(raw_models)
+        if not models:
+            await interaction.response.send_message(
+                "❌ Endpoint trả về danh sách model rỗng. Cấu hình CHƯA được lưu.", ephemeral=True
+            )
+            return
+
+        slots = await self.run_slot_pickers(interaction, models)
+        if slots is None:
+            return
+
+        encrypted = encrypt_api_key(api_key, getattr(self.config, "DONATE_ENCRYPTION_KEY", "") or "")
+        updated_by = f"admin:{self.admin_user_id}"
+        try:
+            await self.db_repo.upsert_llm_endpoint(sdk, base_url, encrypted, updated_by)
+            await self.db_repo.upsert_llm_model_slots(sdk, slots, updated_by)
+            await self.db_repo.set_active_sdk(sdk, updated_by)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Lỗi lưu DB: `{str(e)[:300]}`", ephemeral=True)
+            return
+
+        self.resolver.invalidate()
+        await interaction.followup.send(embed=self.summary_embed(sdk, base_url, slots), ephemeral=True)
+
+    async def run_slot_pickers(self, interaction: discord.Interaction, models: List[Dict[str, Any]]) -> Optional[Dict[str, Optional[str]]]:
+        """Chạy picker tuần tự cho 4 slot (reasoning → final → fallback → vision). Trả None nếu hết hạn."""
+        slots: Dict[str, Optional[str]] = {}
+        for slot in SLOT_ORDER:
+            view = ModelPickerView(models=models, slot=slot)
+            picker_msg = await interaction.followup.send(embed=view.summary_embed(), view=view, ephemeral=True, wait=True)
+            await view.wait()
+            if not view.confirmed:
+                await picker_msg.edit(content="⌛ Hết thời gian chọn. Chạy lại để làm lại.", embed=None, view=None)
+                return None
+            slots[slot] = view.selected_model_id
+        return slots
+
+    def summary_embed(self, sdk: str, base_url: str, slots: Dict[str, Optional[str]]) -> discord.Embed:
+        lines = []
+        for slot in SLOT_ORDER:
+            value = slots.get(slot)
+            lines.append(f"- {SLOT_LABELS[slot]}: `{value or '(để trống → default rule)'}`")
+        embed = discord.Embed(title="✅ Đã lưu cấu hình endpoint", color=discord.Color.green())
+        embed.add_field(name="SDK active", value=f"`{sdk}`", inline=True)
+        embed.add_field(name="URL", value=f"`{base_url}`", inline=True)
+        embed.add_field(name="4 slot", value="\n".join(lines), inline=False)
+        return embed
