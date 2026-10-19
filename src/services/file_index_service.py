@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Optional, Dict, List, Tuple
 
 from src.core.config import logger, Config
+from src.core.llm.gateway import LLMGateway
 from src.core.prompt_loader import (
     get_file_index_reasoning_prompt,
     get_file_index_validation_prompt,
@@ -128,14 +129,9 @@ class FileIndexService:
         config: Config,
         db_repo: DatabaseRepository,
         file_parser: FileParserService,
-        api_generate_fn,
-        api_get_key_fn,
-        api_commit_key_fn,
-        api_throttle_fn,
-        api_acquire_quota_fn,
-        api_log_exception_fn,
-        reasoning_model_alias: str,
-        final_model_alias: str,
+        gateway: LLMGateway,
+        reasoning_role: str,
+        final_role: str,
     ):
         self.config = config
         self.db_repo = db_repo
@@ -143,14 +139,9 @@ class FileIndexService:
         self.logger = logger
         self.latest_index_by_user: Dict[str, Dict[str, str]] = {}
 
-        self._generate = api_generate_fn
-        self._get_best_api_key = api_get_key_fn
-        self._commit_selected_key = api_commit_key_fn
-        self._throttle = api_throttle_fn
-        self._acquire_quota = api_acquire_quota_fn
-        self._log_exception = api_log_exception_fn
-        self._reasoning_alias = reasoning_model_alias
-        self._final_alias = final_model_alias
+        self.gateway = gateway
+        self.reasoning_role = reasoning_role
+        self.final_role = final_role
 
     def set_latest_index(self, user_id: str, document_id: str, filename: str) -> None:
         self.latest_index_by_user[user_id] = {
@@ -192,31 +183,13 @@ class FileIndexService:
             "max_output_tokens": self.INDEX_MAX_OUTPUT_TOKENS,
         }
 
-        quota_ok = await self._acquire_quota(
-            messages,
-            generation_config["max_output_tokens"],
-            self._reasoning_alias,
-            extra_text=system_instruction,
-        )
-        if not quota_ok:
-            return {}
-
-        api_key, model_name, used_model_alias, key_reservation = await self._get_best_api_key(self._reasoning_alias)
-        if not api_key or not model_name:
-            return {}
-
-        await self._throttle(api_key)
         try:
-            response = await self._generate(
-                api_key=api_key,
-                model_name=model_name,
+            response = await self.gateway.generate(
+                role=self.reasoning_role,
                 system_instruction=system_instruction,
                 generation_config=generation_config,
                 messages=messages,
-                provider=(key_reservation or {}).get("provider", "gemini"),
-                endpoint=(key_reservation or {}).get("endpoint"),
             )
-            self._commit_selected_key(key_reservation)
             candidate = response.candidates[0] if response.candidates else None
             if not (candidate and candidate.content and candidate.content.parts):
                 return {}
@@ -226,13 +199,11 @@ class FileIndexService:
             if payload:
                 return payload
         except Exception as e:
-            self._log_exception(
+            self.gateway.log_exception(
                 stage="file_index_chunk",
                 error=e,
                 user_id=user_id,
-                model_alias=used_model_alias,
-                model_name=model_name,
-                api_key=api_key,
+                role=self.reasoning_role,
                 attempt=1,
                 max_attempts=1,
             )
@@ -366,31 +337,13 @@ class FileIndexService:
             "max_output_tokens": self.INDEX_VALIDATION_MAX_OUTPUT_TOKENS,
         }
 
-        quota_ok = await self._acquire_quota(
-            messages,
-            generation_config["max_output_tokens"],
-            self._final_alias,
-            extra_text=system_instruction,
-        )
-        if not quota_ok:
-            return {"status": "warn", "reason": "quota blocked", "risk_flags": []}
-
-        api_key, model_name, used_model_alias, key_reservation = await self._get_best_api_key(self._final_alias)
-        if not api_key or not model_name:
-            return {"status": "warn", "reason": "no api key", "risk_flags": []}
-
-        await self._throttle(api_key)
         try:
-            response = await self._generate(
-                api_key=api_key,
-                model_name=model_name,
+            response = await self.gateway.generate(
+                role=self.final_role,
                 system_instruction=system_instruction,
                 generation_config=generation_config,
                 messages=messages,
-                provider=(key_reservation or {}).get("provider", "gemini"),
-                endpoint=(key_reservation or {}).get("endpoint"),
             )
-            self._commit_selected_key(key_reservation)
             candidate = response.candidates[0] if response.candidates else None
             if not (candidate and candidate.content and candidate.content.parts):
                 return {"status": "warn", "reason": "empty validation", "risk_flags": []}
@@ -400,13 +353,11 @@ class FileIndexService:
             if payload:
                 return payload
         except Exception as e:
-            self._log_exception(
+            self.gateway.log_exception(
                 stage="file_index_validate",
                 error=e,
                 user_id=user_id,
-                model_alias=used_model_alias,
-                model_name=model_name,
-                api_key=api_key,
+                role=self.final_role,
                 attempt=1,
                 max_attempts=1,
             )
