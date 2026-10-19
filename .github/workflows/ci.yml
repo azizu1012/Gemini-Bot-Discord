@@ -16,31 +16,6 @@ jobs:
       group: ci-${{ github.ref }}
       cancel-in-progress: true
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: azuris
-          POSTGRES_PASSWORD: replace_me
-          POSTGRES_DB: azuris
-        ports:
-          - 55432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,6 +24,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+
+      - name: Free conflicting ports
+        run: |
+          sudo systemctl stop postgresql || true
+          sudo systemctl stop redis || true
+          sudo fuser -k 55432/tcp || true
+          sudo fuser -k 6379/tcp || true
+
+      - name: Start test containers
+        run: |
+          docker run -d --name test-postgres -e POSTGRES_USER=azuris -e POSTGRES_PASSWORD=replace_me -e POSTGRES_DB=azuris -p 55432:5432 postgres:16
+          docker run -d --name test-redis -p 6379:6379 redis:7-alpine
+          for i in $(seq 1 30); do
+            if docker exec test-postgres pg_isready -U azuris; then
+              echo "PostgreSQL is ready!"
+              break
+            fi
+            sleep 1
+          done
 
       - name: Install dependencies
         run: |
