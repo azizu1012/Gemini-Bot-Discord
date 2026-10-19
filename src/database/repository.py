@@ -210,83 +210,30 @@ class DatabaseRepository:
 
             await conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS api_key_pool (
-                    key_id BIGSERIAL PRIMARY KEY,
-                    api_key TEXT NOT NULL UNIQUE,
-                    provider TEXT NOT NULL DEFAULT 'gemini',
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    cooldown_until TIMESTAMPTZ,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                CREATE TABLE IF NOT EXISTS llm_endpoints (
+                    sdk TEXT PRIMARY KEY CHECK (sdk IN ('genai','openai')),
+                    base_url TEXT NOT NULL,
+                    api_key_encrypted TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_by TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_check_ok BOOLEAN,
+                    last_check_error TEXT,
+                    last_checked_at TIMESTAMPTZ
                 )
                 """
             )
 
             await conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS api_key_rate_limits (
-                    key_id BIGINT PRIMARY KEY REFERENCES api_key_pool(key_id) ON DELETE CASCADE,
-                    requests_used INTEGER NOT NULL DEFAULT 0,
-                    last_reset TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                CREATE TABLE IF NOT EXISTS llm_model_slots (
+                    sdk TEXT NOT NULL,
+                    slot TEXT NOT NULL CHECK (slot IN ('reasoning','final','fallback','vision')),
+                    model_id TEXT,
+                    updated_by TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (sdk, slot)
                 )
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS custom_api_models (
-                    provider TEXT NOT NULL DEFAULT 'openai',
-                    model_id TEXT NOT NULL,
-                    display_name TEXT NOT NULL DEFAULT '',
-                    is_alive BOOLEAN NOT NULL DEFAULT TRUE,
-                    last_seen_at TIMESTAMPTZ,
-                    last_checked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    PRIMARY KEY (provider, model_id)
-                )
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS bot_model_config (
-                    config_key TEXT PRIMARY KEY DEFAULT 'global',
-                    reasoning_model_id TEXT,
-                    final_model_id TEXT,
-                    image_generator_model_id TEXT,
-                    updated_by TEXT NOT NULL DEFAULT '',
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS custom_api_provider_config (
-                    provider TEXT PRIMARY KEY DEFAULT 'openai',
-                    endpoint_base_url TEXT NOT NULL DEFAULT '',
-                    normalized_base_url TEXT NOT NULL DEFAULT '',
-                    endpoint_preset TEXT NOT NULL DEFAULT 'manual',
-                    active_key_id BIGINT REFERENCES api_key_pool(key_id) ON DELETE SET NULL,
-                    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                    last_scan_ok BOOLEAN NOT NULL DEFAULT FALSE,
-                    last_scan_error TEXT NOT NULL DEFAULT '',
-                    updated_by TEXT NOT NULL DEFAULT '',
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-
-            # Evolve schema to add columns if missing
-            await conn.execute(
-                """
-                ALTER TABLE api_key_pool ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMPTZ
-                """
-            )
-            await conn.execute(
-                """
-                ALTER TABLE custom_api_provider_config
-                ADD COLUMN IF NOT EXISTS endpoint_preset TEXT NOT NULL DEFAULT 'manual'
                 """
             )
 
@@ -316,9 +263,17 @@ class DatabaseRepository:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_metadata_gin ON user_notes USING gin (metadata)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_keywords ON rag_chunks USING GIN (keywords)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_summary_trgm ON rag_chunks USING GIN (chunk_summary gin_trgm_ops)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_custom_api_models_alive ON custom_api_models (provider, is_alive, model_id)")
 
-            await self.sync_env_api_keys(conn=conn)
+            # Rename bảng của cơ chế key-rotation cũ (giữ dữ liệu để rollback).
+            # Idempotent: IF EXISTS bỏ qua khi bảng đã được rename từ lần trước.
+            for _old_name, _deprecated_name in (
+                ("api_key_pool", "_deprecated_api_key_pool"),
+                ("api_key_rate_limits", "_deprecated_api_key_rate_limits"),
+                ("custom_api_models", "_deprecated_custom_api_models"),
+                ("bot_model_config", "_deprecated_bot_model_config"),
+                ("custom_api_provider_config", "_deprecated_custom_api_provider_config"),
+            ):
+                await conn.execute(f"ALTER TABLE IF EXISTS {_old_name} RENAME TO {_deprecated_name}")
 
     @staticmethod
     def _command_count(command_tag: str) -> int:
@@ -1363,4 +1318,99 @@ class DatabaseRepository:
                 WHERE api_key = $1
                 """,
                 api_key,
+            )
+
+    # ── LLM endpoints & model slots (endpoint-only refactor) ─────────────
+
+    async def get_llm_endpoints(self) -> Dict[str, Dict[str, Any]]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT sdk, base_url, api_key_encrypted, is_active, updated_by, updated_at,
+                       last_check_ok, last_check_error, last_checked_at
+                FROM llm_endpoints
+                """
+            )
+        return {row["sdk"]: dict(row) for row in rows}
+
+    async def get_active_sdk(self) -> Optional[str]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT sdk FROM llm_endpoints WHERE is_active = TRUE LIMIT 1")
+        return row["sdk"] if row else None
+
+    async def upsert_llm_endpoint(self, sdk: str, base_url: str, api_key_encrypted: str, updated_by: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO llm_endpoints (sdk, base_url, api_key_encrypted, is_active, updated_by, updated_at)
+                VALUES ($1, $2, $3, FALSE, $4, CURRENT_TIMESTAMP)
+                ON CONFLICT (sdk) DO UPDATE SET
+                    base_url = EXCLUDED.base_url,
+                    api_key_encrypted = EXCLUDED.api_key_encrypted,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                sdk,
+                base_url,
+                api_key_encrypted,
+                updated_by,
+            )
+
+    async def set_active_sdk(self, sdk: str, updated_by: str) -> bool:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("UPDATE llm_endpoints SET is_active = FALSE WHERE is_active = TRUE")
+                result = await conn.execute(
+                    """
+                    UPDATE llm_endpoints
+                    SET is_active = TRUE, updated_by = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE sdk = $1
+                    """,
+                    sdk,
+                    updated_by,
+                )
+        return result.endswith(" 1")
+
+    async def get_llm_model_slots(self, sdk: str) -> Dict[str, Optional[str]]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT slot, model_id FROM llm_model_slots WHERE sdk = $1", sdk)
+        return {row["slot"]: row["model_id"] for row in rows}
+
+    async def upsert_llm_model_slots(self, sdk: str, slots: Dict[str, Optional[str]], updated_by: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                for slot, model_id in slots.items():
+                    await conn.execute(
+                        """
+                        INSERT INTO llm_model_slots (sdk, slot, model_id, updated_by, updated_at)
+                        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                        ON CONFLICT (sdk, slot) DO UPDATE SET
+                            model_id = EXCLUDED.model_id,
+                            updated_by = EXCLUDED.updated_by,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        sdk,
+                        slot,
+                        model_id,
+                        updated_by,
+                    )
+
+    async def update_endpoint_check_status(self, sdk: str, ok: bool, error: Optional[str]) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE llm_endpoints
+                SET last_check_ok = $2, last_check_error = $3, last_checked_at = CURRENT_TIMESTAMP
+                WHERE sdk = $1
+                """,
+                sdk,
+                ok,
+                (error or "")[:500] or None,
             )
