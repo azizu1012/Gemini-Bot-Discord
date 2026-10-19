@@ -4,9 +4,7 @@ import re
 import hashlib
 from datetime import datetime
 from typing import List, Dict, Any, Tuple
-from src.core.config import logger, get_config
-from src.core.api_router import get_api_router
-from src.core.gemini_api_manager import GeminiApiManager
+from src.core.config import logger
 from src.database.repository import DatabaseRepository
 
 
@@ -15,12 +13,10 @@ class NoteManager:
 
     GLOBAL_PROMOTE_DISTINCT_USERS = 3
 
-    def __init__(self, db_repo: DatabaseRepository):
+    def __init__(self, db_repo: DatabaseRepository, gateway=None):
         self.db_repo = db_repo
         self.logger = logger
-        self.config = get_config()
-        self.router = get_api_router()
-        self.gemini_mgr = GeminiApiManager(self.config, self.router)
+        self.gateway = gateway
 
     def _normalize_fact_text(self, text: str) -> str:
         normalized = (text or "").strip().lower()
@@ -104,14 +100,14 @@ class NoteManager:
                     f"Nội dung ghi chú cần tóm tắt:\n\"{content}\""
                 )
                 try:
-                    summary = await self.gemini_mgr.call_gemini_direct(prompt)
-                    if summary and "Error calling LLM" not in summary:
+                    summary = await self.gateway.generate_text(prompt)
+                    if summary and summary.strip():
                         content = summary.strip()
-                        self.logger.info(f"Đã tóm tắt ghi chú bằng LLM Lite thành công. Độ dài mới: {len(content)} ký tự.")
+                        self.logger.info(f"Đã tóm tắt ghi chú bằng LLM thành công. Độ dài mới: {len(content)} ký tự.")
                     else:
-                        raise ValueError("LLM returned empty or error response")
+                        raise ValueError("LLM returned empty response")
                 except Exception as err:
-                    self.logger.error(f"Không thể tóm tắt bằng LLM Lite: {err}. Fallback cắt chuỗi thô.")
+                    self.logger.error(f"Không thể tóm tắt note bằng LLM: {err}. Fallback cắt chuỗi thô.")
                     content = content[:1000] + "..."
 
             note_id = str(uuid.uuid4())
@@ -180,14 +176,14 @@ class NoteManager:
                     f"Nội dung tệp tin:\n\"{content[:30000]}\""
                 )
                 try:
-                    summary = await self.gemini_mgr.call_gemini_direct(prompt)
-                    if summary and "Error calling LLM" not in summary:
+                    summary = await self.gateway.generate_text(prompt)
+                    if summary and summary.strip():
                         content = summary.strip()
-                        self.logger.info(f"Đã tổng hợp tóm tắt tệp thành công bằng LLM Lite. Độ dài: {len(content)} ký tự.")
+                        self.logger.info(f"Đã tổng hợp tóm tắt tệp thành công bằng LLM. Độ dài: {len(content)} ký tự.")
                     else:
-                        raise ValueError("LLM returned empty or error response")
+                        raise ValueError("LLM returned empty response")
                 except Exception as err:
-                    self.logger.error(f"Không thể tóm tắt tệp bằng LLM Lite: {err}. Fallback cắt chuỗi thô.")
+                    self.logger.error(f"Không thể tóm tắt tệp bằng LLM: {err}. Fallback cắt chuỗi thô.")
                     content = content[:20000] + "\n[Nội dung bị cắt bớt do vượt quá giới hạn 20,000 ký tự]"
 
             existing_note = await self.db_repo.get_file_note_by_filename_db(user_id, filename)

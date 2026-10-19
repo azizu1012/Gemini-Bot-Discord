@@ -46,7 +46,7 @@ class MessageHandler:
         self._gateway: Optional[LLMGateway] = None
 
         # Tools and API setup
-        self.note_mgr = NoteManager(self.db_repo)
+        self.note_mgr = NoteManager(self.db_repo, gateway=self.gateway)
         self.kafka_service = RedisStreamService(redis_url=self.config.REDIS_URL, client_id="worker")
         self.search_subtask_client = SearchSubtaskClient(self.kafka_service)
         self.tools_mgr = ToolsManager(
