@@ -77,5 +77,16 @@ async def main():
     print("ALL PASS")
 
 
+def test_repository_endpoints():
+    try:
+        asyncio.run(main())
+    except (ConnectionRefusedError, OSError, Exception) as e:
+        # If DB connection failed, skip test gracefully if DB offline
+        if "connect" in str(e).lower() or "connection" in str(e).lower() or isinstance(e, (ConnectionRefusedError, OSError)):
+            import pytest
+            pytest.skip(f"PostgreSQL not available: {e}")
+        raise
+
+
 if __name__ == "__main__":
     asyncio.run(main())

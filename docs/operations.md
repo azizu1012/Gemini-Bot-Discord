@@ -152,8 +152,7 @@ GeminiPipeline.execute()
 ### Test files
 | File | Mô tả |
 |------|-------|
-| `tests/test_*.py` | Test mới (pytest-compatible, chạy trực tiếp bằng python) |
-| `test/*.py` | Test cũ, giữ nguyên tham khảo |
+| `tests/test_*.py` | Bộ unit test (pytest-compatible) |
 
 ### Chạy test
 ```powershell
