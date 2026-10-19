@@ -93,6 +93,5 @@ docs/
 # Temporary progress report and script
 progress_report.md
 test_find_bot.ps1
-test/
 node_modules/
 
