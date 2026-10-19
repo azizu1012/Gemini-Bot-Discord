@@ -71,14 +71,17 @@ WHERE is_busy = true AND last_updated < NOW() - INTERVAL '5 minutes';
 ```
 
 ### Cập nhật endpoint
+
 ```powershell
-# Discord
-/endpoint set http://127.0.0.1:58100 your_auth_key
+# Discord (ADMIN)
+/endpoint config      # chọn SDK → URL/key → 4 slot model
 /endpoint view
-# .env
-GEMINI_BASE_URL=http://127.0.0.1:58100
-ROUTER_AUTH_KEY=your_auth_key
+/endpoint switch      # đổi SDK active thủ công
+/endpoint models      # fetch lại danh sách model
+/endpoint test        # ping + latency + kiểm tra slot
 ```
+
+Chi tiết: [`endpoint_and_models.md`](endpoint_and_models.md).
 
 ## Gemini Pipeline & Reasoning
 
@@ -98,28 +101,27 @@ GeminiPipeline.execute()
         Continuation nếu finish_reason = MAX_TOKENS
 ```
 
-### Model Aliases
+### Model Slots
 
-| Alias | Model ID thực tế | Mục đích |
-|-------|------------------|----------|
-| `gemini-flash` | `gemini-2.0-flash` | Reasoning, Final, Vision |
-| `gemini-flash-lite` | `gemini-2.0-flash-lite` | Fallback, Note summary |
-| `gemini-flash-lite-latest` | `gemini-2.0-flash-lite-latest` | Bypass Router mode |
+| Slot | Vai trò | Default khi bỏ trống |
+|------|---------|----------------------|
+| `reasoning` | Reasoning loop + tools | `final` |
+| `final` | Tổng hợp câu trả lời | Model đầu tiên trong danh sách |
+| `fallback` | Retry khi model chính lỗi | `reasoning` → `final` |
+| `vision` | Phân tích ảnh | `final` |
 
-### Fallback & Bypass
-- GEMINI_BASE_URL rỗng → Google trực tiếp
-- Router lỗi (ConnectError) → bypass 30s → gemini-flash-lite-latest
-- Router có URL + ROUTER_AUTH_KEY trống → fallback direct + Lite model
-- SDK crash TypeError (status_code None) → connection error → key rotation
-- Chain-of-Thought được bảo toàn (thought, thought_signature trong genai_types.Part)
+### Fallback
+- Lỗi model chính → retry cùng model theo `*_MAX_API_RETRIES` → thử `fallback` đúng 1 lần.
+- Fallback luôn cùng provider/SDK active; muốn đổi provider → `/endpoint switch` thủ công.
+- Chain-of-Thought được bảo toàn (thought, thought_signature trong `genai_types.Part`).
 
 ## Slash Commands
 
 ### Admin
 | Lệnh | Mô tả |
 |------|-------|
-| `/endpoint` | Xem/set GEMINI_BASE_URL và ROUTER_AUTH_KEY |
-| `/health_check` | Kiểm tra API keys (Embed với ✅/❌) |
+| `/endpoint` | Cấu hình endpoint: config / view / switch / models / test |
+| `/health_check` | Endpoint active + latency + 4 model slot + PostgreSQL |
 | `/moderator` | Thăng/hạ Moderator động |
 | `/premium` | Thêm/xóa Premium |
 | `/reset-all` | Reset DB + xóa cache |
@@ -130,8 +132,7 @@ GeminiPipeline.execute()
 ### Moderator
 | Lệnh | Mô tả |
 |------|-------|
-| `/health_check` | Xem trạng thái keys |
-| `/endpoint` | Xem GEMINI_BASE_URL (không set) |
+| `/health_check` | Endpoint active + latency + 4 model slot + PostgreSQL |
 | `/global-notes` | Xem ghi chú global |
 | `/message_to` | Nhắn nội bộ guild |
 | `/imagine` | Tạo ảnh (giới hạn) |
@@ -149,17 +150,16 @@ GeminiPipeline.execute()
 ## Kiểm thử
 
 ### Test files
-| File | Mô tả | Trạng thái |
-|------|-------|------------|
-| `test/test_dynamic_roles.py` | Phân quyền Admin/Mod | ✅ Pass |
-| `test/test_health_checker.py` | Health check scan key/model | ✅ Pass |
-| `test/test_typing_identity.py` | Typing loop & bot name | ✅ Pass |
+| File | Mô tả |
+|------|-------|
+| `tests/test_*.py` | Test mới (pytest-compatible, chạy trực tiếp bằng python) |
+| `test/*.py` | Test cũ, giữ nguyên tham khảo |
 
 ### Chạy test
-```bash
-python test/test_dynamic_roles.py
+```powershell
+Get-ChildItem tests\test_*.py | ForEach-Object { python $_.FullName }
 ```
-Không dùng pytest (chưa cấu hình).
+Pytest chính thức bật ở Phase 2 (CI). `tests/` không bị gitignore.
 
 ### Kết quả đã xác minh
 1. Dynamic Roles: Pass 100%
@@ -168,6 +168,7 @@ Không dùng pytest (chưa cấu hình).
 4. Security Audit: Pass 100% (SQL Injection, Race Condition 5 luồng)
 5. Multimodal Image: Pass 100% (song song, RAM-Only)
 6. Smoke Test: Preflight + Run bot → Discord Gateway connected
+7. Endpoint-only refactor (Phase 1): 13 file test PASS — xem PR.
 
 ## Lịch sử thay đổi
 
@@ -217,3 +218,10 @@ Bypass Router 30s khi ConnectError. Timeout 15000ms (int).
 - **Upgrade google-genai**: `1.52.0` → `2.8.0` (khớp version router, internal tenacity retry mạnh hơn)
 - **Clean test scripts**: Xoá 14 test script tạm thời khỏi project root
 - **Router fix**: `handle_error` trong router không còn raise RuntimeError cho `bad_request`/`project_denied` — freeze key + thử key tiếp theo, không ngắt retry loop
+
+### Session 17 — Endpoint-only refactor
+- Gỡ key rotation: `gemini_api_manager.py`, `api_router.py`, `api_config.py`, `gemini_rate_limiter.py`
+- Thêm `src/core/llm/` (2 SDK: genai/openai), bảng `llm_endpoints` + `llm_model_slots`
+- Nhóm lệnh `/endpoint` + `/health_check` mới; gate "chưa cấu hình"
+- 4 model slot + fallback 1 lần cùng provider; key mã hóa Fernet
+- Test mới trong `tests/`; CI + security scan ở Phase 2, tách god-file ở Phase 3
