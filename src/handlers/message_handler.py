@@ -10,15 +10,10 @@ from typing import Dict, Any, Optional, List, Tuple
 from src.core.config import logger, Config
 from src.services.redis_service import RedisStreamService, RedisStreamConsumer, _RedisMsg
 from src.database.repository import DatabaseRepository
-from src.core.api_router import get_api_router
-from src.core.gemini_api_manager import GeminiApiManager
 from src.core.gemini_pipeline import GeminiPipeline
-from src.core.api_config import (
-    DEFAULT_REASONING_MODEL_ALIAS,
-    DEFAULT_FINAL_MODEL_ALIAS,
-    DEFAULT_FALLBACK_MODEL_ALIAS,
-    VISION_MODEL_ALIAS,
-)
+from src.core.llm.base import LLMNotConfiguredError, LLMUnsupportedError
+from src.core.llm.gateway import LLMGateway
+from src.core.llm.resolver import get_endpoint_resolver
 from src.tools.tools import ToolsManager
 from src.managers.note_manager import NoteManager
 from src.managers.premium_manager import PremiumManager
@@ -46,6 +41,9 @@ class MessageHandler:
         self.logger = logger
         self.db_repo = DatabaseRepository(self.config.DATABASE_URL)
         self.cache_mgr = get_cache_manager()
+        self.resolver = get_endpoint_resolver()
+        self.resolver.set_db_repo(self.db_repo)
+        self._gateway: Optional[LLMGateway] = None
 
         # Tools and API setup
         self.note_mgr = NoteManager(self.db_repo)
@@ -56,9 +54,6 @@ class MessageHandler:
             db_repo=self.db_repo,
             search_subtask_client=self.search_subtask_client,
         )
-        self.api_router = get_api_router()
-        self.api_router.set_db_repo(self.db_repo)
-        self._api_mgr: Optional[GeminiApiManager] = None
         self._pipeline: Optional[GeminiPipeline] = None
         self._file_index_svc: Optional[FileIndexService] = None
 
@@ -93,10 +88,19 @@ class MessageHandler:
             return await self._download_file(url)
 
     @property
-    def api_mgr(self) -> GeminiApiManager:
-        if self._api_mgr is None:
-            self._api_mgr = GeminiApiManager(config=self.config, api_router=self.api_router)
-        return self._api_mgr
+    def gateway(self) -> LLMGateway:
+        if self._gateway is None:
+            self._gateway = LLMGateway(
+                resolver=self.resolver,
+                logger=self.logger,
+                config=self.config,
+            )
+        return self._gateway
+
+    @gateway.setter
+    def gateway(self, value: LLMGateway) -> None:
+        # Cho phép inject fake gateway (test) mà không cần đụng ctor.
+        self._gateway = value
 
     @property
     def file_index_svc(self) -> FileIndexService:
@@ -105,14 +109,9 @@ class MessageHandler:
                 config=self.config,
                 db_repo=self.db_repo,
                 file_parser=self.file_parser,
-                api_generate_fn=self.api_mgr._generate_gemini_content,
-                api_get_key_fn=self.api_mgr._get_best_api_key,
-                api_commit_key_fn=self.api_mgr._commit_selected_key,
-                api_throttle_fn=self.api_mgr._throttle_api_request,
-                api_acquire_quota_fn=self.api_mgr._acquire_gemini_quota,
-                api_log_exception_fn=self.api_mgr._log_gemini_exception,
-                reasoning_model_alias=self.pipeline.reasoning_model_alias,
-                final_model_alias=self.pipeline.final_model_alias,
+                gateway=self.gateway,
+                reasoning_role="reasoning",
+                final_role="final",
             )
         return self._file_index_svc
 
@@ -121,26 +120,25 @@ class MessageHandler:
         if self._pipeline is None:
             self._pipeline = GeminiPipeline(
                 config=self.config,
-                api_mgr=self.api_mgr,
+                api_mgr=self.gateway,   # tham số này của GeminiPipeline giờ mang kiểu LLMGateway (Task 8)
                 tools_mgr=self.tools_mgr,
                 identity_builder=self._build_identity_instruction,
-                reasoning_model_alias=DEFAULT_REASONING_MODEL_ALIAS,
-                final_model_alias=DEFAULT_FINAL_MODEL_ALIAS,
-                fallback_model_alias=DEFAULT_FALLBACK_MODEL_ALIAS,
+                reasoning_role="reasoning",
+                final_role="final",
+                fallback_role="fallback",
             )
         return self._pipeline
 
-    async def _refresh_pipeline_model_aliases(self, force_vision_model: bool = False) -> None:
+    async def _refresh_pipeline_roles(self, force_vision_model: bool = False) -> None:
         pipeline = self.pipeline
         if force_vision_model:
-            pipeline.reasoning_model_alias = VISION_MODEL_ALIAS
-            pipeline.final_model_alias = VISION_MODEL_ALIAS
-            pipeline.fallback_model_alias = VISION_MODEL_ALIAS
-            return
-        selected = await self.api_router.get_selected_model_aliases()
-        pipeline.reasoning_model_alias = str(selected.get("reasoning") or DEFAULT_REASONING_MODEL_ALIAS)
-        pipeline.final_model_alias = str(selected.get("final") or DEFAULT_FINAL_MODEL_ALIAS)
-        pipeline.fallback_model_alias = str(selected.get("fallback") or DEFAULT_FALLBACK_MODEL_ALIAS)
+            pipeline.reasoning_role = "vision"
+            pipeline.final_role = "vision"
+            pipeline.fallback_role = "vision"
+        else:
+            pipeline.reasoning_role = "reasoning"
+            pipeline.final_role = "final"
+            pipeline.fallback_role = "fallback"
 
     def _normalize_intent_text(self, text: str) -> str:
         lowered = (text or "").lower()
@@ -349,6 +347,20 @@ class MessageHandler:
         content = payload.get('content', '').strip()
         self.logger.info(f"[REDIS-RECV] Consumed message from 'discord-incoming' | User: {user_id} | MsgID: {payload.get('message_id')} | Content Length: {len(content)}")
 
+        # 0. Endpoint gate — chưa cấu hình thì không xử lý chat (không đụng DB, không set processing state).
+        # Đặt TRƯỚC khối try/finally để đường thoát sớm không chạy typing-false + clear state vô nghĩa.
+        if not await self.resolver.is_configured():
+            await self._publish_outgoing({
+                "action": "reply",
+                "channel_id": payload.get('channel_id'),
+                "user_id": user_id,
+                "content": "⚠️ Bot chưa được cấu hình. Vui lòng liên hệ admin.",
+                "reference_message_id": payload.get('message_id')
+            }, user_id)
+            if self._incoming_consumer:
+                await self._incoming_consumer.ack(msg)
+            return
+
         try:
             is_admin = await self.premium_mgr.is_admin_user(user_id)
             is_moderator = await self.premium_mgr.is_moderator_user(user_id)
@@ -536,7 +548,7 @@ class MessageHandler:
                 user_parts.extend(downloaded_images)
             messages.append({"role": "user", "parts": user_parts})
 
-            await self._refresh_pipeline_model_aliases(force_vision_model=bool(downloaded_images))
+            await self._refresh_pipeline_roles(force_vision_model=bool(downloaded_images))
             response_text = await self.pipeline.call_gemini_api(messages, user_id, privacy_context)
 
             # 8. Log reply and Split response chunks sequentially
@@ -637,42 +649,49 @@ class MessageHandler:
             }, user_id)
             return
 
+        if not await self.resolver.is_configured():
+            await self._publish_outgoing({
+                "action": "slash_reply",
+                "interaction_id": interaction_id,
+                "user_id": user_id,
+                "content": "⚠️ Bot chưa được cấu hình. Vui lòng liên hệ admin.",
+                "ephemeral": True
+            }, user_id)
+            return
+
+        try:
+            raw_client = await self.gateway.get_raw_genai_client()
+        except LLMUnsupportedError:
+            await self._publish_outgoing({
+                "action": "slash_reply",
+                "interaction_id": interaction_id,
+                "user_id": user_id,
+                "content": "⚠️ Lệnh /imagine chỉ hỗ trợ ở chế độ genAI. Bot đang chạy chế độ OpenAI — liên hệ admin để chuyển bằng /endpoint switch.",
+                "ephemeral": True
+            }, user_id)
+            return
+        except LLMNotConfiguredError:
+            await self._publish_outgoing({
+                "action": "slash_reply",
+                "interaction_id": interaction_id,
+                "user_id": user_id,
+                "content": "⚠️ Bot chưa được cấu hình. Vui lòng liên hệ admin.",
+                "ephemeral": True
+            }, user_id)
+            return
+
         max_attempts = 3
         success = False
         error_message = ""
         image_bytes = None
 
+        from google.genai import types
+
         for attempt in range(1, max_attempts + 1):
-            api_key, model_id, final_alias, reservation = await self.api_mgr._get_best_api_key(preferred_model_alias="gemini-flash")
-
-            if not api_key:
-                error_message = "Không có API keys khả dụng."
-                self.logger.error("No API keys available for image generation.")
-                break
-
-            await self.api_mgr._throttle_api_request(api_key)
-
             try:
-                has_quota = await self.api_mgr._acquire_gemini_quota(
-                    messages=[{"role": "user", "parts": [{"text": prompt}]}],
-                    max_output_tokens=0,
-                    model_alias=final_alias,
-                    extra_text="image_generation"
-                )
-                if not has_quota:
-                    self.logger.warning(f"Quota check failed for key: ...{api_key[-4:]} on attempt {attempt}")
-                    self.api_mgr._mark_key_as_failed(api_key, final_alias, reason="rate_limit", reservation=reservation)
-                    continue
-
-                self.logger.info(f"Generating image on key ...{api_key[-4:]} with prompt: '{prompt}' (Attempt {attempt}/{max_attempts})")
-
-                client = self.api_mgr._get_or_create_gemini_client(api_key)
-
-                from google.genai import types
-
                 response = await asyncio.to_thread(
-                    client.models.generate_images,
-                    model='imagen-3.0-generate-002',
+                    raw_client.models.generate_images,
+                    model="imagen-3.0-generate-002",
                     prompt=prompt,
                     config=types.GenerateImagesConfig(
                         number_of_images=1,
@@ -684,40 +703,21 @@ class MessageHandler:
                 if response and response.generated_images:
                     generated_image = response.generated_images[0]
                     if generated_image.image and generated_image.image.image_bytes:
-                        self.api_mgr._commit_selected_key(reservation)
                         image_bytes = generated_image.image.image_bytes
                         success = True
                         break
                     elif generated_image.rai_filtered_reason:
                         error_message = f"Ảnh bị chặn bởi bộ lọc an toàn AI (RAI): {generated_image.rai_filtered_reason}"
-                        self.logger.warning(f"Image generation safety filtered on key ...{api_key[-4:]}: {generated_image.rai_filtered_reason}")
                         break
 
                 error_message = "Google API returned an empty response."
 
             except Exception as e:
-                error_str = str(e)
-                self.api_mgr._log_gemini_exception(
-                    stage="IMAGINE_GEN",
-                    error=e,
-                    user_id=user_id,
-                    model_alias=final_alias,
-                    model_name="imagen-3.0-generate-002",
-                    api_key=api_key,
-                    attempt=attempt,
-                    max_attempts=max_attempts
-                )
+                error_message = f"{type(e).__name__}: {e}"
+                self.logger.warning(f"[IMAGINE_GEN] Lỗi attempt {attempt}/{max_attempts}: {error_message}")
 
-                if self.api_mgr._is_invalid_key_error(error_str):
-                    self.api_mgr._mark_key_as_failed(api_key, final_alias, reason="invalid_key", reservation=reservation, permanently_exhaust=True)
-                elif self.api_mgr._is_rate_limit_error(error_str):
-                    self.api_mgr._mark_key_as_failed(api_key, final_alias, reason="rate_limit", reservation=reservation)
-                elif self.api_mgr._is_unavailable_error(error_str):
-                    self.api_mgr._mark_key_as_failed(api_key, final_alias, reason="unavailable", reservation=reservation, duration=5)
-                else:
-                    self.api_mgr._mark_key_as_failed(api_key, final_alias, reason="rate_limit", reservation=reservation, duration=10)
-
-                error_message = f"{type(e).__name__}: {error_str}"
+            if attempt < max_attempts:
+                await asyncio.sleep(1.5 * attempt)
 
         if success and image_bytes:
             # 1. Encode image to base64
