@@ -65,6 +65,11 @@ RULES = [
         ("src.handlers",),
         "managers cannot depend on handlers.",
     ),
+    (
+        "src/voice/",
+        ("src.handlers",),
+        "voice cannot depend on handlers.",
+    ),
 ]
 
 KNOWN_EXCEPTIONS = []

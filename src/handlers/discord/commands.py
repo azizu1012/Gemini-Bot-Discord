@@ -20,6 +20,7 @@ from src.handlers.discord.ui import (
 )
 from src.core.llm.gateway import get_llm_gateway
 from src.core.llm.resolver import get_endpoint_resolver, mask_api_key, resolve_model_id
+from src.voice import RolePickerView
 
 
 def register_slash_commands(bot_core_instance):
@@ -32,6 +33,8 @@ def register_slash_commands(bot_core_instance):
     gateway = get_llm_gateway()
     kafka_service = bot_core_instance.kafka_service
     voice_lock_manager = bot_core_instance.voice_lock_manager
+    room_lock_service = getattr(bot_core_instance, "room_lock_service", None)
+    room_tools_service = getattr(bot_core_instance, "room_tools_service", None)
 
     def is_admin():
         async def predicate(interaction: discord.Interaction) -> bool:
@@ -747,7 +750,7 @@ def register_slash_commands(bot_core_instance):
 
     owner_check = voice_lock_manager.is_owner_check()
 
-    @bot.tree.command(name="lock", description="Khóa phòng voice hiện tại và kick người không whitelist")
+    @bot.tree.command(name="lock", description="Khóa phòng voice hiện tại, chặn người ngoài allowlist và dọn tin nhắn vi phạm")
     @owner_check
     async def lock_room(interaction: discord.Interaction):
         try:
@@ -760,42 +763,29 @@ def register_slash_commands(bot_core_instance):
             await interaction.followup.send("⚠️ Bạn phải vào phòng voice trước.", ephemeral=True)
             return
 
-        bot_user = bot.user
-        if bot_user is None:
-            await interaction.followup.send("⚠️ Bot chưa sẵn sàng.", ephemeral=True)
+        if room_lock_service and room_lock_service.is_locked(channel.id):
+            await interaction.followup.send(
+                f"Phòng **{channel.name}** đang bị khóa rồi. Dùng `/unlock` trước khi khóa lại.",
+                ephemeral=True,
+            )
             return
 
-        whitelist = voice_lock_manager.load_whitelist()
+        if room_lock_service:
+            outcome = await room_lock_service.lock(channel, interaction.user.id)
+            embed = discord.Embed(
+                title=f"🔒 Đã khóa phòng {channel.name}",
+                colour=discord.Colour.red(),
+                timestamp=outcome.record.locked_at,
+            )
+            kicked_str = ", ".join(outcome.kicked) if outcome.kicked else "Không có ai ngoài allowlist"
+            embed.add_field(name="Đã kick ngoài allowlist", value=kicked_str, inline=False)
+            if outcome.purge and outcome.purge.has_work:
+                embed.add_field(name="Dọn tin nhắn", value=outcome.purge.summary(), inline=False)
+            if outcome.reactions_removed:
+                embed.add_field(name="Biểu cảm đã gỡ", value=f"Đã gỡ {outcome.reactions_removed} biểu cảm", inline=False)
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
-        default_role = interaction.guild.default_role
-        overwrite = channel.overwrites_for(default_role)
-        overwrite.connect = False
-        await channel.set_permissions(default_role, overwrite=overwrite, reason="Lock room command")
-
-        voice_lock_manager.locked_channels.add(channel.id)
-        voice_lock_manager.save_locked_channels()
-        voice_lock_manager.log_action(f"🔒 LOCK tại {channel.name} bởi {interaction.user.name}")
-
-        kicked_users: List[str] = []
-        for member in channel.members:
-            if str(member.id) in whitelist or member.id == voice_lock_manager.owner_id or member.id == bot_user.id:
-                member_overwrite = channel.overwrites_for(member)
-                member_overwrite.connect = True
-                await channel.set_permissions(member, overwrite=member_overwrite)
-                continue
-            try:
-                await member.move_to(None, reason="Locked out by owner")
-                kicked_users.append(member.name)
-                voice_lock_manager.log_action(f"🧹 LOCK-KICK: {member.name} ({member.id})")
-            except Exception as e:
-                logger.warning(f"Kick fail {member.name}: {e}")
-
-        msg = f"🔒 Đã khóa channel **{channel.name}**."
-        if kicked_users:
-            msg += f"\n👢 Đã kick {len(kicked_users)} người: {', '.join(kicked_users)}"
-        await interaction.followup.send(msg, ephemeral=True)
-
-    @bot.tree.command(name="unlock", description="Mở khóa phòng voice hiện tại")
+    @bot.tree.command(name="unlock", description="Mở khóa phòng voice hiện tại cho tất cả mọi người")
     @owner_check
     async def unlock_room(interaction: discord.Interaction):
         try:
@@ -808,19 +798,106 @@ def register_slash_commands(bot_core_instance):
             await interaction.followup.send("⚠️ Bạn phải vào phòng voice trước.", ephemeral=True)
             return
 
-        default_role = interaction.guild.default_role
-        overwrite = channel.overwrites_for(default_role)
-        overwrite.connect = None
-        await channel.set_permissions(default_role, overwrite=overwrite, reason="Unlock room command")
+        if room_lock_service:
+            if not room_lock_service.is_locked(channel.id):
+                await interaction.followup.send(
+                    f"Phòng **{channel.name}** đang mở, không cần mở khóa.", ephemeral=True
+                )
+                return
+            record = await room_lock_service.unlock(channel)
+            embed = discord.Embed(
+                title=f"🔓 Đã mở khóa {channel.name}",
+                colour=discord.Colour.green(),
+                description=f"Phòng **{channel.name}** đã mở lại cho tất cả mọi người.",
+            )
+            if record:
+                embed.add_field(name="Mốc đã khóa", value=f"<t:{int(record.locked_at.timestamp())}:F>")
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
-        voice_lock_manager.locked_channels.discard(channel.id)
-        if channel.id in voice_lock_manager.enforced_names:
-            del voice_lock_manager.enforced_names[channel.id]
-            voice_lock_manager.save_enforced_names()
-        voice_lock_manager.save_locked_channels()
-        voice_lock_manager.log_action(f"🔓 UNLOCK tại {channel.name} bởi {interaction.user.name}")
+    @bot.tree.command(name="locklist", description="Xem danh sách các phòng voice đang khóa trong server")
+    @owner_check
+    async def lock_list(interaction: discord.Interaction):
+        if not interaction.guild:
+            return
+        if room_lock_service:
+            channels = room_lock_service.locked_channels(interaction.guild)
+            if not channels:
+                await interaction.response.send_message("Server này chưa có phòng nào đang khóa.", ephemeral=True)
+                return
+            lines = []
+            for ch in channels:
+                rec = room_lock_service.record(ch.id)
+                stamp = int(rec.locked_at.timestamp()) if rec else 0
+                lines.append(f"🔒 {ch.mention} — khóa lúc <t:{stamp}:F>")
+            await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
-        await interaction.followup.send(f"🔓 Đã mở khóa channel **{channel.name}**.", ephemeral=True)
+    async def _handle_allow_member(interaction: discord.Interaction, member: discord.Member):
+        if not room_lock_service:
+            return
+        if member.id == interaction.user.id:
+            await interaction.response.send_message("Bạn là chủ phòng, đã có quyền sẵn.", ephemeral=True)
+            return
+        room_lock_service.whitelist.add(member.id, member.display_name)
+        granted = await room_lock_service.grant_access(member)
+        await interaction.response.send_message(
+            f"✅ Đã thêm {member.mention} vào allowlist · mở quyền ở **{granted}** phòng đang khóa.",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(name="allow", description="Thêm người vào allowlist phòng voice khóa")
+    @owner_check
+    async def allow_member(interaction: discord.Interaction, member: discord.Member):
+        await _handle_allow_member(interaction, member)
+
+    @bot.tree.command(name="add_privet", description="Thêm người vào whitelist để không bị kick khi lock (alias của /allow)")
+    @owner_check
+    async def add_privet(interaction: discord.Interaction, member: discord.Member):
+        await _handle_allow_member(interaction, member)
+
+    async def _handle_remove_member(interaction: discord.Interaction, member: discord.Member):
+        if not room_lock_service:
+            return
+        if not room_lock_service.whitelist.contains(member.id):
+            await interaction.response.send_message(f"{member.mention} không có trong allowlist.", ephemeral=True)
+            return
+        room_lock_service.whitelist.remove(member.id)
+        revoked = await room_lock_service.revoke_access(member)
+        await interaction.response.send_message(
+            f"🚫 Đã loại {member.mention} khỏi allowlist · đóng quyền ở **{revoked}** phòng đang khóa.",
+            ephemeral=True,
+        )
+
+    @bot.tree.command(name="allowremove", description="Xóa người khỏi allowlist phòng voice khóa")
+    @owner_check
+    async def allow_remove_member(interaction: discord.Interaction, member: discord.Member):
+        await _handle_remove_member(interaction, member)
+
+    @bot.tree.command(name="remove_privet", description="Xóa người khỏi whitelist (alias của /allowremove)")
+    @owner_check
+    async def remove_privet(interaction: discord.Interaction, member: discord.Member):
+        await _handle_remove_member(interaction, member)
+
+    async def _handle_list_allow(interaction: discord.Interaction):
+        if not room_lock_service:
+            return
+        entries = room_lock_service.whitelist.entries()
+        if not entries:
+            await interaction.response.send_message("📜 Allowlist đang trống (ngoài owner).", ephemeral=True)
+            return
+        lines = ["📜 **Danh sách Allowlist:**"]
+        for uid, username in entries:
+            lines.append(f"🔹 <@{uid}> (`{username or 'Unknown'}` - `{uid}`)")
+        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    @bot.tree.command(name="allowlist", description="Xem danh sách allowlist phòng voice khóa")
+    @owner_check
+    async def allow_list(interaction: discord.Interaction):
+        await _handle_list_allow(interaction)
+
+    @bot.tree.command(name="list_privet", description="Liệt kê whitelist voice-room (alias của /allowlist)")
+    @owner_check
+    async def list_privet(interaction: discord.Interaction):
+        await _handle_list_allow(interaction)
 
     @bot.tree.command(name="move", description="Chuyển một thành viên sang voice channel khác")
     @app_commands.autocomplete(member=bot_core_instance._member_autocomplete, channel=bot_core_instance._voice_channel_autocomplete)
@@ -830,202 +907,134 @@ def register_slash_commands(bot_core_instance):
             await interaction.response.defer(ephemeral=True)
         except Exception:
             return
+        if not room_tools_service or not interaction.guild:
+            await interaction.followup.send("⚠️ Dịch vụ voice chưa sẵn sàng.", ephemeral=True)
+            return
         try:
-            target_member = interaction.guild.get_member(int(member)) if interaction.guild else None
-            target_channel = interaction.guild.get_channel(int(channel)) if interaction.guild else None
-            if not target_member or not isinstance(target_channel, (discord.VoiceChannel, discord.StageChannel)):
-                raise ValueError("Không tìm thấy member hoặc channel")
-            if not target_member.voice:
-                await interaction.followup.send("⚠️ Người đó chưa ở voice.", ephemeral=True)
+            target_member = interaction.guild.get_member(int(member))
+            target_channel = interaction.guild.get_channel(int(channel))
+            if not target_member or not isinstance(target_channel, discord.VoiceChannel):
+                await interaction.followup.send("⚠️ Không tìm thấy thành viên hoặc phòng voice hợp lệ.", ephemeral=True)
                 return
-            if target_channel.id in voice_lock_manager.locked_channels:
-                await target_channel.set_permissions(target_member, connect=True)
-            await target_member.move_to(target_channel)
-            await interaction.followup.send(f"✅ Đã chuyển vào {target_channel.name}", ephemeral=True)
+            ok, msg = await room_tools_service.move_member(target_member, target_channel, interaction.user)
+            await interaction.followup.send(msg, ephemeral=True)
         except Exception as e:
             await interaction.followup.send(f"❌ Lỗi: {e}", ephemeral=True)
 
-    @bot.tree.command(name="move_all", description="Chuyển owner + whitelist từ phòng hiện tại sang phòng khác")
+    @bot.tree.command(name="move_all", description="Chuyển bạn và toàn bộ người trong allowlist sang phòng khác")
     @owner_check
     async def move_all(interaction: discord.Interaction, target_channel: discord.VoiceChannel):
         try:
             await interaction.response.defer(ephemeral=True)
         except Exception:
             pass
+        if not room_tools_service or not interaction.guild:
+            await interaction.followup.send("⚠️ Dịch vụ voice chưa sẵn sàng.", ephemeral=True)
+            return
 
-        source_channel = get_requester_voice_channel(interaction)
-        if source_channel is None or interaction.guild is None:
+        source = get_requester_voice_channel(interaction)
+        if source is None:
             await interaction.followup.send("⚠️ Bạn đang không ở trong voice.", ephemeral=True)
             return
-
-        if not isinstance(target_channel, discord.VoiceChannel):
-            await interaction.followup.send("⚠️ Bạn phải chọn voice channel hợp lệ.", ephemeral=True)
-            return
-
-        whitelist = voice_lock_manager.load_whitelist()
-
-        if source_channel.id == target_channel.id:
+        if source.id == target_channel.id:
             await interaction.followup.send("⚠️ Bạn chọn trùng phòng hiện tại.", ephemeral=True)
             return
 
-        moved_count = 0
-        for m in source_channel.members:
-            if str(m.id) in whitelist or m.id == voice_lock_manager.owner_id:
-                try:
-                    await m.move_to(target_channel, reason="Mass move by owner")
-                    moved_count += 1
-                except Exception:
-                    pass
+        moved, failed = await room_tools_service.move_all(source, target_channel, interaction.user)
+        text = f"Đã chuyển **{moved}** người sang **{target_channel.name}**."
+        if failed:
+            text += f"\nKhông chuyển được: {', '.join(failed[:8])}"
+        await interaction.followup.send(text, ephemeral=True)
 
-        if source_channel.id in voice_lock_manager.locked_channels:
-            voice_lock_manager.locked_channels.discard(source_channel.id)
-            voice_lock_manager.locked_channels.add(target_channel.id)
-            voice_lock_manager.save_locked_channels()
-
-            default_role = interaction.guild.default_role
-            old_overwrite = source_channel.overwrites_for(default_role)
-            old_overwrite.connect = None
-            await source_channel.set_permissions(default_role, overwrite=old_overwrite)
-
-            new_overwrite = target_channel.overwrites_for(default_role)
-            new_overwrite.connect = False
-            await target_channel.set_permissions(default_role, overwrite=new_overwrite)
-
-            voice_lock_manager.log_action(f"✈️ MASS-MOVE + RELOCK tại {target_channel.name}")
-
-        await interaction.followup.send(
-            f"✅ Đã chuyển {moved_count} thành viên sang **{target_channel.name}**.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="set_room", description="Đổi tên/trạng thái phòng hiện tại và khóa sửa tên")
+    @bot.tree.command(name="set_room", description="Đổi tên và trạng thái phòng hiện tại (khóa tên nếu phòng đang bị lock)")
     @app_commands.describe(name="Tên mới", status="Trạng thái mới")
     @owner_check
     async def set_room(interaction: discord.Interaction, name: Optional[str] = None, status: Optional[str] = None):
         try:
             await interaction.response.defer(ephemeral=True)
-        except discord.errors.NotFound:
+        except Exception:
             pass
+        if not room_tools_service:
+            await interaction.followup.send("⚠️ Dịch vụ voice chưa sẵn sàng.", ephemeral=True)
+            return
 
         channel = get_requester_voice_channel(interaction)
         if channel is None:
             await interaction.followup.send("⚠️ Bạn đang không ở trong voice.", ephemeral=True)
             return
 
-        updates = []
-        voice_lock_manager.ignore_next_updates.add(channel.id)
-
-        if name:
-            try:
-                await channel.edit(name=name, reason="Owner room rename")
-                voice_lock_manager.enforced_names[channel.id] = name
-                voice_lock_manager.save_enforced_names()
-                updates.append(f"Tên phòng: **{name}**")
-            except discord.errors.Forbidden:
-                await interaction.followup.send("❌ Bot thiếu quyền Manage Channels để đổi tên.", ephemeral=True)
-                voice_lock_manager.ignore_next_updates.discard(channel.id)
-                return
-
-        if status is not None:
-            logger.info("VoiceChannel.status edit is not supported in discord.py; skipped status update request.")
-
-        await asyncio.sleep(3)
-        voice_lock_manager.ignore_next_updates.discard(channel.id)
-
-        if updates:
-            voice_lock_manager.log_action(f"✏️ SET_ROOM: {' | '.join(updates)} ở {channel.id}")
+        if name is None and status is None:
             await interaction.followup.send(
-                "✅ Đã cập nhật và bật chống sửa tên phòng.\n" + "\n".join(f"🔹 {u}" for u in updates),
+                f"Phòng **{channel.name}** — status: `{getattr(channel, 'status', None) or 'trống'}`.\n"
+                "Dùng `/set_room name: ... status: ...` để đổi.",
+                ephemeral=True,
+            )
+            return
+
+        ok, updates = await room_tools_service.set_room(channel, name=name, status=status)
+        if ok:
+            await interaction.followup.send(
+                "✅ Đã cập nhật phòng:\n" + "\n".join(f"🔹 {u}" for u in updates),
                 ephemeral=True,
             )
         else:
-            await interaction.followup.send("⚠️ Bạn chưa nhập name/status để đổi.", ephemeral=True)
+            await interaction.followup.send(
+                f"❌ Cập nhật thất bại: {', '.join(updates) if updates else 'Lỗi không xác định'}",
+                ephemeral=True,
+            )
 
-    @bot.tree.command(name="add_privet", description="Thêm người vào whitelist để không bị kick khi lock")
-    @owner_check
-    async def add_privet(interaction: discord.Interaction, member: discord.Member):
+    @bot.tree.command(name="rolerank", description="Kéo thứ hạng role lên cao hơn bằng menu chọn trực quan (ADMIN ONLY)")
+    @is_admin()
+    async def rolerank_command(interaction: discord.Interaction):
+        guild = interaction.guild
+        if not guild:
+            return
+        if not guild.me.guild_permissions.manage_roles:
+            await interaction.response.send_message("Bot thiếu quyền Manage Roles trong server này.", ephemeral=True)
+            return
+        view = RolePickerView(guild, interaction.user.id)
+        await interaction.response.send_message(embed=view.embed, view=view, ephemeral=True)
         try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.errors.NotFound:
+            view.message = await interaction.original_response()
+        except discord.NotFound:
             pass
 
-        whitelist = voice_lock_manager.load_whitelist()
-        user_id_str = str(member.id)
-        if user_id_str in whitelist:
-            await interaction.followup.send(f"⚠️ **{member.display_name}** đã có trong whitelist.", ephemeral=True)
+    change_group = app_commands.Group(name="change", description="Đổi biệt danh thành viên trong server (ADMIN ONLY)")
+
+    @change_group.command(name="bd", description="Đổi biệt danh của bạn hoặc một thành viên")
+    @is_admin()
+    @app_commands.describe(
+        nickname="Biệt danh mới (tối đa 32 ký tự)",
+        member="Người cần đổi biệt danh (bỏ trống = đổi tên chính bạn)",
+    )
+    async def change_bd(
+        interaction: discord.Interaction,
+        nickname: str,
+        member: Optional[discord.Member] = None,
+    ):
+        if len(nickname) > 32:
+            await interaction.response.send_message("Biệt danh không được quá 32 ký tự.", ephemeral=True)
             return
 
-        whitelist[user_id_str] = {"username": member.name, "id": user_id_str}
-        voice_lock_manager.save_whitelist(whitelist)
+        target = member if member is not None else interaction.user
+        me = interaction.guild.me if interaction.guild else None
+        if not me or not me.guild_permissions.manage_nicknames:
+            await interaction.response.send_message("Bot thiếu quyền Manage Nicknames trong server này.", ephemeral=True)
+            return
 
-        owner_channel = get_requester_voice_channel(interaction)
-        if owner_channel is not None:
-            member_overwrite = owner_channel.overwrites_for(member)
-            member_overwrite.connect = True
-            await owner_channel.set_permissions(member, overwrite=member_overwrite)
-
-        await interaction.followup.send(
-            f"✅ Đã thêm **{member.display_name}** vào whitelist.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="remove_privet", description="Xóa một người khỏi whitelist")
-    @owner_check
-    async def remove_privet(interaction: discord.Interaction, member: discord.Member):
         try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.errors.NotFound:
-            pass
+            await target.edit(nick=nickname)
+            who = interaction.user.mention if target == interaction.user else target.mention
+            await interaction.response.send_message(f"Đã đổi biệt danh của {who} thành **{nickname}**", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "Không đổi được: bot thiếu quyền hoặc role của bot thấp hơn role của người cần đổi.",
+                ephemeral=True,
+            )
+        except discord.HTTPException as error:
+            await interaction.response.send_message(f"Lỗi khi đổi biệt danh: {error}", ephemeral=True)
 
-        whitelist = voice_lock_manager.load_whitelist()
-        user_id_str = str(member.id)
-
-        if user_id_str == str(voice_lock_manager.owner_id):
-            await interaction.followup.send("❌ Bạn không thể tự loại khỏi whitelist.", ephemeral=True)
-            return
-
-        if user_id_str not in whitelist:
-            await interaction.followup.send(f"⚠️ {member.display_name} không có trong whitelist.", ephemeral=True)
-            return
-
-        del whitelist[user_id_str]
-        voice_lock_manager.save_whitelist(whitelist)
-
-        owner_channel = get_requester_voice_channel(interaction)
-        if owner_channel is not None:
-            if member in owner_channel.members:
-                await member.move_to(None, reason="Removed from whitelist by owner")
-
-            member_overwrite = owner_channel.overwrites_for(member)
-            member_overwrite.connect = None
-            await owner_channel.set_permissions(member, overwrite=member_overwrite)
-
-        await interaction.followup.send(
-            f"🗑️ Đã xóa **{member.display_name}** khỏi whitelist.",
-            ephemeral=True,
-        )
-
-    @bot.tree.command(name="list_privet", description="Liệt kê whitelist voice-room")
-    @owner_check
-    async def list_privet(interaction: discord.Interaction):
-        try:
-            await interaction.response.defer(ephemeral=True)
-        except discord.errors.NotFound:
-            pass
-
-        whitelist = voice_lock_manager.load_whitelist()
-        if len(whitelist) <= 1:
-            await interaction.followup.send("📜 Danh sách trống (ngoài owner).", ephemeral=True)
-            return
-
-        lines = ["📜 **Whitelist voice-room:**"]
-        for uid, data in whitelist.items():
-            if uid == str(voice_lock_manager.owner_id):
-                continue
-            username = data.get("username", "Unknown")
-            lines.append(f"🔹 **{username}** `(UID: {uid})`")
-
-        await interaction.followup.send("\n".join(lines), ephemeral=True)
+    bot.tree.add_command(change_group)
 
     @bot.tree.error
     async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
