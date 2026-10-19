@@ -17,7 +17,7 @@ from src.database.repository import DatabaseRepository
 from src.managers.cleanup_manager import CleanupManager
 from src.services.health_checker import get_health_checker
 from src.services.redis_service import RedisStreamService, RedisStreamConsumer
-from src.voice.voice_lock import VoiceLockManager
+from src.voice import VoiceLockManager, RoomLockService, RoomToolsService
 
 # Import Slash Commands Registration
 from src.handlers.discord.commands import register_slash_commands
@@ -67,6 +67,22 @@ class BotCore:
                 self.logger.warning(f"Failed to initialize Redis client: {e}. Falling back to Local RAM Lock.")
 
         self.voice_lock_manager: Optional[VoiceLockManager] = self._build_voice_lock_manager()
+        self.room_lock_service: Optional[RoomLockService] = (
+            RoomLockService(
+                store=self.voice_lock_manager.lock_store,
+                whitelist=self.voice_lock_manager.whitelist_store,
+                bot=self.bot,
+                owner_id=self.voice_lock_manager.owner_id,
+                logger_override=self.logger,
+            )
+            if self.voice_lock_manager
+            else None
+        )
+        self.room_tools_service: Optional[RoomToolsService] = (
+            RoomToolsService(self.room_lock_service, logger_override=self.logger)
+            if self.room_lock_service
+            else None
+        )
         self._voice_enforce_task: Optional[asyncio.Task] = None
 
         self._register_slash_commands()
@@ -831,12 +847,30 @@ class BotCore:
             if self.voice_lock_manager and not self._voice_enforce_task:
                 self._voice_enforce_task = asyncio.create_task(self._voice_lock_enforce_loop())
 
+            if self.room_lock_service:
+                try:
+                    for record in self.room_lock_service.prune_missing_channels():
+                        self.logger.info(f"[room_lock] Bỏ phòng đã xóa khỏi server: {record.channel_id}")
+                    for channel in self.room_lock_service.all_locked_channels():
+                        await self.room_lock_service.ensure_locked(channel)
+                        await self.room_lock_service.enforce(channel, reason=f"{channel.name} đã khóa")
+                except Exception as e:
+                    self.logger.warning(f"Error restoring room locks on ready: {e}")
+
             self.logger.info(f"{self.bot.user} is online and ready!")
 
         @self.bot.event
         async def on_message(message: discord.Message):
             if message.author.bot:
                 return
+
+            if self.room_lock_service and isinstance(message.channel, discord.VoiceChannel):
+                if self.room_lock_service.is_locked(message.channel.id) and not self.room_lock_service.is_allowed(message.author.id):
+                    try:
+                        await message.delete()
+                        return
+                    except (discord.Forbidden, discord.HTTPException):
+                        pass
 
             if await self._handle_confirmation_message(message):
                 return
@@ -1028,13 +1062,19 @@ class BotCore:
                     self.bot.loop.create_task(remove_ignore(after.id))
 
         @self.bot.event
+        async def on_guild_channel_delete(channel: discord.abc.GuildChannel):
+            if self.room_lock_service and self.room_lock_service.is_locked(channel.id):
+                self.room_lock_service.store.unlock(channel.id)
+                self.logger.info(f"[room_lock] Đã xóa bản ghi khóa của phòng bị xóa: {channel.name} ({channel.id})")
+
+        @self.bot.event
         async def on_command_error(ctx: commands.Context, error: commands.CommandError):
             if isinstance(error, commands.CommandNotFound):
                 self.logger.warning(f"Command not found: '{ctx.message.content}' from User: {ctx.author}")
                 return
             self.logger.error(f"Command error: {error}")
 
-        _ = (on_ready, on_message, on_voice_state_update, on_guild_channel_update, on_command_error)
+        _ = (on_ready, on_message, on_voice_state_update, on_guild_channel_update, on_guild_channel_delete, on_command_error)
 
     async def start(self, token: str):
         async with self.bot:

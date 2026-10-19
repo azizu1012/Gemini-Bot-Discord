@@ -124,6 +124,8 @@ GeminiPipeline.execute()
 | `/health_check` | Endpoint active + latency + 4 model slot + PostgreSQL |
 | `/moderator` | Thăng/hạ Moderator động |
 | `/premium` | Thêm/xóa Premium |
+| `/rolerank` | Kéo thứ tự role trong server bằng menu tương tác |
+| `/change bd` | Đổi biệt danh thành viên trong server |
 | `/reset-all` | Reset DB + xóa cache |
 | `/global-notes` | Xem ghi chú global |
 | `/message_to` | Gửi DM / tin nhắn cross-server |
@@ -137,15 +139,21 @@ GeminiPipeline.execute()
 | `/message_to` | Nhắn nội bộ guild |
 | `/imagine` | Tạo ảnh (giới hạn) |
 
+### Voice & Room (Owner / Allowlist)
+| Lệnh | Mô tả |
+|------|-------|
+| `/lock` / `/unlock` | Khóa/mở phòng voice hiện tại, kick người ngoài và dọn tin nhắn |
+| `/locklist` | Xem danh sách các phòng voice đang khóa |
+| `/allow` / `/allowremove` | Thêm hoặc xóa người khỏi allowlist (alias: `/add_privet`, `/remove_privet`) |
+| `/allowlist` | Xem danh sách người trong allowlist (alias: `/list_privet`) |
+| `/move` / `/move_all` | Di chuyển 1 thành viên hoặc cả nhóm allowlist sang phòng khác |
+| `/set_room` | Đổi tên/status phòng (khóa tên nếu phòng đang bị lock) |
+
 ### Tất cả users
 | Lệnh | Mô tả |
 |------|-------|
 | `/ping` | Kiểm tra độ trễ |
 | `/reset-chat` | Xóa lịch sử trò chuyện |
-| `/lock` / `/unlock` | Khóa/mở phòng thoại |
-| `/set_room` | Giới hạn member phòng thoại |
-| `/add_privet` / `/remove_privet` | Whitelist phòng thoại |
-| `/move` / `/move_all` | Di chuyển member |
 
 ## Kiểm thử
 
