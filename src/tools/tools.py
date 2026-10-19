@@ -89,7 +89,17 @@ class ToolsManager:
     # ── Config loaders ─────────────────────────────────────
 
     def _load_google_search_streams(self) -> int:
-        raw = os.getenv("GOOGLE_SEARCH_STREAMS", "1").strip()
+        raw = os.getenv("SEARCH_PARALLEL_STREAMS", "").strip()
+        if not raw:
+            legacy = os.getenv("GOOGLE_SEARCH_STREAMS", "").strip()
+            if legacy:
+                self.logger.warning(
+                    "GOOGLE_SEARCH_STREAMS đã đổi tên thành SEARCH_PARALLEL_STREAMS; "
+                    "biến cũ vẫn được đọc trong bản này."
+                )
+                raw = legacy
+        if not raw:
+            raw = "1"
         try:
             value = int(raw)
         except ValueError:

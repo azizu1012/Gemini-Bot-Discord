@@ -63,8 +63,6 @@ class Config:
         self.FILE_CHUNK_DIR = self._resolve_runtime_path("FILE_CHUNK_DIR", "data/file_chunks")
         self.LOG_PATH = self._resolve_runtime_path("BOT_LOG_PATH", "bot.log")
 
-        # Keep router config aligned with absolute runtime path.
-
         # --- VOICE ROOM OWNER LOCK ---
         self.VOICE_LOCK_BASE_DIR = self._resolve_runtime_path("VOICE_LOCK_BASE_DIR", "data/voice_lock")
         self.VOICE_WHITELIST_FILE = str(Path(self.VOICE_LOCK_BASE_DIR) / "users.json")
@@ -79,7 +77,6 @@ class Config:
 
         # --- DISCORD & BOT ---
         self.TOKEN = os.getenv("DISCORD_TOKEN")
-        self.MODEL_NAME = os.getenv("MODEL_NAME", "gemini-3-flash-preview")
         self.ADMIN_ID = os.getenv("ADMIN_ID", "")
         self.ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
         self.HABE_USER_ID = os.getenv("HABE_USER_ID", "")
@@ -92,60 +89,10 @@ class Config:
         # --- DONATE ENCRYPTION ---
         self.DONATE_ENCRYPTION_KEY = os.getenv("DONATE_ENCRYPTION_KEY", "")
 
-        # --- GEMINI API KEYS (PATTERN-BASED DYNAMIC LOAD) ---
-        # Accept any env var like GEMINI_API_KEY_1..N and optional named extras.
-        # Exclude summary-only keys (GEMINI_API_KEY_TOMTAT_*).
-        self.GEMINI_API_KEYS = []
-        seen_keys = set()
-
-        indexed_key_names = sorted(
-            [
-                env_name
-                for env_name in os.environ.keys()
-                if env_name.upper().startswith("GEMINI_API_KEY_")
-                and "TOMTAT" not in env_name.upper()
-            ],
-            key=lambda name: (
-                0 if name.upper().replace("GEMINI_API_KEY_", "").isdigit() else 1,
-                int(name.upper().replace("GEMINI_API_KEY_", "")) if name.upper().replace("GEMINI_API_KEY_", "").isdigit() else 10**9,
-                name,
-            ),
-        )
-
-        fallback_named_keys = [
-            "GEMINI_API_KEY_PROD",
-            "GEMINI_API_KEY_TEST",
-            "GEMINI_API_KEY_BACKUP",
-            "GEMINI_API_KEY_EXTRA1",
-            "GEMINI_API_KEY_EXTRA2",
-        ]
-
-        for name in indexed_key_names + fallback_named_keys:
-            key = (os.getenv(name) or "").strip()
-            if key and key not in seen_keys:
-                seen_keys.add(key)
-                self.GEMINI_API_KEYS.append(key)
-
-        if not self.GEMINI_API_KEYS:
-            self.logger.error("Không tìm thấy Gemini API keys! Bot sẽ không thể hoạt động.")
-        else:
-            router_mode = bool(os.getenv("ROUTER_AUTH_KEY", "")) and bool(os.getenv("GEMINI_BASE_URL", ""))
-            if router_mode:
-                self.logger.info(f"✅ Chế độ Router — auth key duy nhất, {len(self.GEMINI_API_KEYS)} Google key dự phòng.")
-            else:
-                self.logger.info(f"✅ Chế độ Direct — xoay vòng {len(self.GEMINI_API_KEYS)} Google Gemini API keys.")
-
-        # --- SEARCH API KEYS ---
-        # --- OPENAI / CUSTOM ENDPOINT ---
-        self.OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-        self.OPENAI_CUSTOM_ENDPOINT = os.getenv("OPENAI_CUSTOM_ENDPOINT", "")
-
-        # --- GEMINI ROUTER / PROXY ENDPOINT ---
-        # Trỏ về Router API (http://127.0.0.1:58100) để route Gemini SDK qua proxy thay vì gọi Google trực tiếp.
-        self.GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "")
-        self.ROUTER_AUTH_KEY = os.getenv("ROUTER_AUTH_KEY", "")
+        # --- GEMINI TIMEOUT (endpoint/key cấu hình qua /endpoint, lưu PostgreSQL) ---
         self.GEMINI_TIMEOUT_MS = self._get_int("GEMINI_TIMEOUT_MS", 60000, min_value=5000)
 
+        # --- SEARCH API KEYS ---
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
         self.TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
         self.EXA_API_KEY = os.getenv("EXA_API_KEY")
@@ -180,12 +127,6 @@ class Config:
         self.FINAL_CONTINUATION_MAX_CALLS = self._get_int("FINAL_CONTINUATION_MAX_CALLS", 5, min_value=1, max_value=8)
         self.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = self._get_bool("SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS", True)
         self.SEARCH_ALLOW_PARTIAL_ANSWER = self._get_bool("SEARCH_ALLOW_PARTIAL_ANSWER", True)
-
-        # --- GEMINI CIRCUIT BREAKER ---
-        self.GEMINI_CIRCUIT_ENABLED = self._get_bool("GEMINI_CIRCUIT_ENABLED", True)
-        self.GEMINI_CIRCUIT_FAILURE_THRESHOLD = self._get_int("GEMINI_CIRCUIT_FAILURE_THRESHOLD", 5, min_value=1, max_value=50)
-        self.GEMINI_CIRCUIT_WINDOW_SECONDS = self._get_int("GEMINI_CIRCUIT_WINDOW_SECONDS", 10, min_value=2, max_value=300)
-        self.GEMINI_CIRCUIT_OPEN_SECONDS = self._get_int("GEMINI_CIRCUIT_OPEN_SECONDS", 30, min_value=5, max_value=600)
 
         # --- GEMINI SAFETY SETTINGS ---
         self.SAFETY_SETTINGS = [
@@ -275,7 +216,6 @@ def get_config() -> Config:
 config = get_config()
 logger = config.logger
 TOKEN = config.TOKEN
-MODEL_NAME = config.MODEL_NAME
 ADMIN_ID = config.ADMIN_ID
 ADMIN_TOKEN = config.ADMIN_TOKEN
 HABE_USER_ID = config.HABE_USER_ID
@@ -284,7 +224,6 @@ ADO_FAT_USER_ID = config.ADO_FAT_USER_ID
 MUC_RIM_USER_ID = config.MUC_RIM_USER_ID
 SUC_VIEN_USER_ID = config.SUC_VIEN_USER_ID
 CHUI_USER_ID = config.CHUI_USER_ID
-GEMINI_API_KEYS = config.GEMINI_API_KEYS
 SAFETY_SETTINGS = config.SAFETY_SETTINGS
 SPAM_THRESHOLD = config.SPAM_THRESHOLD
 SPAM_WINDOW = config.SPAM_WINDOW

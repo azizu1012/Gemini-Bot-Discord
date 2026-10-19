@@ -111,9 +111,6 @@ def run_preflight_checks(config: Config, require_token: bool = False) -> Tuple[b
     if require_token and not config.TOKEN:
         errors.append("DISCORD_TOKEN is missing")
 
-    if not config.GEMINI_API_KEYS:
-        errors.append("No Gemini API key found (GEMINI_API_KEY_*)")
-
     versions = get_dependency_versions()
     for pkg, version in versions.items():
         if version == "<missing>":
