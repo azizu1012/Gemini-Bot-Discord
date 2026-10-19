@@ -72,17 +72,6 @@ class BotCore:
         self._register_slash_commands()
         self._register_events()
 
-    def _update_env_var(self, key: str, value: str):
-        """Cập nhật biến môi trường trong tệp .env và cập nhật os.environ"""
-        from dotenv import set_key
-        env_path = self.config.PROJECT_ROOT / ".env"
-        try:
-            set_key(str(env_path), key, value)
-            os.environ[key] = value
-            self.logger.info(f"Updated env var {key} in {env_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to update env var {key}: {e}")
-
     async def _is_admin_user(self, user_id: str) -> bool:
         if str(user_id) in self.config.ADMIN_USER_IDS:
             return True

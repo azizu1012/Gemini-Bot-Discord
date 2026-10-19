@@ -1,5 +1,6 @@
 import asyncio
 import io
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -7,7 +8,18 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from src.handlers.discord.ui import GlobalNoteView, GlobalNoteDemoteView, ImageHistoryView
+from src.handlers.discord.ui import (
+    GlobalNoteView,
+    GlobalNoteDemoteView,
+    ImageHistoryView,
+    EndpointConfigFlow,
+    SDKChoiceView,
+    SLOT_LABELS,
+    SLOT_ORDER,
+    normalize_models,
+)
+from src.core.llm.gateway import get_llm_gateway
+from src.core.llm.resolver import get_endpoint_resolver, mask_api_key, resolve_model_id
 
 
 def register_slash_commands(bot_core_instance):
@@ -15,7 +27,9 @@ def register_slash_commands(bot_core_instance):
     db_repo = bot_core_instance.db_repo
     config = bot_core_instance.config
     logger = bot_core_instance.logger
-    health_checker = bot_core_instance.health_checker
+    resolver = get_endpoint_resolver()
+    resolver.set_db_repo(db_repo)
+    gateway = get_llm_gateway()
     kafka_service = bot_core_instance.kafka_service
     voice_lock_manager = bot_core_instance.voice_lock_manager
 
@@ -55,156 +69,222 @@ def register_slash_commands(bot_core_instance):
         bot_core_instance.confirmation_pending[user_id] = {"timestamp": datetime.now(), "awaiting": True}
         await interaction.followup.send("Clear chat history? Reply **yes** or **y** in 60 seconds! 😳", ephemeral=True)
 
-    @bot.tree.command(name="health_check", description="Kiểm tra thủ công trạng thái Gemini API keys và model scan (ADMIN ONLY)")
+    @bot.tree.command(name="health_check", description="Kiểm tra endpoint LLM, 4 model slot và PostgreSQL (ADMIN ONLY)")
     @is_moderator_or_admin()
     async def health_check_slash(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        await interaction.followup.send("⏳ Đang ping health check...", ephemeral=True)
-        report = await health_checker.run_health_check_cycle()
-
         embed = discord.Embed(
-            title="🩺 Health Check Report",
-            color=discord.Color.green(),
+            title="🩺 Health Check",
+            color=discord.Color.blurple(),
             timestamp=datetime.now(),
         )
 
-        key_lines = []
-        for entry in report.get("key_checks", []):
-            alive = entry.get("alive")
-            status = "✅ Alive" if alive else "❌ Dead"
-            error_text = f" — `{entry.get('error')}`" if entry.get("error") else ""
-            key_lines.append(f"**{status}** `{entry.get('key')}` — {entry.get('provider')}{error_text}")
-        key_block = "\n".join(key_lines) if key_lines else "*Không có key để kiểm tra*"
-        embed.add_field(name="🔑 API Keys", value=key_block, inline=False)
+        configured = await resolver.is_configured()
+        if not configured:
+            embed.add_field(
+                name="Endpoint",
+                value="❌ Bot chưa được cấu hình. Chạy `/endpoint config`.",
+                inline=False,
+            )
+        else:
+            active = await resolver.get_active_sdk()
+            ep = await resolver.get_endpoint(active) or {}
+            start = time.perf_counter()
+            try:
+                raw_models = await gateway.list_models_for(
+                    sdk=active, base_url=ep.get("base_url") or "", api_key=ep.get("api_key") or ""
+                )
+                latency_ms = int((time.perf_counter() - start) * 1000)
+                model_ids = {m["id"] for m in normalize_models(raw_models)}
+                slots = await resolver.get_slot_models(active)
+                slot_lines = []
+                for slot in SLOT_ORDER:
+                    resolved_id = resolve_model_id(slots, slot)
+                    found = bool(resolved_id and resolved_id in model_ids)
+                    slot_lines.append(f"{'✅' if found else '⚠️'} {SLOT_LABELS[slot]}: `{resolved_id or '(chưa resolve được)'}`")
+                embed.add_field(
+                    name=f"Endpoint `{active}`",
+                    value=f"URL: `{ep.get('base_url')}`\nLatency: `{latency_ms} ms`",
+                    inline=False,
+                )
+                embed.add_field(name="4 slot", value="\n".join(slot_lines), inline=False)
+                await db_repo.update_endpoint_check_status(active, True, None)
+            except Exception as e:
+                await db_repo.update_endpoint_check_status(active, False, str(e)[:300])
+                embed.add_field(
+                    name=f"Endpoint `{active}`",
+                    value=f"❌ Lỗi: `{str(e)[:200]}`",
+                    inline=False,
+                )
+
+        try:
+            await db_repo.init_db()
+            embed.add_field(name="PostgreSQL", value="✅ OK", inline=True)
+        except Exception as e:
+            embed.add_field(name="PostgreSQL", value=f"❌ `{str(e)[:120]}`", inline=True)
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
-    @bot.tree.command(name="endpoint", description="Xem hoặc cấu hình Router API (URL và Auth Key) (ADMIN ONLY)")
-    @is_moderator_or_admin()
-    @app_commands.describe(
-        url="URL của Router API (ví dụ: http://127.0.0.1:58100, để trống nếu chỉ muốn xem cấu hình)",
-        auth_key="Auth Key để xác thực với Router (để trống nếu chỉ muốn xem cấu hình)"
+    endpoint_group = app_commands.Group(
+        name="endpoint",
+        description="Quản lý endpoint LLM: config / view / switch / models / test (ADMIN ONLY)",
     )
-    async def endpoint_slash(interaction: discord.Interaction, url: Optional[str] = None, auth_key: Optional[str] = None):
+
+    @endpoint_group.command(name="config", description="Cấu hình endpoint mới: chọn SDK → URL/Key → chọn model 4 slot")
+    @is_admin()
+    async def endpoint_config(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
+        flow = EndpointConfigFlow(
+            gateway=gateway,
+            resolver=resolver,
+            db_repo=db_repo,
+            config=config,
+            admin_user_id=str(interaction.user.id),
+        )
+        await flow.start(interaction)
 
-        if url is None and auth_key is None:
-            current_url = config.GEMINI_BASE_URL or "(trống)"
-            current_key = "⚠️ Đã cấu hình (ẩn)" if config.ROUTER_AUTH_KEY else "(trống)"
-            await interaction.followup.send(
-                f"📡 **Cấu hình Router API hiện tại:**\n"
-                f"📡 **URL:** `{current_url}`\n"
-                f"🔑 **Auth Key:** `{current_key}`",
-                ephemeral=True,
+    @endpoint_group.command(name="view", description="Xem cấu hình endpoint hiện tại (URL, key ẩn, 4 slot)")
+    @is_admin()
+    async def endpoint_view(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        endpoints = await db_repo.get_llm_endpoints()
+        active = await db_repo.get_active_sdk()
+        embed = discord.Embed(title="📡 Cấu hình Endpoint", color=discord.Color.blurple())
+        embed.add_field(name="SDK active", value=f"`{active}`" if active else "*chưa có*", inline=False)
+        for sdk in ("genai", "openai"):
+            row = endpoints.get(sdk)
+            if not row:
+                embed.add_field(name=sdk, value="*chưa cấu hình*", inline=False)
+                continue
+            ep = await resolver.get_endpoint(sdk) or {}
+            slots = await db_repo.get_llm_model_slots(sdk)
+            slot_lines = "\n".join(
+                f"- {SLOT_LABELS[s]}: `{slots.get(s) or '(để trống → default rule)'}`" for s in SLOT_ORDER
             )
-            return
-
-        if url is None or auth_key is None:
-            await interaction.followup.send(
-                "❌ **Lỗi:** Để thay đổi cấu hình Router API, bạn phải cung cấp đồng thời cả **URL** và **Auth Key**.",
-                ephemeral=True
+            if row.get("last_checked_at"):
+                ok = "✅" if row.get("last_check_ok") else "❌"
+                last_check = f"{ok} lúc {row.get('last_checked_at')}"
+                if row.get("last_check_error"):
+                    last_check += f" — `{str(row.get('last_check_error'))[:150]}`"
+            else:
+                last_check = "chưa test lần nào"
+            embed.add_field(
+                name=sdk,
+                value=(
+                    f"URL: `{row.get('base_url')}`\n"
+                    f"Key: `{mask_api_key(ep.get('api_key') or '')}`\n"
+                    f"Cập nhật: {row.get('updated_at')} bởi `{row.get('updated_by')}`\n"
+                    f"Check gần nhất: {last_check}\n"
+                    f"{slot_lines}"
+                ),
+                inline=False,
             )
-            return
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
-        url = url.strip()
-        auth_key = auth_key.strip()
+    @endpoint_group.command(name="switch", description="Đổi SDK active (không tự chuyển provider lúc runtime)")
+    @is_admin()
+    async def endpoint_switch(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        endpoints = await db_repo.get_llm_endpoints()
 
-        if not url or not auth_key:
-            await interaction.followup.send(
-                "❌ **Lỗi:** URL và Auth Key không được phép để trống.",
-                ephemeral=True
-            )
-            return
-
-        if not (url.startswith("http://") or url.startswith("https://")):
-            url = f"http://{url}"
-
-        def validate_endpoint():
-            try:
-                from google import genai
-                from google.genai import types as genai_types
-                from google.genai.errors import APIError
-                import httpx
-
-                headers = {
-                    "Authorization": f"Bearer {auth_key}"
-                }
-
-                test_client = genai.Client(
-                    api_key=auth_key,
-                    http_options=genai_types.HttpOptions(
-                        base_url=url,
-                        headers=headers
-                    )
+        async def on_choose(choice_interaction: discord.Interaction, sdk: str):
+            if sdk not in endpoints:
+                await choice_interaction.response.send_message(
+                    f"❌ SDK `{sdk}` chưa được cấu hình. Chạy `/endpoint config` trước.",
+                    ephemeral=True,
+                )
+                return
+            ok = await db_repo.set_active_sdk(sdk, updated_by=f"admin:{choice_interaction.user.id}")
+            resolver.invalidate()
+            if ok:
+                await choice_interaction.response.send_message(
+                    f"✅ Đã chuyển SDK active sang `{sdk}`.", ephemeral=True
+                )
+            else:
+                await choice_interaction.response.send_message(
+                    f"⚠️ Không chuyển được sang `{sdk}` (chưa cấu hình).", ephemeral=True
                 )
 
-                try:
-                    test_client.models.get(model="gemini-flash")
-                    return True, None
-                except APIError as api_err:
-                    if getattr(api_err, "code", None) == 401 or "unauthorized" in str(api_err).lower():
-                        return False, "Xác thực thất bại (401 Unauthorized) - Vui lòng kiểm tra lại Auth Key."
+        await interaction.followup.send(
+            "🔁 Chọn SDK muốn kích hoạt:", view=SDKChoiceView(on_choose), ephemeral=True
+        )
 
-                    if getattr(api_err, "code", None) == 500 or "internal server error" in str(api_err).lower():
-                        return True, None
-
-                    if getattr(api_err, "code", None) == 404 or "not found" in str(api_err).lower():
-                        try:
-                            test_client.models.generate_content(
-                                model="gemini-flash",
-                                contents="ping"
-                            )
-                            return True, None
-                        except APIError as fallback_err:
-                            if getattr(fallback_err, "code", None) == 401 or "unauthorized" in str(fallback_err).lower():
-                                return False, "Xác thực thất bại (401 Unauthorized) - Vui lòng kiểm tra lại Auth Key."
-
-                            if getattr(fallback_err, "code", None) == 500 or "internal server error" in str(fallback_err).lower():
-                                return True, None
-
-                            err_str = str(fallback_err).lower()
-                            if "api_key_invalid" in err_str or "api key not valid" in err_str:
-                                return True, None
-                            return False, f"Lỗi API từ Router: {fallback_err.message if hasattr(fallback_err, 'message') else str(fallback_err)}"
-                        except Exception as fallback_other:
-                            return False, f"Lỗi kết nối fallback: {str(fallback_other)}"
-
-                    err_str = str(api_err).lower()
-                    if "api_key_invalid" in err_str or "api key not valid" in err_str:
-                        return True, None
-
-                    return False, f"Lỗi từ Router API (Code {getattr(api_err, 'code', None)}): {api_err.message if hasattr(api_err, 'message') else str(api_err)}"
-
-                except (httpx.ConnectError, httpx.ConnectTimeout, Exception) as conn_err:
-                    return False, f"Không thể kết nối vật lý đến Router URL: {str(conn_err)}"
-
-            except Exception as e:
-                return False, f"Lỗi khởi tạo SDK: {str(e)}"
-
-        is_valid, error_msg = await asyncio.to_thread(validate_endpoint)
-
-        if not is_valid:
+    @endpoint_group.command(name="models", description="Fetch lại danh sách model và gán lại 4 slot")
+    @is_admin()
+    async def endpoint_models(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        active = await resolver.get_active_sdk()
+        ep = await resolver.get_endpoint(active) if active else None
+        if not active or not ep:
             await interaction.followup.send(
-                f"❌ **Lỗi kiểm tra Endpoint:**\n"
-                f"Không thể kết nối hoặc xác thực thành công qua Router API mới.\n"
-                f"Chi tiết lỗi từ SDK: `{error_msg}`\n"
-                f"Cấu hình chưa được áp dụng để đảm bảo bot không bị crash.",
-                ephemeral=True
+                "❌ Bot chưa được cấu hình endpoint. Chạy `/endpoint config` trước.", ephemeral=True
             )
             return
-
-        config.GEMINI_BASE_URL = url
-        bot_core_instance._update_env_var("GEMINI_BASE_URL", url)
-
-        config.ROUTER_AUTH_KEY = auth_key
-        bot_core_instance._update_env_var("ROUTER_AUTH_KEY", auth_key)
-
-        await interaction.followup.send(
-            f"✅ **Đã cấu hình Router API thành công (Đã xác thực):**\n"
-            f"📡 **URL:** `{url}`\n"
-            f"🔑 **Auth Key:** `⚠️ Đã cấu hình (ẩn)`",
-            ephemeral=True,
+        try:
+            raw_models = await gateway.list_models_for(
+                sdk=active, base_url=ep.get("base_url") or "", api_key=ep.get("api_key") or ""
+            )
+        except Exception as e:
+            await interaction.followup.send(f"❌ Không lấy được danh sách model: `{str(e)[:300]}`", ephemeral=True)
+            return
+        models = normalize_models(raw_models)
+        if not models:
+            await interaction.followup.send("❌ Endpoint trả về danh sách model rỗng.", ephemeral=True)
+            return
+        flow = EndpointConfigFlow(
+            gateway=gateway,
+            resolver=resolver,
+            db_repo=db_repo,
+            config=config,
+            admin_user_id=str(interaction.user.id),
         )
+        slots = await flow.run_slot_pickers(interaction, models)
+        if slots is None:
+            return
+        await db_repo.upsert_llm_model_slots(active, slots, updated_by=f"admin:{interaction.user.id}")
+        resolver.invalidate()
+        await interaction.followup.send(embed=flow.summary_embed(active, ep.get("base_url") or "", slots), ephemeral=True)
+
+    @endpoint_group.command(name="test", description="Ping endpoint + xác minh 4 model slot tồn tại + đo latency")
+    @is_admin()
+    async def endpoint_test(interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        active = await resolver.get_active_sdk()
+        ep = await resolver.get_endpoint(active) if active else None
+        if not active or not ep:
+            await interaction.followup.send(
+                "❌ Bot chưa được cấu hình endpoint. Chạy `/endpoint config` trước.", ephemeral=True
+            )
+            return
+        start = time.perf_counter()
+        try:
+            raw_models = await gateway.list_models_for(
+                sdk=active, base_url=ep.get("base_url") or "", api_key=ep.get("api_key") or ""
+            )
+            latency_ms = int((time.perf_counter() - start) * 1000)
+            model_ids = {m["id"] for m in normalize_models(raw_models)}
+            slots = await resolver.get_slot_models(active)
+            lines = []
+            all_ok = True
+            for slot in SLOT_ORDER:
+                resolved_id = resolve_model_id(slots, slot)
+                found = bool(resolved_id and resolved_id in model_ids)
+                all_ok = all_ok and found
+                lines.append(f"{'✅' if found else '❌'} {SLOT_LABELS[slot]}: `{resolved_id or '(chưa resolve được)'}`")
+            await db_repo.update_endpoint_check_status(active, True, None)
+            embed = discord.Embed(
+                title="🔌 Endpoint Test",
+                color=discord.Color.green() if all_ok else discord.Color.orange(),
+            )
+            embed.add_field(name="SDK", value=f"`{active}`", inline=True)
+            embed.add_field(name="Latency", value=f"`{latency_ms} ms`", inline=True)
+            embed.add_field(name="4 slot", value="\n".join(lines), inline=False)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            await db_repo.update_endpoint_check_status(active, False, str(e)[:300])
+            await interaction.followup.send(f"❌ Endpoint lỗi: `{str(e)[:300]}`", ephemeral=True)
+
+    bot.tree.add_command(endpoint_group)
 
     @bot.tree.command(name="imagine", description="Tạo ảnh bằng AI (Premium/Admin)")
     @app_commands.describe(
