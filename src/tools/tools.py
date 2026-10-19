@@ -1,18 +1,14 @@
 import asyncio
 import json
 import os
-import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Set
 
 import requests
-from google import genai
 from google.genai import types as genai_types
 
-from src.core.config import logger, GEMINI_API_KEYS
+from src.core.config import logger
 import src.core.config as config
-from src.core.api_router import get_api_router
-from src.core.api_config import VISION_MODEL_ALIAS
 from src.tools.constants import (
     MAX_CACHE_SIZE,
     MAX_FILE_SIZE_BYTES,
@@ -40,9 +36,9 @@ class ToolsManager:
     SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
     SERVICE_ACCOUNT_FILE = 'credentials.json'
 
-    def __init__(self, note_mgr=None, db_repo=None, search_subtask_client=None, enable_search_subtasks: Optional[bool] = None):
+    def __init__(self, note_mgr=None, db_repo=None, search_subtask_client=None, enable_search_subtasks: Optional[bool] = None, gateway=None):
         self.logger = logger
-        self.api_router = get_api_router()
+        self.gateway = gateway
         self.note_mgr = note_mgr
         self.db_repo = db_repo
         self.search_subtask_client = search_subtask_client
@@ -56,9 +52,6 @@ class ToolsManager:
         self.weather = WeatherService()
         self.calculator = CalculatorService()
         self.search_lock = asyncio.Lock()
-        self._gemini_key_cursor = 0
-        self._invalid_tool_keys = set()
-        self._tool_key_cooldowns = {}
 
         self.search_engine = SearchEngine(
             logger_override=logger,
@@ -80,21 +73,18 @@ class ToolsManager:
             google_search_streams=self._load_google_search_streams(),
         )
 
-        if GEMINI_API_KEYS:
-            self.logger.info(
-                f"Search/image tools ready: provider=duckduckgo streams={self.search_engine.google_search_streams} "
-                f"fallback_limit={self.search_engine.fallback_provider_limit} batch={self.search_engine.intent_batch_size} "
-                f"web_mode={self.search_engine.search_web_mode} grounded_links={self.search_engine.search_grounded_top_links} "
-                f"top_results_limit={self.search_engine.search_top_results_limit} "
-                f"quality_sources={self.search_engine.min_quality_sources}/{self.search_engine.time_sensitive_min_quality_sources} "
-                f"deep_read_top_links={self.search_engine.deep_read_top_links} "
-                f"semantic_cache={self.search_engine.search_semantic_cache_enabled} "
-                f"general_ttl={self.search_engine.search_general_cache_ttl_seconds}s "
-                f"time_ttl={self.search_engine.search_time_sensitive_cache_ttl_seconds}s "
-                f"cooldown={self.search_engine.search_failed_query_cooldown_seconds}s"
-            )
-        else:
-            self.logger.warning("Không có Gemini API key cho tools; web_search/image_recognition sẽ failback.")
+        self.logger.info(
+            f"Search/image tools ready: provider=duckduckgo streams={self.search_engine.google_search_streams} "
+            f"fallback_limit={self.search_engine.fallback_provider_limit} batch={self.search_engine.intent_batch_size} "
+            f"web_mode={self.search_engine.search_web_mode} grounded_links={self.search_engine.search_grounded_top_links} "
+            f"top_results_limit={self.search_engine.search_top_results_limit} "
+            f"quality_sources={self.search_engine.min_quality_sources}/{self.search_engine.time_sensitive_min_quality_sources} "
+            f"deep_read_top_links={self.search_engine.deep_read_top_links} "
+            f"semantic_cache={self.search_engine.search_semantic_cache_enabled} "
+            f"general_ttl={self.search_engine.search_general_cache_ttl_seconds}s "
+            f"time_ttl={self.search_engine.search_time_sensitive_cache_ttl_seconds}s "
+            f"cooldown={self.search_engine.search_failed_query_cooldown_seconds}s"
+        )
 
     # ── Config loaders ─────────────────────────────────────
 
@@ -217,29 +207,6 @@ class ToolsManager:
             value = 600
         return max(60, min(7200, value))
 
-    # ── Gemini key rotation ────────────────────────────────
-
-    def _next_gemini_api_key(self) -> str:
-        if not GEMINI_API_KEYS:
-            return ""
-        now = time.time()
-        total = len(GEMINI_API_KEYS)
-        for _ in range(total):
-            key = GEMINI_API_KEYS[self._gemini_key_cursor]
-            self._gemini_key_cursor = (self._gemini_key_cursor + 1) % total
-            if key in self._invalid_tool_keys:
-                continue
-            if key in self._tool_key_cooldowns and now < self._tool_key_cooldowns[key]:
-                continue
-            return key
-        for _ in range(total):
-            key = GEMINI_API_KEYS[self._gemini_key_cursor]
-            self._gemini_key_cursor = (self._gemini_key_cursor + 1) % total
-            if key in self._invalid_tool_keys:
-                continue
-            return key
-        return GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
-
     # ── Mention tracking ───────────────────────────────────
 
     def _record_allowed_mention(self, caller_user_id: str, target_user_id: str) -> None:
@@ -255,11 +222,6 @@ class ToolsManager:
         if not caller_id:
             return []
         return sorted(self._allowed_mentions.pop(caller_id, set()))
-
-    # ── Vision alias ───────────────────────────────────────
-
-    async def _resolve_router_model_alias_for_vision(self) -> str:
-        return VISION_MODEL_ALIAS
 
     # ── Tool definitions (Gemini) ─────────────────────────
 
@@ -440,11 +402,9 @@ class ToolsManager:
             self.logger.info(f"Image recognition result from cache for URL: {image_url}, Question: {question[:30]}...")
             return cached
 
-        start_ts = datetime.now().timestamp()
-        vision_alias = await self._resolve_router_model_alias_for_vision()
-        vision_model_id = self.api_router.get_model_id(vision_alias)
-        attempt_budget = max(1, min(5, len(GEMINI_API_KEYS) if GEMINI_API_KEYS else 1))
-        last_error = ""
+        if self.gateway is None:
+            return "Lỗi: LLM gateway chưa sẵn sàng cho image recognition."
+
         try:
             image_bytes = await asyncio.to_thread(lambda: requests.get(image_url, timeout=12).content)
             if not image_bytes:
@@ -453,73 +413,19 @@ class ToolsManager:
                 return "Lỗi: Ảnh vượt quá giới hạn 20MB cho inline image understanding."
 
             mime_type = self._guess_mime_type(image_url)
-            image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
-
-            quota_ok = await self.api_router.acquire_gemini_quota(question, 2000, model_alias=vision_alias, image_count=1)
-            if not quota_ok:
-                return "⚠️ Hệ thống đang quá tải (vượt giới hạn truy vấn ảnh), vui lòng thử lại sau vài giây."
-
-            for attempt in range(1, attempt_budget + 1):
-                reservation = await self.api_router.get_next_key_for_model_reservation(vision_alias)
-                api_key = (reservation or {}).get("key") or self._next_gemini_api_key()
-                if not api_key:
-                    break
-
-                key_alias = f"...{api_key[-4:]}" if len(api_key) >= 4 else "<short>"
-                try:
-                    if reservation:
-                        self.api_router.commit_key_usage(reservation)
-
-                    client = genai.Client(api_key=api_key)
-                    response = await asyncio.to_thread(
-                        client.models.generate_content,
-                        model=vision_model_id,
-                        contents=[image_part, question],
-                    )
-                    final_result = (getattr(response, "text", "") or "").strip()
-                    if not final_result:
-                        final_result = "Không thể nhận diện nội dung ảnh rõ ràng từ truy vấn này."
-
-                    self._invalid_tool_keys.discard(api_key)
-                    self._tool_key_cooldowns.pop(api_key, None)
-                    self._set_image_recognition_cache(image_url, question, final_result)
-                    return final_result
-                except Exception as attempt_error:
-                    error_text = str(attempt_error)
-                    lowered = error_text.lower()
-                    last_error = error_text
-
-                    if any(token in lowered for token in ["api key not found", "api_key_invalid", "invalid api key", "permission denied"]):
-                        self._invalid_tool_keys.add(api_key)
-                        if reservation:
-                            self.api_router.mark_key_exhausted(
-                                api_key,
-                                reservation.get("model_alias", vision_alias),
-                                pool=reservation.get("pool", "main"),
-                                counter_key=reservation.get("counter_key"),
-                            )
-                    elif any(token in lowered for token in ["429", "resource_exhausted", "quota", "rate limit"]):
-                        self._tool_key_cooldowns[api_key] = time.time() + 60
-                        if reservation:
-                            self.api_router.mark_key_cooldown(
-                                api_key,
-                                reservation.get("model_alias", vision_alias),
-                                60,
-                                pool=reservation.get("pool", "main"),
-                                counter_key=reservation.get("counter_key"),
-                            )
-
-                    if attempt >= attempt_budget:
-                        raise
-                    continue
-        except Exception as e:
-            error_text = str(e)
-            self.logger.warning(
-                f"AB_METRIC image_tool success=0 "
-                f"attempts={attempt_budget} model={vision_model_id} alias={vision_alias} "
-                f"error={(last_error or error_text)[:180]}"
+            final_result = await self.gateway.generate_vision(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                question=question,
             )
-            return f"Đã xảy ra lỗi khi xử lý hình ảnh bằng Gemini: {last_error or e}"
+            if not final_result:
+                final_result = "Không thể nhận diện nội dung ảnh rõ ràng từ truy vấn này."
+
+            self._set_image_recognition_cache(image_url, question, final_result)
+            return final_result
+        except Exception as e:
+            self.logger.warning(f"AB_METRIC image_tool success=0 error={str(e)[:180]}")
+            return f"Đã xảy ra lỗi khi xử lý hình ảnh bằng Gemini: {e}"
 
     # ── Search delegation ──────────────────────────────────
 

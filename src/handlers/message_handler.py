@@ -53,6 +53,7 @@ class MessageHandler:
             note_mgr=self.note_mgr,
             db_repo=self.db_repo,
             search_subtask_client=self.search_subtask_client,
+            gateway=self.gateway,
         )
         self._pipeline: Optional[GeminiPipeline] = None
         self._file_index_svc: Optional[FileIndexService] = None
