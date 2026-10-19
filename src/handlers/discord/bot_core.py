@@ -33,7 +33,6 @@ class BotCore:
         self.cleanup_mgr = CleanupManager()
         self.health_checker = get_health_checker()
         self.health_checker.db_repo = self.db_repo
-        self.health_checker.router.set_db_repo(self.db_repo)
 
         self.confirmation_pending: Dict[str, Dict[str, Any]] = {}
         self.admin_confirmation_pending: Dict[str, Dict[str, Any]] = {}

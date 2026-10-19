@@ -2,28 +2,17 @@ import asyncio
 from typing import Dict, List, Optional, Any
 
 from src.core.config import get_config
-from src.core.api_router import get_api_router
 from src.database.repository import DatabaseRepository
 
 class HealthCheckerService:
     def __init__(self):
         self.config = get_config()
-        self.router = get_api_router()
         self.logger = self.config.logger
         self.is_running = False
 
-        # Sử dụng db_repo của router hoặc tự tạo mới
-        self.db_repo = getattr(self.router, 'db_repo', None)
-        if self.db_repo is None:
-            self.db_repo = DatabaseRepository()
+        # db_repo được bot_core gán sau khi tạo instance
+        self.db_repo: Optional[DatabaseRepository] = None
 
-        # Theo dõi trạng thái chi tiết của từng API key
-        # self.key_status[api_key] = {
-        #     'provider': 'gemini' / 'openai',
-        #     'status': 'alive' / 'dead',
-        #     'downtime_start': float (timestamp khi bắt đầu phát hiện chết, None nếu đang sống),
-        #     'last_check': float
-        # }
         self.key_status: Dict[str, Dict[str, Any]] = {}
         self.admin_user = None
 
@@ -90,7 +79,7 @@ class HealthCheckerService:
             self._background_task_task.cancel()
             self._background_task_task = None
 
-# Global instance pattern similar to APIRouter
+# Global instance pattern
 _health_checker_instance = None
 
 def get_health_checker() -> HealthCheckerService:
