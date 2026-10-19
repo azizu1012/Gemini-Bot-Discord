@@ -209,6 +209,17 @@ def scan_text(text: str, path: str) -> list[Finding]:
 
     for rule in RULES:
         for m in rule.pattern.finditer(text):
+            if rule.name == "db-uri-with-password":
+                val = m.group(0)
+                try:
+                    user_pass = val.split("://", 1)[1].split("@", 1)[0]
+                    if ":" in user_pass:
+                        pw = user_pass.split(":", 1)[1]
+                        if _is_allowlisted(pw) or pw.lower() in ("replace_me", "dummy", "example"):
+                            continue
+                except Exception:
+                    pass
+
             line_no = text.count("\n", 0, m.start()) + 1
             if (rule.name, line_no) in seen:
                 continue
