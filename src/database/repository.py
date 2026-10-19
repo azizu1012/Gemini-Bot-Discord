@@ -65,23 +65,6 @@ class DatabaseRepository:
             raise RuntimeError("Database pool is not initialized")
         return self.pool
 
-    @staticmethod
-    def _collect_env_keys() -> List[Tuple[str, str]]:
-        keys: List[Tuple[str, str]] = []
-        seen = set()
-        for env_name, env_value in sorted(os.environ.items()):
-            upper_name = env_name.upper()
-            key = (env_value or "").strip()
-            if not key or key in seen:
-                continue
-            if upper_name.startswith("GEMINI_API_KEY_") and "TOMTAT" not in upper_name:
-                seen.add(key)
-                keys.append((key, "gemini"))
-            elif upper_name == "OPENAI_API_KEY" or key.startswith("sk-"):
-                seen.add(key)
-                keys.append((key, "openai"))
-        return keys
-
     async def _initialize_schema(self) -> None:
         if self.pool is None:
             raise RuntimeError("Database pool is not initialized")
@@ -210,83 +193,30 @@ class DatabaseRepository:
 
             await conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS api_key_pool (
-                    key_id BIGSERIAL PRIMARY KEY,
-                    api_key TEXT NOT NULL UNIQUE,
-                    provider TEXT NOT NULL DEFAULT 'gemini',
-                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                    cooldown_until TIMESTAMPTZ,
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                CREATE TABLE IF NOT EXISTS llm_endpoints (
+                    sdk TEXT PRIMARY KEY CHECK (sdk IN ('genai','openai')),
+                    base_url TEXT NOT NULL,
+                    api_key_encrypted TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_by TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_check_ok BOOLEAN,
+                    last_check_error TEXT,
+                    last_checked_at TIMESTAMPTZ
                 )
                 """
             )
 
             await conn.execute(
                 """
-                CREATE TABLE IF NOT EXISTS api_key_rate_limits (
-                    key_id BIGINT PRIMARY KEY REFERENCES api_key_pool(key_id) ON DELETE CASCADE,
-                    requests_used INTEGER NOT NULL DEFAULT 0,
-                    last_reset TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                CREATE TABLE IF NOT EXISTS llm_model_slots (
+                    sdk TEXT NOT NULL,
+                    slot TEXT NOT NULL CHECK (slot IN ('reasoning','final','fallback','vision')),
+                    model_id TEXT,
+                    updated_by TEXT,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (sdk, slot)
                 )
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS custom_api_models (
-                    provider TEXT NOT NULL DEFAULT 'openai',
-                    model_id TEXT NOT NULL,
-                    display_name TEXT NOT NULL DEFAULT '',
-                    is_alive BOOLEAN NOT NULL DEFAULT TRUE,
-                    last_seen_at TIMESTAMPTZ,
-                    last_checked_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-                    PRIMARY KEY (provider, model_id)
-                )
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS bot_model_config (
-                    config_key TEXT PRIMARY KEY DEFAULT 'global',
-                    reasoning_model_id TEXT,
-                    final_model_id TEXT,
-                    image_generator_model_id TEXT,
-                    updated_by TEXT NOT NULL DEFAULT '',
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-
-            await conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS custom_api_provider_config (
-                    provider TEXT PRIMARY KEY DEFAULT 'openai',
-                    endpoint_base_url TEXT NOT NULL DEFAULT '',
-                    normalized_base_url TEXT NOT NULL DEFAULT '',
-                    endpoint_preset TEXT NOT NULL DEFAULT 'manual',
-                    active_key_id BIGINT REFERENCES api_key_pool(key_id) ON DELETE SET NULL,
-                    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-                    last_scan_ok BOOLEAN NOT NULL DEFAULT FALSE,
-                    last_scan_error TEXT NOT NULL DEFAULT '',
-                    updated_by TEXT NOT NULL DEFAULT '',
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-
-            # Evolve schema to add columns if missing
-            await conn.execute(
-                """
-                ALTER TABLE api_key_pool ADD COLUMN IF NOT EXISTS cooldown_until TIMESTAMPTZ
-                """
-            )
-            await conn.execute(
-                """
-                ALTER TABLE custom_api_provider_config
-                ADD COLUMN IF NOT EXISTS endpoint_preset TEXT NOT NULL DEFAULT 'manual'
                 """
             )
 
@@ -316,9 +246,17 @@ class DatabaseRepository:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_metadata_gin ON user_notes USING gin (metadata)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_keywords ON rag_chunks USING GIN (keywords)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_summary_trgm ON rag_chunks USING GIN (chunk_summary gin_trgm_ops)")
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_custom_api_models_alive ON custom_api_models (provider, is_alive, model_id)")
 
-            await self.sync_env_api_keys(conn=conn)
+            # Rename bảng của cơ chế key-rotation cũ (giữ dữ liệu để rollback).
+            # Idempotent: IF EXISTS bỏ qua khi bảng đã được rename từ lần trước.
+            for _old_name, _deprecated_name in (
+                ("api_key_pool", "_deprecated_api_key_pool"),
+                ("api_key_rate_limits", "_deprecated_api_key_rate_limits"),
+                ("custom_api_models", "_deprecated_custom_api_models"),
+                ("bot_model_config", "_deprecated_bot_model_config"),
+                ("custom_api_provider_config", "_deprecated_custom_api_provider_config"),
+            ):
+                await conn.execute(f"ALTER TABLE IF EXISTS {_old_name} RENAME TO {_deprecated_name}")
 
     @staticmethod
     def _command_count(command_tag: str) -> int:
@@ -326,109 +264,6 @@ class DatabaseRepository:
             return int(str(command_tag).split()[-1])
         except (IndexError, TypeError, ValueError):
             return 0
-
-    async def sync_env_api_keys(self, conn: Optional[asyncpg.Connection] = None) -> Dict[str, int]:
-        env_keys = self._collect_env_keys()
-        openai_keys = [key for key, provider in env_keys if provider == "openai"]
-        gemini_keys = [key for key, provider in env_keys if provider == "gemini"]
-
-        async def run(target_conn) -> Dict[str, int]:
-            provider_config = await target_conn.fetchrow(
-                """
-                SELECT active_key_id
-                FROM custom_api_provider_config
-                WHERE provider = 'openai'
-                  AND active_key_id IS NOT NULL
-                """
-            )
-            db_managed_openai = provider_config is not None
-            active_key_id = provider_config["active_key_id"] if provider_config else None
-
-            upserted = 0
-            for key, provider in env_keys:
-                if provider == "openai" and db_managed_openai:
-                    await target_conn.execute(
-                        """
-                        INSERT INTO api_key_pool (api_key, provider, is_active)
-                        VALUES ($1, $2, FALSE)
-                        ON CONFLICT (api_key) DO UPDATE
-                        SET provider = EXCLUDED.provider
-                        """,
-                        key,
-                        provider,
-                    )
-                else:
-                    await target_conn.execute(
-                        """
-                        INSERT INTO api_key_pool (api_key, provider, is_active)
-                        VALUES ($1, $2, TRUE)
-                        ON CONFLICT (api_key) DO UPDATE
-                        SET provider = EXCLUDED.provider,
-                            is_active = TRUE,
-                            cooldown_until = NULL
-                        """,
-                        key,
-                        provider,
-                    )
-                upserted += 1
-
-            await target_conn.execute(
-                """
-                INSERT INTO api_key_rate_limits (key_id, requests_used, last_reset)
-                SELECT p.key_id, 0, CURRENT_TIMESTAMP
-                FROM api_key_pool p
-                ON CONFLICT (key_id) DO NOTHING
-                """
-            )
-
-            if db_managed_openai and active_key_id is not None:
-                await target_conn.execute(
-                    """
-                    UPDATE api_key_pool
-                    SET is_active = TRUE,
-                        cooldown_until = NULL
-                    WHERE key_id = $1
-                    """,
-                    active_key_id,
-                )
-
-            deactivated = 0
-            if openai_keys and not db_managed_openai:
-                result = await target_conn.execute(
-                    """
-                    UPDATE api_key_pool
-                    SET is_active = FALSE,
-                        cooldown_until = NULL
-                    WHERE provider = 'openai'
-                      AND api_key <> ALL($1::text[])
-                      AND is_active = TRUE
-                    """,
-                    openai_keys,
-                )
-                deactivated = self._command_count(result)
-
-            deactivated_gemini = 0
-            if gemini_keys:
-                result = await target_conn.execute(
-                    """
-                    UPDATE api_key_pool
-                    SET is_active = FALSE,
-                        cooldown_until = NULL
-                    WHERE provider = 'gemini'
-                      AND api_key <> ALL($1::text[])
-                      AND is_active = TRUE
-                    """,
-                    gemini_keys,
-                )
-                deactivated_gemini = self._command_count(result)
-            return {"upserted": upserted, "openai_deactivated": deactivated, "gemini_deactivated": deactivated_gemini}
-
-        if conn is not None:
-            return await run(conn)
-
-        pool = await self._ensure_pool()
-        async with pool.acquire() as owned_conn:
-            return await run(owned_conn)
 
     async def set_user_processing_state(self, user_id: str, stage: str) -> Optional[str]:
         pool = await self._ensure_pool()
@@ -538,362 +373,6 @@ class DatabaseRepository:
         async with pool.acquire() as conn:
             val = await conn.fetchval("SELECT 1 FROM admin_users WHERE user_id = $1", user_id)
         return val is not None
-
-    async def get_all_keys_from_pool(self) -> List[Dict[str, Any]]:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT key_id, api_key, provider, is_active, cooldown_until FROM api_key_pool"
-            )
-        return [dict(r) for r in rows]
-
-    async def upsert_custom_api_models(
-        self,
-        provider: str,
-        models: List[Any],
-        checked_at: Optional[Any] = None,
-        error: str = "",
-    ) -> Dict[str, int]:
-        from datetime import datetime, timezone
-
-        checked_at = checked_at or datetime.now(timezone.utc)
-        normalized: List[Dict[str, Any]] = []
-        seen = set()
-        for item in models:
-            if isinstance(item, dict):
-                model_id = str(item.get("id") or item.get("model") or item.get("name") or "").strip()
-                display_name = str(item.get("display_name") or item.get("name") or model_id).strip()
-                metadata = dict(item)
-            else:
-                model_id = str(item or "").strip()
-                display_name = model_id
-                metadata = {}
-            if not model_id or model_id in seen:
-                continue
-            seen.add(model_id)
-            normalized.append({
-                "model_id": model_id,
-                "display_name": display_name or model_id,
-                "metadata": metadata,
-            })
-
-        if not normalized:
-            return {"upserted": 0}
-
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                for model in normalized:
-                    await conn.execute(
-                        """
-                        INSERT INTO custom_api_models (
-                            provider, model_id, display_name, is_alive,
-                            last_seen_at, last_checked_at, last_error, metadata
-                        )
-                        VALUES ($1, $2, $3, TRUE, $4, $4, $5, $6)
-                        ON CONFLICT (provider, model_id) DO UPDATE
-                        SET display_name = EXCLUDED.display_name,
-                            is_alive = TRUE,
-                            last_seen_at = EXCLUDED.last_seen_at,
-                            last_checked_at = EXCLUDED.last_checked_at,
-                            last_error = '',
-                            metadata = EXCLUDED.metadata
-                        """,
-                        provider,
-                        model["model_id"],
-                        model["display_name"],
-                        checked_at,
-                        error,
-                        model["metadata"],
-                    )
-        return {"upserted": len(normalized)}
-
-    async def mark_missing_custom_api_models_dead(
-        self,
-        provider: str,
-        seen_model_ids: List[str],
-        checked_at: Optional[Any] = None,
-        error: str = "missing_from_provider_scan",
-    ) -> List[str]:
-        from datetime import datetime, timezone
-
-        checked_at = checked_at or datetime.now(timezone.utc)
-        seen = [str(model_id).strip() for model_id in seen_model_ids if str(model_id).strip()]
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            if seen:
-                rows = await conn.fetch(
-                    """
-                    UPDATE custom_api_models
-                    SET is_alive = FALSE,
-                        last_checked_at = $2,
-                        last_error = $3
-                    WHERE provider = $1
-                      AND is_alive = TRUE
-                      AND model_id <> ALL($4::text[])
-                    RETURNING model_id
-                    """,
-                    provider,
-                    checked_at,
-                    error,
-                    seen,
-                )
-            else:
-                rows = await conn.fetch(
-                    """
-                    UPDATE custom_api_models
-                    SET is_alive = FALSE,
-                        last_checked_at = $2,
-                        last_error = $3
-                    WHERE provider = $1
-                      AND is_alive = TRUE
-                    RETURNING model_id
-                    """,
-                    provider,
-                    checked_at,
-                    error,
-                )
-        return [str(row["model_id"]) for row in rows]
-
-    async def get_alive_custom_api_models(self, provider: str = "openai") -> List[Dict[str, Any]]:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT provider, model_id, display_name, is_alive, last_seen_at,
-                       last_checked_at, last_error, metadata
-                FROM custom_api_models
-                WHERE provider = $1 AND is_alive = TRUE
-                ORDER BY display_name ASC, model_id ASC
-                """,
-                provider,
-            )
-        return [dict(row) for row in rows]
-
-    async def get_custom_api_model(self, provider: str, model_id: str) -> Optional[Dict[str, Any]]:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT provider, model_id, display_name, is_alive, last_seen_at,
-                       last_checked_at, last_error, metadata
-                FROM custom_api_models
-                WHERE provider = $1 AND model_id = $2
-                """,
-                provider,
-                model_id,
-            )
-        return dict(row) if row else None
-
-    async def get_bot_model_config(self) -> Dict[str, Any]:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT config_key, reasoning_model_id, final_model_id,
-                       image_generator_model_id, updated_by, updated_at
-                FROM bot_model_config
-                WHERE config_key = 'global'
-                """
-            )
-        if row:
-            return dict(row)
-        return {
-            "config_key": "global",
-            "reasoning_model_id": None,
-            "final_model_id": None,
-            "image_generator_model_id": None,
-            "updated_by": "",
-            "updated_at": None,
-        }
-
-    async def set_bot_model_config(
-        self,
-        reasoning_model_id: Optional[str],
-        final_model_id: Optional[str],
-        image_generator_model_id: Optional[str],
-        updated_by: str,
-    ) -> Dict[str, Any]:
-        def clean(value: Optional[str]) -> Optional[str]:
-            cleaned = str(value or "").strip()
-            return cleaned or None
-
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO bot_model_config (
-                    config_key, reasoning_model_id, final_model_id,
-                    image_generator_model_id, updated_by, updated_at
-                )
-                VALUES ('global', $1, $2, $3, $4, CURRENT_TIMESTAMP)
-                ON CONFLICT (config_key) DO UPDATE
-                SET reasoning_model_id = EXCLUDED.reasoning_model_id,
-                    final_model_id = EXCLUDED.final_model_id,
-                    image_generator_model_id = EXCLUDED.image_generator_model_id,
-                    updated_by = EXCLUDED.updated_by,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING config_key, reasoning_model_id, final_model_id,
-                          image_generator_model_id, updated_by, updated_at
-                """,
-                clean(reasoning_model_id),
-                clean(final_model_id),
-                clean(image_generator_model_id),
-                str(updated_by or ""),
-            )
-        return dict(row) if row else await self.get_bot_model_config()
-
-    async def get_custom_provider_config(self, provider: str = "openai") -> Optional[Dict[str, Any]]:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT provider, endpoint_base_url, normalized_base_url, endpoint_preset, active_key_id,
-                       is_enabled, last_scan_ok, last_scan_error, updated_by, updated_at
-                FROM custom_api_provider_config
-                WHERE provider = $1
-                """,
-                provider,
-            )
-        return dict(row) if row else None
-
-    async def set_custom_provider_config(
-        self,
-        provider: str,
-        endpoint_base_url: str,
-        normalized_base_url: str,
-        active_key_id: Optional[int],
-        is_enabled: bool,
-        last_scan_ok: bool,
-        last_scan_error: str,
-        updated_by: str,
-        endpoint_preset: str = "manual",
-    ) -> Dict[str, Any]:
-        pool = await self._ensure_pool()
-        clean_preset = str(endpoint_preset or "manual").strip().lower()
-        if clean_preset not in {"manual", "lm_studio", "ollama"}:
-            clean_preset = "manual"
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                INSERT INTO custom_api_provider_config (
-                    provider, endpoint_base_url, normalized_base_url, endpoint_preset, active_key_id,
-                    is_enabled, last_scan_ok, last_scan_error, updated_by, updated_at
-                )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
-                ON CONFLICT (provider) DO UPDATE
-                SET endpoint_base_url = EXCLUDED.endpoint_base_url,
-                    normalized_base_url = EXCLUDED.normalized_base_url,
-                    endpoint_preset = EXCLUDED.endpoint_preset,
-                    active_key_id = EXCLUDED.active_key_id,
-                    is_enabled = EXCLUDED.is_enabled,
-                    last_scan_ok = EXCLUDED.last_scan_ok,
-                    last_scan_error = EXCLUDED.last_scan_error,
-                    updated_by = EXCLUDED.updated_by,
-                    updated_at = CURRENT_TIMESTAMP
-                RETURNING provider, endpoint_base_url, normalized_base_url, endpoint_preset, active_key_id,
-                          is_enabled, last_scan_ok, last_scan_error, updated_by, updated_at
-                """,
-                provider,
-                str(endpoint_base_url or "").strip(),
-                str(normalized_base_url or "").strip(),
-                clean_preset,
-                active_key_id,
-                bool(is_enabled),
-                bool(last_scan_ok),
-                str(last_scan_error or "")[:500],
-                str(updated_by or ""),
-            )
-        return dict(row)
-
-    async def set_custom_provider_enabled(self, provider: str, enabled: bool, updated_by: str) -> Optional[Dict[str, Any]]:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                UPDATE custom_api_provider_config
-                SET is_enabled = $2,
-                    updated_by = $3,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE provider = $1
-                RETURNING provider, endpoint_base_url, normalized_base_url, endpoint_preset, active_key_id,
-                          is_enabled, last_scan_ok, last_scan_error, updated_by, updated_at
-                """,
-                provider,
-                bool(enabled),
-                str(updated_by or ""),
-            )
-        return dict(row) if row else None
-
-    async def update_custom_provider_scan_status(
-        self,
-        provider: str,
-        last_scan_ok: bool,
-        last_scan_error: str = "",
-    ) -> None:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE custom_api_provider_config
-                SET last_scan_ok = $2,
-                    last_scan_error = $3,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE provider = $1
-                """,
-                provider,
-                bool(last_scan_ok),
-                str(last_scan_error or "")[:500],
-            )
-
-    async def upsert_provider_api_key(self, api_key: str, provider: str = "openai") -> Dict[str, Any]:
-        key = str(api_key or "").strip()
-        if not key:
-            raise ValueError("API key không được để trống.")
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                row = await conn.fetchrow(
-                    """
-                    INSERT INTO api_key_pool (api_key, provider, is_active, cooldown_until)
-                    VALUES ($1, $2, TRUE, NULL)
-                    ON CONFLICT (api_key) DO UPDATE
-                    SET provider = EXCLUDED.provider,
-                        is_active = TRUE,
-                        cooldown_until = NULL
-                    RETURNING key_id, api_key, provider, is_active, cooldown_until
-                    """,
-                    key,
-                    provider,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO api_key_rate_limits (key_id, requests_used, last_reset)
-                    VALUES ($1, 0, CURRENT_TIMESTAMP)
-                    ON CONFLICT (key_id) DO NOTHING
-                    """,
-                    row["key_id"],
-                )
-        return dict(row)
-
-    async def deactivate_other_provider_keys(self, provider: str = "openai", keep_key_id: Optional[int] = None) -> int:
-        if keep_key_id is None:
-            return 0
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            result = await conn.execute(
-                """
-                UPDATE api_key_pool
-                SET is_active = FALSE,
-                    cooldown_until = NULL
-                WHERE provider = $1
-                  AND key_id <> $2
-                  AND is_active = TRUE
-                """,
-                provider,
-                keep_key_id,
-            )
-        return self._command_count(result)
 
     async def log_usage(self, user_id: str, action_type: str, model_name: str = "", tokens_used: int = 0, metadata: str = "") -> bool:
         pool = await self._ensure_pool()
@@ -1291,76 +770,97 @@ class DatabaseRepository:
             result.append(item)
         return result
 
-    @staticmethod
-    def _provider_rpm_limit(provider: str) -> int:
-        if provider == "openai":
-            raw_limit = os.getenv("CUSTOM_API_DEFAULT_RPM", "1000000")
-        else:
-            raw_limit = os.getenv("GEMINI_DB_KEY_RPM", "15")
-        try:
-            return max(1, int(raw_limit))
-        except (TypeError, ValueError):
-            return 1000000 if provider == "openai" else 15
+    # ── LLM endpoints & model slots (endpoint-only refactor) ─────────────
 
-    async def get_next_available_key(
-        self,
-        provider: str = "gemini",
-        rpm_limit: Optional[int] = None,
-        key_id: Optional[int] = None,
-    ) -> Optional[Dict[str, Any]]:
-        effective_rpm = max(1, int(rpm_limit or self._provider_rpm_limit(provider)))
+    async def get_llm_endpoints(self) -> Dict[str, Dict[str, Any]]:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
+            rows = await conn.fetch(
                 """
-                WITH selected_key AS (
-                    SELECT p.api_key, p.key_id
-                    FROM api_key_pool p
-                    JOIN api_key_rate_limits r ON p.key_id = r.key_id
-                    WHERE p.is_active = TRUE
-                      AND p.provider = $1
-                      AND ($3::bigint IS NULL OR p.key_id = $3)
-                      AND (p.cooldown_until IS NULL OR p.cooldown_until < CURRENT_TIMESTAMP)
-                      AND (r.last_reset < NOW() - INTERVAL '1 minute' OR r.requests_used < $2)
-                    ORDER BY r.requests_used ASC, r.last_reset ASC, p.key_id ASC
-                    FOR UPDATE OF r SKIP LOCKED
-                    LIMIT 1
+                SELECT sdk, base_url, api_key_encrypted, is_active, updated_by, updated_at,
+                       last_check_ok, last_check_error, last_checked_at
+                FROM llm_endpoints
+                """
+            )
+        return {row["sdk"]: dict(row) for row in rows}
+
+    async def get_active_sdk(self) -> Optional[str]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT sdk FROM llm_endpoints WHERE is_active = TRUE LIMIT 1")
+        return row["sdk"] if row else None
+
+    async def upsert_llm_endpoint(self, sdk: str, base_url: str, api_key_encrypted: str, updated_by: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO llm_endpoints (sdk, base_url, api_key_encrypted, is_active, updated_by, updated_at)
+                VALUES ($1, $2, $3, FALSE, $4, CURRENT_TIMESTAMP)
+                ON CONFLICT (sdk) DO UPDATE SET
+                    base_url = EXCLUDED.base_url,
+                    api_key_encrypted = EXCLUDED.api_key_encrypted,
+                    updated_by = EXCLUDED.updated_by,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                sdk,
+                base_url,
+                api_key_encrypted,
+                updated_by,
+            )
+
+    async def set_active_sdk(self, sdk: str, updated_by: str) -> bool:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("UPDATE llm_endpoints SET is_active = FALSE WHERE is_active = TRUE")
+                result = await conn.execute(
+                    """
+                    UPDATE llm_endpoints
+                    SET is_active = TRUE, updated_by = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE sdk = $1
+                    """,
+                    sdk,
+                    updated_by,
                 )
-                UPDATE api_key_rate_limits
-                SET requests_used = CASE WHEN last_reset < NOW() - INTERVAL '1 minute' THEN 1 ELSE requests_used + 1 END,
-                    last_reset = CASE WHEN last_reset < NOW() - INTERVAL '1 minute' THEN NOW() ELSE last_reset END
-                FROM selected_key
-                WHERE api_key_rate_limits.key_id = selected_key.key_id
-                RETURNING selected_key.key_id, selected_key.api_key
-                """,
-                provider,
-                effective_rpm,
-                key_id,
-            )
-        return dict(row) if row else None
+        return result.endswith(" 1")
 
-    async def cooldown_key_db(self, api_key: str, wait_time_seconds: float) -> None:
+    async def get_llm_model_slots(self, sdk: str) -> Dict[str, Optional[str]]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT slot, model_id FROM llm_model_slots WHERE sdk = $1", sdk)
+        return {row["slot"]: row["model_id"] for row in rows}
+
+    async def upsert_llm_model_slots(self, sdk: str, slots: Dict[str, Optional[str]], updated_by: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                for slot, model_id in slots.items():
+                    await conn.execute(
+                        """
+                        INSERT INTO llm_model_slots (sdk, slot, model_id, updated_by, updated_at)
+                        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                        ON CONFLICT (sdk, slot) DO UPDATE SET
+                            model_id = EXCLUDED.model_id,
+                            updated_by = EXCLUDED.updated_by,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        sdk,
+                        slot,
+                        model_id,
+                        updated_by,
+                    )
+
+    async def update_endpoint_check_status(self, sdk: str, ok: bool, error: Optional[str]) -> None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                UPDATE api_key_pool
-                SET cooldown_until = CURRENT_TIMESTAMP + $2 * INTERVAL '1 second'
-                WHERE api_key = $1
+                UPDATE llm_endpoints
+                SET last_check_ok = $2, last_check_error = $3, last_checked_at = CURRENT_TIMESTAMP
+                WHERE sdk = $1
                 """,
-                api_key,
-                wait_time_seconds,
-            )
-
-    async def exhaust_key_db(self, api_key: str) -> None:
-        pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                UPDATE api_key_pool
-                SET is_active = FALSE,
-                    cooldown_until = NULL
-                WHERE api_key = $1
-                """,
-                api_key,
+                sdk,
+                ok,
+                (error or "")[:500] or None,
             )

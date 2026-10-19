@@ -1,8 +1,8 @@
 # 🤖 AZURIS DISCORD ASSISTANT BOT
 
-> 📖 **Tài liệu kỹ thuật đầy đủ:** Xem [`docs/`](docs/) — Nguồn Sự Thật Kỹ Thuật duy nhất.
+> 📖 **Tài liệu kỹ thuật đầy đủ:** Xem [`docs/`](docs/) — Nguồn Sự Thật Kỹ Thuật duy nhất. Các tính năng đã gỡ: [`docs/deprecated.md`](docs/deprecated.md).
 
-**Azuris** là một trợ lý AI tiên tiến hoạt động trên nền tảng Discord, được xây dựng trên kiến trúc hướng sự kiện phân tán (**Event-Driven Distributed Architecture**) sử dụng **PostgreSQL**, **Redis Streams**, và pipeline lập luận đa bước của **Google Gemini**. 
+**Azuris** là một trợ lý AI tiên tiến hoạt động trên nền tảng Discord, được xây dựng trên kiến trúc hướng sự kiện phân tán (**Event-Driven Distributed Architecture**) sử dụng **PostgreSQL**, **Redis Streams**, và pipeline lập luận đa bước qua **LLM endpoint** (Google GenAI native hoặc OpenAI-compatible). 
 
 Hệ thống được thiết kế tối ưu hóa cho cả môi trường VPS cá nhân và doanh nghiệp vừa với cơ chế tự cấp phát hạ tầng cục bộ (**Zero-Docker Local Runtime**).
 
@@ -13,6 +13,7 @@ Hệ thống được thiết kế tối ưu hóa cho cả môi trường VPS c�
 * **Lập luận đa bước (Contextual Chat & Reasoning)**: Pipeline 2 tầng (Reasoning Loop + Final Synthesis) giúp bot suy nghĩ sâu sắc trước khi trả lời.
 * **Gọi công cụ tự động (Tool-Calling)**: Tìm kiếm web thời gian thực (Web Search), tra cứu thời tiết, ghi chú cá nhân và nhận diện hình ảnh.
 * **Nhận diện hình ảnh đa phương thức (Vision)**: Đọc và phân tích ảnh đính kèm cực nhanh thông qua SDK Google GenAI chính thức.
+* **Endpoint linh hoạt (Endpoint-only)**: Cấu hình URL + API key + 4 model slot ngay trong Discord qua nhóm lệnh `/endpoint`; hỗ trợ Gemini native và mọi LLM tương thích OpenAI (router nội bộ, OpenAI, LM Studio...).
 * **Trí nhớ dài hạn (Long-term Memory)**: Lưu giữ sở thích và thông tin cá nhân hóa của từng người dùng thông qua cơ chế ghi chú `user_notes` tối ưu hóa bằng chỉ mục GIN.
 * **Hạ tầng cục bộ tự cấp phát (Zero-Docker)**: Tự động tải và chạy Redis, PostgreSQL trực tiếp trong thư mục dự án.
 * **Phân quyền lai động-tĩnh (Hybrid Roles)**: Quản lý 4 nhóm quyền (Admin, Moderator, Premium, Free User) bảo mật tuyệt đối.
@@ -42,8 +43,10 @@ Hệ thống được thiết kế tối ưu hóa cho cả môi trường VPS c�
    Mở file `.env` vừa được tạo ở thư mục gốc và điền các API keys cần thiết:
    ```env
    DISCORD_TOKEN=your_discord_bot_token
-   GEMINI_API_KEYS=key1,key2...
+   # Sinh Fernet key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   DONATE_ENCRYPTION_KEY=your_fernet_key
    ```
+   > Endpoint LLM (URL + API key + model) được cấu hình sau khi bot online bằng `/endpoint config` — không dùng biến môi trường.
 
 3. **Chạy kiểm tra hệ thống (Preflight Check)**:
    ```powershell
@@ -105,23 +108,26 @@ Hệ thống được thiết kế tối ưu hóa cho cả môi trường VPS c�
 
 ---
 
-## 📡 CẤU HÌNH ROUTER API (NÂNG CAO)
-Azuris hỗ trợ route toàn bộ lưu lượng Gemini SDK qua một Router API tùy chỉnh để kiểm soát chi phí và quản lý API Keys tập trung.
+## 📡 CẤU HÌNH LLM ENDPOINT (`/endpoint`)
 
-**Cách cấu hình qua Discord:**
-1. Sử dụng lệnh `/endpoint` với quyền Admin.
-2. Cung cấp **URL** của Router API (ví dụ: `http://127.0.0.1:58100`).
-3. Cung cấp **Auth Key** để xác thực với Router API.
-4. Bot sẽ tự động lưu cấu hình vào biến môi trường `GEMINI_BASE_URL` và `ROUTER_AUTH_KEY`.
-5. Khi `GEMINI_BASE_URL` được cấu hình, mọi request Gemini sẽ được chuyển hướng qua Router API thay vì gọi trực tiếp Google.
+Azuris chạy theo mô hình **endpoint-only**: không còn xoay vòng API key trong code. Toàn bộ cấu hình LLM lưu trong PostgreSQL và thay đổi trực tiếp trong Discord.
+
+**Cách cấu hình (Admin):**
+1. `/endpoint config` → chọn SDK: `genai` (Gemini native) hoặc `openai` (LLM tương thích OpenAI).
+2. Nhập URL endpoint (bỏ trống = mặc định Google; `openai` bắt buộc, ví dụ `http://127.0.0.1:58100/v1`).
+3. Nhập API key — key được mã hóa bằng `DONATE_ENCRYPTION_KEY` trước khi ghi DB.
+4. Chọn model cho 4 slot: Reasoning → Final → Fallback → Vision (25 model/trang, có tìm kiếm theo tên).
+5. Kiểm tra bằng `/endpoint test`; xem lại bằng `/endpoint view`.
+
+Chi tiết đầy đủ: [`docs/endpoint_and_models.md`](docs/endpoint_and_models.md) · Tính năng đã gỡ: [`docs/deprecated.md`](docs/deprecated.md).
 
 ---
 
 ## 💬 DANH SÁCH LỆNH SLASH COMMANDS THÔNG DỤNG
 
 ### 🛠️ Lệnh Quản trị & Cấu hình (Admin/Moderator)
-* `/endpoint`: Xem hoặc cấu hình Router API (URL và Auth Key) (ADMIN ONLY).
-* `/health_check`: Kiểm tra trạng thái sức khỏe của các API keys và quét danh sách model custom.
+* `/endpoint`: Nhóm lệnh cấu hình LLM endpoint — `config`, `view`, `switch`, `models`, `test` (ADMIN ONLY).
+* `/health_check`: Kiểm tra endpoint đang active, latency, 4 model slot và kết nối PostgreSQL.
 * `/moderator`: Thăng chức hoặc hạ chức Moderator động (Chỉ dành cho Admin).
 * `/premium`: Thêm hoặc xóa trạng thái thành viên Premium cho người dùng.
 * `/reset-all`: Reset toàn bộ cơ sở dữ liệu và xóa sạch cache (Chỉ dành cho Admin).

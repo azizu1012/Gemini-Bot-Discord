@@ -13,17 +13,15 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `DISCORD_TOKEN` | — | Token bot Discord |
 | `LOCAL_RUNTIME_ROOT` | `src/.runtime` | Đường dẫn runtime cục bộ |
 | `AZURIS_POSTGRES_START_MODE` | `direct` | Chế độ khởi động PostgreSQL (direct/auto/pg_ctl) |
-| `DONATE_ENCRYPTION_KEY` | — | Khóa mã hóa Fernet cho QR donate |
+| `DONATE_ENCRYPTION_KEY` | — | Khóa mã hóa Fernet cho QR donate + API key endpoint |
 
-### Gemini & Model
+### LLM Endpoint & Model
 
 | Biến | Mặc định | Mô tả |
 |------|----------|-------|
-| `GEMINI_API_KEYS` | — | Danh sách key (GEMINI_API_KEY_1, 2...) |
-| `GEMINI_BASE_URL` | (rỗng) | Router API URL. Rỗng = gọi Google trực tiếp |
-| `REASONING_MODEL_ALIAS` | `gemini-flash` | Alias cho reasoning loop |
-| `FINAL_MODEL_ALIAS` | `gemini-flash` | Alias cho final synthesis |
-| `FALLBACK_MODEL_ALIAS` | `gemini-flash-lite` | Alias cho fallback |
+| `GEMINI_TIMEOUT_MS` | `60000` | Timeout gọi LLM (ms) — dùng cho cả 2 SDK |
+
+> Endpoint (URL, API key, SDK active, 4 model slot) lưu trong PostgreSQL và cấu hình qua `/endpoint` trong Discord — xem [`endpoint_and_models.md`](endpoint_and_models.md). Không còn `GEMINI_API_KEY_*`, `GEMINI_BASE_URL`, `ROUTER_AUTH_KEY`, `*_MODEL_ALIAS`.
 
 ### Search & Weather
 
@@ -34,6 +32,8 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `EXA_API_KEY` | Exa AI key |
 | `WEATHER_API_KEY` | OpenWeatherMap key |
 | `CITY` | Thành phố mặc định tra cứu thời tiết |
+| `SEARCH_PARALLEL_STREAMS` | Số luồng search song song (1–2, mặc định 1). Biến cũ `GOOGLE_SEARCH_STREAMS` vẫn được đọc |
+| `SEARCH_FALLBACK_PROVIDER_LIMIT` | Số provider fallback tối đa khi search fail (mặc định 2) |
 
 ### Rate Limit & Anti-Spam
 
@@ -67,20 +67,11 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `MAX_SEARCH_CALLS_PER_TURN` | 5 | 1-20 |
 | `MIN_FREE_SPACE_MB` | 100 | Ngưỡng dọn file upload cũ |
 
-### Circuit Breaker
-
-| Biến | Mặc định |
-|------|----------|
-| `GEMINI_CIRCUIT_ENABLED` | True |
-| `GEMINI_CIRCUIT_FAILURE_THRESHOLD` | 5 |
-| `GEMINI_CIRCUIT_WINDOW_SECONDS` | 10 |
-| `GEMINI_CIRCUIT_OPEN_SECONDS` | 30 |
-
 ## Cơ sở dữ liệu
 
 PostgreSQL 16, cổng 55432, database `azuris`.
 
-### 15 bảng
+### 17 bảng
 
 #### Đang hoạt động
 
@@ -115,6 +106,28 @@ PostgreSQL 16, cổng 55432, database `azuris`.
 | is_active | INTEGER | 1 mặc định |
 | note_type | TEXT | `personal_preference` mặc định |
 | fact_hash | TEXT | Chống ghi trùng |
+
+**llm_endpoints** — Endpoint LLM theo SDK
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| sdk | TEXT PK | `genai` / `openai` |
+| base_url | TEXT NOT NULL | URL endpoint |
+| api_key_encrypted | TEXT NOT NULL | Key đã mã hóa (Fernet hoặc `plain:`) |
+| is_active | BOOLEAN | SDK đang active (tối đa 1 dòng true) |
+| updated_by | TEXT | Admin cập nhật |
+| updated_at | TIMESTAMPTZ | |
+| last_check_ok | BOOLEAN | Kết quả test gần nhất |
+| last_check_error | TEXT | Lỗi gần nhất |
+| last_checked_at | TIMESTAMPTZ | |
+
+**llm_model_slots** — 4 model slot theo SDK
+| Cột | Kiểu | Mô tả |
+|-----|------|-------|
+| sdk | TEXT PK | `genai` / `openai` |
+| slot | TEXT PK | `reasoning` / `final` / `fallback` / `vision` |
+| model_id | TEXT | NULL = dùng default rule |
+| updated_by | TEXT | |
+| updated_at | TIMESTAMPTZ | |
 
 **premium_users** / **moderator_users** / **admin_users**
 | Cột | Kiểu |
@@ -202,7 +215,7 @@ PostgreSQL 16, cổng 55432, database `azuris`.
 2. Tool Isolation: `manage_user_role` bị ẩn khỏi non-Admin
 3. SQL Injection: 100% parameterized query ($1, $2...) qua asyncpg
 4. Atomic User Lock: PostgreSQL `UPDATE ... WHERE is_busy = false`
-5. API Key Leak Prevention: Khi ROUTER_AUTH_KEY trống → fallback Google direct
+5. API Key Protection: Mã hóa Fernet at-rest trong PostgreSQL; che key trên UI
 6. Rate Limit: Spam threshold + DM limit + role-based rate limit
 
 ## Cache & Tối ưu hiệu năng
@@ -230,14 +243,12 @@ Invalidation: `/reset-chat` → Redis Pub/Sub → Worker xóa RAM cache.
 
 ## Anti-Brick & Security
 
-### API Key Leak Prevention
-Khi `ROUTER_AUTH_KEY` trống + `GEMINI_BASE_URL` có giá trị → tự động bypass, gọi Google direct, dùng `gemini-flash-lite-latest`.
+### API Key At Rest
+- Key endpoint mã hóa Fernet bằng `DONATE_ENCRYPTION_KEY` trước khi ghi PostgreSQL.
+- Thiếu key → lưu `plain:<key>` (chỉ dùng khi phát triển); `/endpoint view` chỉ hiện 4 ký tự cuối.
 
-### Router Bypass
-`router_bypass_until` timestamp, khi ConnectError → bypass 30s, `base_url = ""`, map sang Lite model. Hết 30s tự thử lại Router.
-
-### SDK Crash (TypeError)
-Router trả lỗi không có `code` → SDK crash `'<=' not supported` → bắt TypeError, coi như connection error → key rotation.
+### Unconfigured Gate
+- Không kiểm tra endpoint lúc khởi động; khi chưa cấu hình, chat trả ephemeral "Bot chưa được cấu hình, hãy liên hệ admin."
 
 ### Timeout Unit Fix
 GenAI SDK yêu cầu ms (int): connection 15000ms, client 120000ms.

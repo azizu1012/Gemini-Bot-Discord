@@ -42,9 +42,8 @@
 | UI Helpers | `src/handlers/discord/ui.py` | UI components, embeds |
 | Worker | `src/handlers/message_handler.py` | Xử lý tin nhắn nền, gọi pipeline |
 | Pipeline | `src/core/gemini_pipeline.py` | Reasoning loop, synthesis |
-| API Manager | `src/core/gemini_api_manager.py` | Key rotation, cooldown, Router bypass |
-| API Router | `src/core/api_router.py` | Circuit breaker, model alias resolution |
-| Repository | `src/database/repository.py` | 15 bảng PostgreSQL, asyncpg |
+| LLM Adapter | `src/core/llm/{base,genai_client,openai_client,gateway,resolver}.py` | 2 SDK (genai/openai), 4 model slot, fallback cùng provider |
+| Repository | `src/database/repository.py` | 17 bảng PostgreSQL, asyncpg |
 
 ### Cổng dịch vụ
 
@@ -71,18 +70,20 @@ Azuris_refactor_code_base/
 │
 ├── src/
 │   ├── core/                     # Lớp nhân & điều phối API
-│   │   ├── api_config.py         # Alias model tĩnh, direct_model_id
-│   │   ├── api_router.py         # Circuit breaker, model resolution
+│   │   ├── llm/                  # Adapter LLM (endpoint-only)
+│   │   │   ├── base.py           # LLMError, classify_error, protocol
+│   │   │   ├── genai_client.py   # Adapter Google GenAI native
+│   │   │   ├── openai_client.py  # Adapter LLM tương thích OpenAI
+│   │   │   ├── gateway.py        # Façade generate/vision/list_models + fallback
+│   │   │   └── resolver.py       # Đọc endpoint/slot từ PostgreSQL, giải mã key
 │   │   ├── config.py             # Đọc .env, export biến, setup logger
-│   │   ├── gemini_api_manager.py # Key pool, rotation, cooldown, bypass
 │   │   ├── gemini_pipeline.py    # Reasoning loop + Final Synthesis
-│   │   ├── gemini_rate_limiter.py# Rate limiter API Gemini
 │   │   ├── logger.py             # Format log hệ thống
 │   │   ├── preflight.py          # Kiểm tra môi trường trước khởi chạy
 │   │   └── prompt_loader.py      # Tải prompt từ instructions/ (LRU)
 │   │
 │   ├── database/
-│   │   └── repository.py         # asyncpg, 15 bảng, connection pool
+│   │   └── repository.py         # asyncpg, 17 bảng, connection pool
 │   │
 │   ├── handlers/
 │   │   ├── discord/
@@ -196,18 +197,12 @@ Redis Stream: discord-outgoing
 - `_call_gemini_final`: Tổng hợp câu trả lời cuối (stream real)
 - `_continue_final_output`: Viết tiếp nếu output bị cắt (MAX_TOKENS)
 
-### Gemini API Manager — `src/core/gemini_api_manager.py`
-- Xoay vòng key thông minh (Smart Rotation)
-- Cooldown key khi lỗi 429 / connection error
-- Tự động bypass Router 30s khi ConnectError
-- Bảo toàn Chain-of-Thought (thought, thought_signature)
-- Chống leak API key: khi ROUTER_AUTH_KEY trống → fallback Google direct
-- Timeout: kết nối 15000ms, client 120000ms (kiểu int)
-
-### API Router — `src/core/api_router.py`
-- Circuit breaker (CLOSED / OPEN / HALF_OPEN)
-- Resolve model alias → model ID thực tế
-- Key reservation
+### LLM Adapter — `src/core/llm/`
+- `resolver.py`: đọc endpoint + 4 model slot từ PostgreSQL, giải mã key (Fernet), cache in-memory + `invalidate()`
+- `genai_client.py`: adapter Google GenAI native (`generate_content`, tools, vision)
+- `openai_client.py`: adapter LLM tương thích OpenAI (`/v1/chat/completions`, tools, vision; không grounding)
+- `gateway.py`: façade duy nhất cho pipeline — `generate`, `generate_text`, `generate_vision`, `list_models_for`, retry + 1 fallback cùng provider
+- `base.py`: `LLMError`, `LLMNotConfiguredError`, `classify_error`
 
 ### Tools — `src/tools/tools.py`
 - `web_search`: SerpAPI, Tavily, Exa, DuckDuckGo (multi-intent, parallel gather, lightweight reranking, smart incremental retry)

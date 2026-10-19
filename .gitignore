@@ -27,6 +27,7 @@ Thumbs.db
 .env
 .env.local
 .env.example
+.env.backup-*
 
 # Logs
 logs/
@@ -71,6 +72,9 @@ src/.runtime/kafka-data/
 
 # CodeGraph index
 .codegraph/
+
+# Graphify index (nội bộ — KHÔNG commit, KHÔNG chia sẻ ra ngoài)
+graphify-out/
 
 # Internal project docs (AI agent handoff, not for public)
 CLAUDE.md

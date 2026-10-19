@@ -163,8 +163,6 @@ def main():
         sys.exit(1)
 
     logger.info(f"Token preview: {_mask_token(config.TOKEN)}")
-    logger.info(f"Model: {config.MODEL_NAME}")
-    logger.info(f"Gemini API keys available: {len(config.GEMINI_API_KEYS)}")
     logger.info(f"Database URL: {_mask_database_url(config.DATABASE_URL)}")
     logger.info(f"Redis URL: {config.REDIS_URL}")
 

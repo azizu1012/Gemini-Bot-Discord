@@ -22,7 +22,8 @@ from src.core.prompt_loader import (
     get_final_synthesis_prompt,
 )
 
-from .gemini_api_manager import GeminiApiManager
+from src.core.llm.base import LLMNotConfiguredError, classify_error
+from src.core.llm.gateway import LLMGateway
 
 
 def _prepare_user_input_block(user_input: str, max_chars: int = 2200) -> str:
@@ -262,20 +263,20 @@ class GeminiPipeline:
         self,
         *,
         config,
-        api_mgr: GeminiApiManager,
+        api_mgr: LLMGateway,
         tools_mgr,
         identity_builder,
-        reasoning_model_alias: str,
-        final_model_alias: str,
-        fallback_model_alias: str,
+        reasoning_role: str,
+        final_role: str,
+        fallback_role: str,
     ):
         self.config = config
         self.api_mgr = api_mgr
         self.tools_mgr = tools_mgr
         self._build_identity_capability_instruction = identity_builder
-        self.reasoning_model_alias = reasoning_model_alias
-        self.final_model_alias = final_model_alias
-        self.fallback_model_alias = fallback_model_alias
+        self.reasoning_role = reasoning_role
+        self.final_role = final_role
+        self.fallback_role = fallback_role
         self.logger = logger
 
     async def _continue_final_output(
@@ -284,7 +285,7 @@ class GeminiPipeline:
         accumulated_text: str,
         system_instruction: str,
         generation_config: Dict[str, Any],
-        model_alias: str,
+        slot_role: str,
         user_id: str,
         stage: str,
     ) -> str:
@@ -299,40 +300,17 @@ class GeminiPipeline:
             }]
 
             for retry_index in range(1, per_part_retries + 1):
-                quota_ok = await self.api_mgr._acquire_gemini_quota(
-                    continuation_messages,
-                    generation_config["max_output_tokens"],
-                    model_alias,
-                    extra_text=system_instruction,
-                )
-                if not quota_ok:
-                    self.logger.warning(f"{stage} continuation quota blocked for {user_id}; returning accumulated output.")
-                    return current_text
-
-                api_key: Optional[str] = None
-                model_name: Optional[str] = None
-                used_model_alias: Optional[str] = None
-                key_reservation: Optional[Dict[str, str]] = None
-
                 try:
-                    api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(model_alias)
-                    if not api_key or not model_name:
-                        self.logger.warning(f"{stage} continuation has no available key for {user_id}; returning accumulated output.")
-                        return current_text
-
-                    await self.api_mgr._throttle_api_request(api_key)
                     self.logger.info(
-                        f"{stage} continuation {part_index}/{max_calls} retry {retry_index}/{per_part_retries} for {user_id} ({model_name})"
+                        f"{stage} continuation {part_index}/{max_calls} retry {retry_index}/{per_part_retries} for {user_id}"
                     )
 
-                    response = await self.api_mgr._generate_gemini_content(
-                        api_key=api_key,
-                        model_name=model_name,
+                    response = await self.api_mgr.generate(
+                        role=slot_role,
                         system_instruction=system_instruction,
                         generation_config=generation_config,
                         messages=continuation_messages,
                     )
-                    self.api_mgr._commit_selected_key(key_reservation)
 
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
@@ -356,30 +334,13 @@ class GeminiPipeline:
                 except Exception as e:
                     error_str = str(e)
                     if self.api_mgr._is_invalid_key_error(error_str):
-                        if api_key:
-                            self.api_mgr._mark_key_as_failed(
-                                api_key,
-                                used_model_alias,
-                                duration=86400,
-                                reason="invalid_key",
-                                permanently_exhaust=True,
-                                reservation=key_reservation,
-                            )
                         self.logger.warning(
-                            f"{stage} continuation invalid key on part {part_index}/{max_calls} retry {retry_index}/{per_part_retries}; rotating."
+                            f"{stage} continuation invalid key on part {part_index}/{max_calls}; dừng retry (kiểm tra API key bằng /endpoint)."
                         )
-                        continue
+                        return current_text
 
                     if self.api_mgr._is_rate_limit_error(error_str):
                         error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
-                        if api_key:
-                            self.api_mgr._mark_key_as_failed(
-                                api_key,
-                                used_model_alias,
-                                duration=60,
-                                reason=error_type,
-                                reservation=key_reservation,
-                            )
                         self.logger.warning(
                             f"{stage} continuation transient {error_type} on part {part_index}/{max_calls} retry {retry_index}/{per_part_retries}; rotating."
                         )
@@ -387,26 +348,16 @@ class GeminiPipeline:
                         continue
 
                     if self.api_mgr._is_connection_error(e):
-                        if api_key:
-                            self.api_mgr._mark_key_as_failed(
-                                api_key,
-                                used_model_alias,
-                                duration=120,
-                                reason="endpoint_down",
-                                reservation=key_reservation,
-                            )
                         self.logger.warning(
                             f"{stage} continuation endpoint unreachable on part {part_index}/{max_calls}; rotating."
                         )
                         continue
 
-                    self.api_mgr._log_gemini_exception(
+                    self.api_mgr.log_exception(
                         stage=f"{stage}_continuation",
                         error=e,
                         user_id=user_id,
-                        model_alias=used_model_alias,
-                        model_name=model_name,
-                        api_key=api_key,
+                        role=slot_role,
                         attempt=part_index,
                         max_attempts=max_calls,
                     )
@@ -444,7 +395,6 @@ class GeminiPipeline:
 
     async def _call_gemini_reasoning_loop(self, messages: List[Dict[str, Any]], user_id: str, privacy_context: Dict[str, Any]) -> Tuple[str, str]:
         MAX_RETRIES = self.config.REASONING_MAX_API_RETRIES
-        reasoning_model_alias = self.reasoning_model_alias
 
         is_admin = bool(privacy_context.get("is_admin"))
         tools = self.tools_mgr.get_all_tools(is_admin=is_admin)
@@ -461,11 +411,6 @@ class GeminiPipeline:
         iteration = 0
 
         for attempt in range(MAX_RETRIES):
-            api_key: Optional[str] = None
-            model_name: Optional[str] = None
-            used_model_alias: Optional[str] = None
-            key_reservation: Optional[Dict[str, str]] = None
-
             try:
                 current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
                 time_context = f"Current time: {current_time_str}\n"
@@ -483,48 +428,22 @@ class GeminiPipeline:
                 system_instruction = system_instruction.replace("Chad Gibiti", bot_name)
 
                 while iteration < self.config.REASONING_MAX_LOOPS:
-                    quota_ok = await self.api_mgr._acquire_gemini_quota(
-                        reasoning_messages,
-                        generation_config["max_output_tokens"],
-                        reasoning_model_alias,
-                        extra_text=system_instruction,
-                    )
-                    if not quota_ok:
-                        return ("API busy, please retry shortly.", "")
+                    self.logger.info(f"Reasoning loop {iteration} for user {user_id}")
 
-                    api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(reasoning_model_alias)
-                    if not api_key or not model_name:
-                        return ("API unavailable, please retry shortly.", "")
-
-                    self.logger.info(f"Reasoning loop {iteration} for user {user_id} ({model_name})")
-                    await self.api_mgr._throttle_api_request(api_key)
-
-                    response = await self.api_mgr._generate_gemini_content(
-                        api_key=api_key,
-                        model_name=model_name,
+                    response = await self.api_mgr.generate(
+                        role=self.reasoning_role,
                         system_instruction=system_instruction,
                         generation_config=generation_config,
                         messages=reasoning_messages,
                         tools=tools,
                     )
-                    self.api_mgr._commit_selected_key(key_reservation)
                     
                     # Successfully completed a reasoning step loop without network error
                     iteration += 1
 
                     candidate = response.candidates[0] if response.candidates else None
                     if not (candidate and candidate.content and candidate.content.parts):
-                        if api_key:
-                            self.api_mgr._mark_key_as_failed(
-                                api_key,
-                                used_model_alias,
-                                duration=300,
-                                reason="empty_candidate",
-                                reservation=key_reservation,
-                            )
-                        raise ValueError(
-                            f"Empty candidate returned from reasoning loop for key ...{api_key[-4:] if api_key else 'None'}"
-                        )
+                        raise ValueError("Empty candidate returned from reasoning loop")
 
                     has_function_calls = False
                     model_parts = []
@@ -661,39 +580,26 @@ class GeminiPipeline:
             except Exception as e:
                 error_str = str(e)
 
+                if isinstance(e, LLMNotConfiguredError) or classify_error(e) == "not_configured":
+                    raise
+
                 if "Empty candidate" in error_str:
-                    self.logger.warning(f"⚠️ {error_str}. Rotating key and retrying attempt {attempt + 1}/{MAX_RETRIES}.")
+                    self.logger.warning(f"⚠️ {error_str}. Retrying attempt {attempt + 1}/{MAX_RETRIES}.")
                     await asyncio.sleep(1)
                     continue
 
                 if self.api_mgr._is_invalid_key_error(error_str):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=86400,
-                            reason="invalid_key",
-                            permanently_exhaust=True,
-                            reservation=key_reservation,
-                        )
-                    self.logger.warning("Lite model received invalid API key error. Rotating key immediately.")
-                    continue
+                    self.logger.warning("Lite model gặp lỗi API key không hợp lệ; dừng retry (kiểm tra lại bằng /endpoint).")
+                    break
 
                 if self.api_mgr._is_rate_limit_error(error_str):
                     error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
                     wait_time = 2 + (attempt * 2)
 
-                    if api_key:
-                        self.logger.warning(
-                            f"⚠️ Lite Key ...{api_key[-4:]} {error_type}. Retrying with preserved reasoning state "
-                            f"(attempt {attempt + 1}/{MAX_RETRIES})."
-                        )
-                        self.api_mgr._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type, reservation=key_reservation)
-                    else:
-                        self.logger.warning(
-                            f"⚠️ Lite transient {error_type} without selected key. Retrying with preserved reasoning state "
-                            f"(attempt {attempt + 1}/{MAX_RETRIES})."
-                        )
+                    self.logger.warning(
+                        f"⚠️ Lite transient {error_type}. Retrying with preserved reasoning state "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES})."
+                    )
 
                     self.logger.info(
                         f"Reasoning state preserved: messages={len(reasoning_messages)} "
@@ -704,26 +610,16 @@ class GeminiPipeline:
                     continue
 
                 if self.api_mgr._is_connection_error(e):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=120,
-                            reason="endpoint_down",
-                            reservation=key_reservation,
-                        )
                     self.logger.warning(
-                        f"Lite model endpoint unreachable; rotating key (attempt {attempt + 1}/{MAX_RETRIES})."
+                        f"Lite endpoint unreachable; retrying (attempt {attempt + 1}/{MAX_RETRIES})."
                     )
                     continue
 
-                self.api_mgr._log_gemini_exception(
+                self.api_mgr.log_exception(
                     stage="reasoning_lite",
                     error=e,
                     user_id=user_id,
-                    model_alias=used_model_alias,
-                    model_name=model_name,
-                    api_key=api_key,
+                    role=self.reasoning_role,
                     attempt=attempt + 1,
                     max_attempts=MAX_RETRIES,
                 )
@@ -735,11 +631,6 @@ class GeminiPipeline:
 
     async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
         MAX_RETRIES = max(5, self.config.FINAL_MAX_API_RETRIES)
-        # Nếu chưa cấu hình Router API (ROUTER_AUTH_KEY rỗng) → dùng lite model cho cả final
-        if not getattr(self.config, "ROUTER_AUTH_KEY", "") and getattr(self.config, "GEMINI_BASE_URL", ""):
-            final_model_alias = self.fallback_model_alias
-        else:
-            final_model_alias = self.final_model_alias
 
         if tool_results and not _is_tool_result_sufficient(tool_results):
             if self.config.SEARCH_ALLOW_PARTIAL_ANSWER and _has_minimum_search_evidence(tool_results):
@@ -756,11 +647,6 @@ class GeminiPipeline:
                 ).strip()
 
         for attempt in range(MAX_RETRIES):
-            api_key: Optional[str] = None
-            model_name: Optional[str] = None
-            used_model_alias: Optional[str] = None
-            key_reservation: Optional[Dict[str, str]] = None
-
             try:
                 current_time_str = datetime.now().strftime("%A, %d %B %Y %H:%M")
                 time_context = f"SYSTEM ALERT: Current Date/Time is {current_time_str}.\n\n"
@@ -793,11 +679,6 @@ class GeminiPipeline:
                 bot_name = privacy_context.get("bot_name", "Chad Gibiti")
                 system_with_context = system_with_context.replace("Chad Gibiti", bot_name)
 
-                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(final_model_alias)
-                if not api_key or not model_name:
-                    self.logger.warning(f"⚠️ ALL KEYS FROZEN - Fallback to lite model for user {user_id}")
-                    return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
-
                 generation_config = {
                     "temperature": 0.7,
                     "top_p": 0.9,
@@ -810,42 +691,20 @@ class GeminiPipeline:
                     "parts": [{"text": _long_output_prompt(get_final_synthesis_prompt())}]
                 }]
 
-                quota_ok = await self.api_mgr._acquire_gemini_quota(
-                    final_messages,
-                    generation_config["max_output_tokens"],
-                    final_model_alias,
-                    extra_text=system_with_context,
-                )
-                if not quota_ok:
-                    self.logger.warning("Final model quota gate blocked; trying lite fallback finalizer.")
-                    return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
+                self.logger.info(f"Final output for user {user_id} (attempt {attempt + 1}/{MAX_RETRIES})")
 
-                await self.api_mgr._throttle_api_request(api_key)
-
-                self.logger.info(f"Final output for user {user_id} ({model_name}, attempt {attempt + 1}/{MAX_RETRIES})")
-
-                response = await self.api_mgr._generate_gemini_content(
-                    api_key=api_key,
-                    model_name=model_name,
+                response = await self.api_mgr.generate(
+                    role=self.final_role,
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
                 )
-                self.api_mgr._commit_selected_key(key_reservation)
 
                 candidate = response.candidates[0] if response.candidates else None
                 if not (candidate and candidate.content and candidate.content.parts):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=300,
-                            reason="empty_candidate",
-                            reservation=key_reservation,
-                        )
                     self.logger.warning(
-                        f"Final output empty candidate for {user_id} with key ...{api_key[-4:] if api_key else 'None'} "
-                        f"(attempt {attempt + 1}/{MAX_RETRIES}), rotating key and retrying."
+                        f"Final output empty candidate for {user_id} "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES}), retrying."
                     )
                     await asyncio.sleep(1)
                     continue
@@ -858,7 +717,7 @@ class GeminiPipeline:
                             accumulated_text=text,
                             system_instruction=system_with_context,
                             generation_config=generation_config,
-                            model_alias=final_model_alias,
+                            slot_role=self.final_role,
                             user_id=user_id,
                             stage="final_flash",
                         )
@@ -868,7 +727,7 @@ class GeminiPipeline:
                             accumulated_text=text,
                             system_instruction=system_with_context,
                             generation_config=generation_config,
-                            model_alias=final_model_alias,
+                            slot_role=self.final_role,
                             user_id=user_id,
                             stage="final_flash_semantic",
                         )
@@ -884,26 +743,16 @@ class GeminiPipeline:
             except Exception as e:
                 error_str = str(e)
 
+                if isinstance(e, LLMNotConfiguredError) or classify_error(e) == "not_configured":
+                    raise
+
                 if self.api_mgr._is_invalid_key_error(error_str):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=86400,
-                            reason="invalid_key",
-                            permanently_exhaust=True,
-                            reservation=key_reservation,
-                        )
-                    self.logger.warning(f"⚠️ Flash model invalid key on attempt {attempt + 1}/{MAX_RETRIES}; rotating immediately.")
-                    continue
+                    self.logger.warning(f"⚠️ Flash model invalid key on attempt {attempt + 1}/{MAX_RETRIES}; dừng retry (kiểm tra bằng /endpoint).")
+                    break
 
                 if self.api_mgr._is_rate_limit_error(error_str):
                     error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
-                    if api_key:
-                        self.logger.warning(
-                            f"⚠️ Flash Key ...{api_key[-4:]} {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}"
-                        )
-                        self.api_mgr._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type, reservation=key_reservation)
+                    self.logger.warning(f"⚠️ Flash transient {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}")
 
                     wait_time = 2 + (attempt * 2)
                     self.logger.info(f"⏱️ Waiting {wait_time}s before retry ({error_type})...")
@@ -916,24 +765,14 @@ class GeminiPipeline:
                     continue
 
                 if self.api_mgr._is_connection_error(e):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=120,
-                            reason="endpoint_down",
-                            reservation=key_reservation,
-                        )
-                    self.logger.warning(f"⚠️ Flash model endpoint unreachable; rotating key (attempt {attempt + 1}/{MAX_RETRIES}).")
+                    self.logger.warning(f"⚠️ Flash model endpoint unreachable; retrying (attempt {attempt + 1}/{MAX_RETRIES}).")
                     continue
 
-                self.api_mgr._log_gemini_exception(
+                self.api_mgr.log_exception(
                     stage="final_flash",
                     error=e,
                     user_id=user_id,
-                    model_alias=used_model_alias,
-                    model_name=model_name,
-                    api_key=api_key,
+                    role=self.final_role,
                     attempt=attempt + 1,
                     max_attempts=MAX_RETRIES,
                 )
@@ -944,15 +783,9 @@ class GeminiPipeline:
 
     async def _fallback_lite_as_flash(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
         MAX_RETRIES = self.config.FALLBACK_MAX_API_RETRIES
-        fallback_model_alias = self.fallback_model_alias
         user_facing_error = "Xin lỗi, mình chưa lấy được kết quả ổn định lúc này. Bạn thử lại sau ít phút nhé."
 
         for attempt in range(MAX_RETRIES):
-            api_key: Optional[str] = None
-            model_name: Optional[str] = None
-            used_model_alias: Optional[str] = None
-            key_reservation: Optional[Dict[str, str]] = None
-
             try:
                 user_input = ""
                 if original_messages and original_messages[-1].get("role") == "user":
@@ -978,10 +811,6 @@ class GeminiPipeline:
                 bot_name = privacy_context.get("bot_name", "Chad Gibiti")
                 system_with_context = system_with_context.replace("Chad Gibiti", bot_name)
 
-                api_key, model_name, used_model_alias, key_reservation = await self.api_mgr._get_best_api_key(fallback_model_alias)
-                if not api_key or not model_name:
-                    return user_facing_error
-
                 generation_config = {
                     "temperature": 0.7,
                     "top_p": 0.9,
@@ -994,41 +823,20 @@ class GeminiPipeline:
                     "parts": [{"text": _long_output_prompt(get_final_synthesis_prompt())}],
                 }]
 
-                quota_ok = await self.api_mgr._acquire_gemini_quota(
-                    final_messages,
-                    generation_config["max_output_tokens"],
-                    fallback_model_alias,
-                    extra_text=system_with_context,
-                )
-                if not quota_ok:
-                    return user_facing_error
+                self.logger.info(f"Fallback: attempt {attempt + 1}/{MAX_RETRIES} for {user_id}")
 
-                await self.api_mgr._throttle_api_request(api_key)
-
-                self.logger.info(f"Fallback: Using {model_name} for {user_id} (attempt {attempt + 1}/3)")
-
-                response = await self.api_mgr._generate_gemini_content(
-                    api_key=api_key,
-                    model_name=model_name,
+                response = await self.api_mgr.generate(
+                    role=self.fallback_role,
                     system_instruction=system_with_context,
                     generation_config=generation_config,
                     messages=final_messages,
                 )
-                self.api_mgr._commit_selected_key(key_reservation)
 
                 candidate = response.candidates[0] if response.candidates else None
                 if not (candidate and candidate.content and candidate.content.parts):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=300,
-                            reason="empty_candidate",
-                            reservation=key_reservation,
-                        )
                     self.logger.warning(
-                        f"Fallback empty candidate for {user_id} with key ...{api_key[-4:] if api_key else 'None'} "
-                        f"(attempt {attempt + 1}/{MAX_RETRIES}), rotating key and retrying."
+                        f"Fallback empty candidate for {user_id} "
+                        f"(attempt {attempt + 1}/{MAX_RETRIES}), retrying."
                     )
                     continue
 
@@ -1041,7 +849,7 @@ class GeminiPipeline:
                             accumulated_text=text,
                             system_instruction=system_with_context,
                             generation_config=generation_config,
-                            model_alias=fallback_model_alias,
+                            slot_role=self.fallback_role,
                             user_id=user_id,
                             stage="fallback_lite",
                         )
@@ -1051,7 +859,7 @@ class GeminiPipeline:
                             accumulated_text=text,
                             system_instruction=system_with_context,
                             generation_config=generation_config,
-                            model_alias=fallback_model_alias,
+                            slot_role=self.fallback_role,
                             user_id=user_id,
                             stage="fallback_lite_semantic",
                         )
@@ -1060,46 +868,28 @@ class GeminiPipeline:
             except Exception as e:
                 error_str = str(e)
 
+                if isinstance(e, LLMNotConfiguredError) or classify_error(e) == "not_configured":
+                    raise
+
                 if self.api_mgr._is_invalid_key_error(error_str):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=86400,
-                            reason="invalid_key",
-                            permanently_exhaust=True,
-                            reservation=key_reservation,
-                        )
-                    self.logger.warning(f"⚠️ Lite fallback invalid key on attempt {attempt + 1}/3; rotating immediately.")
-                    continue
+                    self.logger.warning("⚠️ Lite fallback gặp lỗi API key không hợp lệ; dừng retry (kiểm tra bằng /endpoint).")
+                    break
 
                 if self.api_mgr._is_rate_limit_error(error_str):
                     error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
-                    self.logger.warning(f"⚠️ Lite fallback transient {error_type}. Attempt {attempt + 1}/3")
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(api_key, used_model_alias, duration=60, reason=error_type, reservation=key_reservation)
+                    self.logger.warning(f"⚠️ Lite fallback transient {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}")
                     await asyncio.sleep(2 + attempt * 2)
                     continue
 
                 if self.api_mgr._is_connection_error(e):
-                    if api_key:
-                        self.api_mgr._mark_key_as_failed(
-                            api_key,
-                            used_model_alias,
-                            duration=120,
-                            reason="endpoint_down",
-                            reservation=key_reservation,
-                        )
-                    self.logger.warning("⚠️ Lite fallback endpoint unreachable; rotating key.")
+                    self.logger.warning("⚠️ Lite fallback endpoint unreachable; retrying.")
                     continue
 
-                self.api_mgr._log_gemini_exception(
+                self.api_mgr.log_exception(
                     stage="fallback_lite",
                     error=e,
                     user_id=user_id,
-                    model_alias=used_model_alias,
-                    model_name=model_name,
-                    api_key=api_key,
+                    role=self.fallback_role,
                     attempt=attempt + 1,
                     max_attempts=MAX_RETRIES,
                 )

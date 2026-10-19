@@ -1,5 +1,7 @@
 # Sự cố & Chẩn đoán (Incident Reports)
 
+> ⚠️ Tài liệu lịch sử: các sự cố liên quan key pool / router (INC-004...) đã lỗi thời từ bản endpoint-only (2026-10-20). Xem [`deprecated.md`](deprecated.md).
+
 > Tài liệu này ghi lại các sự cố đã gặp, nguyên nhân gốc rễ, cách khắc phục, và kinh nghiệm để hỗ trợ bảo trì về sau. Cả con người và AI Agent đều có thể tra cứu.
 
 ---
