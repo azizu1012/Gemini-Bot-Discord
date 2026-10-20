@@ -30,26 +30,40 @@ def messages_to_genai_contents(system_instruction: Optional[str], messages: List
 
         parts_out: List[Dict[str, Any]] = []
         for part in msg.get("parts", []) or []:
+            # Gemini 3 gắn thought_signature vào part (bytes) và yêu cầu gửi
+            # lại nguyên vẹn khi echo functionCall trong history.
+            # https://ai.google.dev/gemini-api/docs/thought-signatures
             if not isinstance(part, dict):
                 # Object kiểu genai Part (model trả về) — trích các trường cần thiết
                 text = getattr(part, "text", None)
                 fc = getattr(part, "function_call", None)
                 inline = getattr(part, "inline_data", None)
+                signature = getattr(part, "thought_signature", None)
                 if text is not None:
-                    parts_out.append({"text": text})
+                    entry: Dict[str, Any] = {"text": text}
+                    if signature is not None:
+                        entry["thought_signature"] = signature
+                    parts_out.append(entry)
                 elif fc is not None:
-                    parts_out.append({
+                    entry = {
                         "function_call": {
                             "name": getattr(fc, "name", ""),
                             "args": dict(getattr(fc, "args", {}) or {}),
                         }
-                    })
+                    }
+                    if signature is not None:
+                        entry["thought_signature"] = signature
+                    parts_out.append(entry)
                 elif inline is not None:
                     parts_out.append({"inline_data": dict(inline)})
                 continue
 
+            signature = part.get("thought_signature") or part.get("thoughtSignature")
             if part.get("text") is not None:
-                parts_out.append({"text": part["text"]})
+                entry = {"text": part["text"]}
+                if signature is not None:
+                    entry["thought_signature"] = signature
+                parts_out.append(entry)
             elif part.get("inline_data"):
                 inline = part["inline_data"] or {}
                 parts_out.append({
@@ -60,13 +74,16 @@ def messages_to_genai_contents(system_instruction: Optional[str], messages: List
                 })
             elif part.get("function_call"):
                 fc = part["function_call"] or {}
-                parts_out.append({
+                entry = {
                     "function_call": _strip_nulls({
                         "name": fc.get("name"),
                         "args": fc.get("args") or {},
                         "id": fc.get("id"),
                     })
-                })
+                }
+                if signature is not None:
+                    entry["thought_signature"] = signature
+                parts_out.append(entry)
             elif part.get("function_response"):
                 fr = part["function_response"] or {}
                 response = fr.get("response") or {}

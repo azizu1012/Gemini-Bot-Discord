@@ -464,7 +464,7 @@ class GeminiPipeline:
                                 raw_args = args.get("_raw_arguments", "")
                                 tool_res = "System Error: Failed to parse tool arguments as valid JSON. Error: {} Raw input was: {} Please fix your JSON formatting and try again.".format(error_msg, raw_args)
                                 self.logger.warning(f"[Reasoning Loop {iteration}] Tool {fc.name} parsing failed: {error_msg}")
-                                tool_results_list.append(f"[{fc.name}|error=json_parse_failed]")
+                                tool_results_list.append(f"[{fc.name}|error=json_parse_failed] {tool_res}")
                                 func_res = {"name": fc.name, "response": {"content": str(tool_res)}}
                                 if getattr(fc, 'id', None):
                                     func_res['id'] = fc.id
@@ -475,6 +475,7 @@ class GeminiPipeline:
                             if tool_name == "web_search" and web_search_calls >= max_search_calls:
                                 budget_msg = get_search_budget_prompt()
                                 self.logger.info(f"[Reasoning Loop {iteration}] Tool {fc.name} blocked by search budget.")
+                                tool_results_list.append(f"[web_search|budget] {budget_msg}")
                                 func_res = {"name": "web_search", "response": {"content": budget_msg}}
                                 if getattr(fc, 'id', None):
                                     func_res['id'] = fc.id
@@ -500,9 +501,17 @@ class GeminiPipeline:
                             model_parts.append(part)
 
                     if has_function_calls:
-                        reasoning_messages.append({"role": "model", "parts": model_parts})
-                        reasoning_messages.append({"role": "user", "parts": function_response_parts})
-                        continue
+                        # Upstream native functionResponse follow-ups can hold the
+                        # lite pool slot and time out with "no free member". Defer
+                        # synthesis to _call_gemini_final, which receives the tool
+                        # results directly and makes a text-only model call.
+                        self.logger.info(
+                            f"[Reasoning Loop {iteration}] Collected {len(tool_results_list)} "
+                            "tool result(s); skipping functionResponse follow-up and "
+                            "deferring to final synthesis."
+                        )
+                        tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
+                        return ("Reasoning completed", tool_results_str)
                     
                     part = candidate.content.parts[0]
                     if part.text:
@@ -536,11 +545,7 @@ class GeminiPipeline:
                                 if tool_name_l == "web_search" and web_search_calls >= max_search_calls:
                                     budget_msg = get_search_budget_prompt()
                                     self.logger.info(f"[Reasoning Loop {iteration}] Parsed tool {tool_name_l} blocked by search budget.")
-                                    reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
-                                    reasoning_messages.append({
-                                        "role": "user",
-                                        "parts": [{"function_response": {"name": "web_search", "response": {"content": budget_msg}}}]
-                                    })
+                                    tool_results_list.append(f"[web_search|budget] {budget_msg}")
                                     executed_tool = True
                                     break
 
@@ -554,16 +559,16 @@ class GeminiPipeline:
                                 else:
                                     tool_results_list.append(f"[{tool_name_l}] {tool_res}")
 
-                                reasoning_messages.append({"role": "model", "parts": [{"text": text}]})
-                                reasoning_messages.append({
-                                    "role": "user",
-                                    "parts": [{"function_response": {"name": tool_name_l, "response": {"content": str(tool_res)}}}]
-                                })
                                 executed_tool = True
                                 break
 
                             if executed_tool:
-                                continue
+                                self.logger.info(
+                                    f"[Reasoning Loop {iteration}] Collected {len(tool_results_list)} "
+                                    "tool result(s) from text-parsed calls; deferring to final synthesis."
+                                )
+                                tool_results_str = "\n".join(tool_results_list) if tool_results_list else ""
+                                return ("Reasoning completed", tool_results_str)
 
                         if text and len(text) > 3:
                             self.logger.info(f"[Reasoning Loop {iteration}] Finished reasoning. Output text summary: {text[:150]}...")
