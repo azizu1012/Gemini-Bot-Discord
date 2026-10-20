@@ -26,7 +26,6 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -39,9 +38,11 @@ load_dotenv(ROOT / ".env")
 import asyncpg  # noqa: E402
 
 from src.core.config import config  # noqa: E402
+from src.core.llm.endpoint_url import validate_endpoint_url  # noqa: E402
 from src.core.llm.resolver import (  # noqa: E402
     decrypt_api_key,
     encrypt_api_key,
+    is_valid_fernet_key,
     mask_api_key,
     normalize_base_url,
 )
@@ -89,9 +90,9 @@ async def save(args: argparse.Namespace, url: str) -> None:
         raise SystemExit(f"SDK không hợp lệ: {args.sdk}. Chọn một trong {SDKS}.")
 
     base_url = normalize_base_url(args.sdk, args.base_url)
-    parsed = urlsplit(base_url)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise SystemExit(f"Base URL không hợp lệ: {base_url}")
+    url_ok, url_error = validate_endpoint_url(base_url)
+    if not url_ok:
+        raise SystemExit(f"Base URL không hợp lệ: {url_error}")
 
     if not args.api_key:
         raise SystemExit("Thiếu --api-key.")
@@ -100,7 +101,16 @@ async def save(args: argparse.Namespace, url: str) -> None:
     if not slots:
         raise SystemExit("Cần ít nhất một slot (--reasoning/--final/--fallback/--vision).")
 
-    encrypted = encrypt_api_key(args.api_key, getattr(config, "DONATE_ENCRYPTION_KEY", "") or "")
+    fernet_key = getattr(config, "DONATE_ENCRYPTION_KEY", "") or ""
+    if not fernet_key and not getattr(config, "ALLOW_PLAINTEXT_ENDPOINT_KEYS", False):
+        raise SystemExit(
+            "Chưa cấu hình DONATE_ENCRYPTION_KEY nên từ chối lưu API key dạng plaintext. "
+            "Đặt DONATE_ENCRYPTION_KEY hoặc ALLOW_PLAINTEXT_ENDPOINT_KEYS=true nếu chấp nhận rủi ro."
+        )
+    if fernet_key and not is_valid_fernet_key(fernet_key):
+        raise SystemExit("DONATE_ENCRYPTION_KEY không hợp lệ. Tạo key Fernet mới rồi thử lại.")
+
+    encrypted = encrypt_api_key(args.api_key, fernet_key)
 
     conn = await asyncpg.connect(url)
     try:

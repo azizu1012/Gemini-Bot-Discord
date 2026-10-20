@@ -82,14 +82,19 @@ class FakeRepo:
 
 class FakeConfig:
     DONATE_ENCRYPTION_KEY = ""
+    ALLOW_PLAINTEXT_ENDPOINT_KEYS = True
 
 
-def _make_flow(gateway, repo):
+class StrictEncryptionConfig(FakeConfig):
+    ALLOW_PLAINTEXT_ENDPOINT_KEYS = False
+
+
+def _make_flow(gateway, repo, config=None):
     flow = EndpointConfigFlow(
         gateway=gateway,
         resolver=FakeResolver(),
         db_repo=repo,
-        config=FakeConfig(),
+        config=config or FakeConfig(),
         admin_user_id="123",
     )
 
@@ -130,7 +135,8 @@ def test_modal_error_after_defer_uses_followup():
     assert interaction.response.deferred is True
     assert interaction.response.messages == []
     assert len(interaction.followup.messages) == 1
-    assert "router unreachable" in interaction.followup.messages[0]
+    assert "Không kết nối" in interaction.followup.messages[0]
+    assert "router unreachable" not in interaction.followup.messages[0]
     assert repo.endpoint is None
 
 
@@ -147,6 +153,22 @@ def test_invalid_url_answers_without_defer():
     assert gateway.list_calls == 0
     assert len(interaction.response.messages) == 1
     assert "không hợp lệ" in interaction.response.messages[0].lower()
+
+
+def test_refuses_plaintext_key_without_encryption_key():
+    interaction = FakeInteraction()
+    gateway = FakeGateway()
+    gateway.interaction = interaction
+    repo = FakeRepo()
+    flow = _make_flow(gateway, repo, config=StrictEncryptionConfig())
+
+    asyncio.run(flow.configure(interaction, "openai", "http://127.0.0.1:58100", "sk-test"))
+
+    assert interaction.response.deferred is False
+    assert gateway.list_calls == 0
+    assert repo.endpoint is None
+    assert len(interaction.response.messages) == 1
+    assert "DONATE_ENCRYPTION_KEY" in interaction.response.messages[0]
 
 
 if __name__ == "__main__":

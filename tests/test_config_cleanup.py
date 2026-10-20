@@ -52,6 +52,7 @@ def test_config_no_longer_exposes_legacy_key_settings():
 def test_config_keeps_endpoint_refactor_settings():
     cfg = get_config()
     assert hasattr(cfg, "DONATE_ENCRYPTION_KEY")
+    assert hasattr(cfg, "ALLOW_PLAINTEXT_ENDPOINT_KEYS")
     assert hasattr(cfg, "GEMINI_TIMEOUT_MS")
 
 

@@ -406,4 +406,4 @@ class ToolsManager:
 
         except Exception as e:
             self.logger.error(f"Tool {name} error: {e}")
-            return f"Lỗi tool: {str(e)}"
+            return "Lỗi khi chạy tool. Vui lòng thử lại."

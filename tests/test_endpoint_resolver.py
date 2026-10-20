@@ -11,6 +11,7 @@ from src.core.llm.resolver import (
     EndpointResolver,
     decrypt_api_key,
     encrypt_api_key,
+    is_valid_fernet_key,
     mask_api_key,
     normalize_base_url,
     resolve_model_id,
@@ -44,6 +45,12 @@ def test_plain_fallback_when_no_fernet_key():
     stored = encrypt_api_key("secret-456", "")
     assert stored == "plain:secret-456"
     assert decrypt_api_key(stored, "") == "secret-456"
+
+
+def test_fernet_key_validation():
+    assert is_valid_fernet_key(Fernet.generate_key().decode()) is True
+    assert is_valid_fernet_key("") is False
+    assert is_valid_fernet_key("not-a-fernet-key") is False
 
 
 def test_mask():
