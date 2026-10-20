@@ -1,11 +1,51 @@
-"""Unit tests for modular search engine subpackage."""
+"""Unit tests for modular search engine subpackage with SSRF safety and consensus reranking."""
 
 import pytest
+from datetime import datetime, timezone
 from src.tools.search.query_planner import QueryPlanner
 from src.tools.search.cache import SearchCache
 from src.tools.search.reranker import SearchReranker
 from src.tools.search.models import SearchRecord
 from src.tools.search.engine import SearchEngine
+from src.tools.search.url_safety import is_safe_url
+
+
+class TestUrlSafety:
+    def test_block_internal_hosts(self):
+        safe, err = is_safe_url("http://localhost:5432")
+        assert safe is False
+        assert "not allowed" in err
+
+        safe, err = is_safe_url("http://127.0.0.1:6379")
+        assert safe is False
+        assert "not allowed" in err
+
+        safe, err = is_safe_url("http://192.168.1.1/admin")
+        assert safe is False
+        assert "not allowed" in err
+
+        safe, err = is_safe_url("http://10.0.0.1/status")
+        assert safe is False
+        assert "not allowed" in err
+
+        safe, err = is_safe_url("http://169.254.169.254/latest/meta-data/")
+        assert safe is False
+        assert "not allowed" in err
+
+    def test_block_invalid_schemes(self):
+        safe, err = is_safe_url("ftp://example.com/file")
+        assert safe is False
+        assert "scheme" in err.lower()
+
+        safe, err = is_safe_url("file:///etc/passwd")
+        assert safe is False
+
+    def test_allow_safe_urls(self):
+        safe, _ = is_safe_url("https://github.com/azizu1012/Gemini-Bot-Discord")
+        assert safe is True
+
+        safe, _ = is_safe_url("https://api.example.com/data")
+        assert safe is True
 
 
 class TestQueryPlanner:
@@ -65,6 +105,60 @@ class TestSearchReranker:
         diversified = reranker.domain_diversify_records(records, limit=2, enforce_diversity=True)
         assert len(diversified) == 2
         assert diversified[0]["domain"] != diversified[1]["domain"]
+
+    def test_spam_seo_penalized(self):
+        reranker = SearchReranker()
+        spam_rec = {
+            "title": "Best AI tools 2026",
+            "snippet": "Check out tokencalc.dev for everything",
+            "domain": "tokencalc.dev",
+            "url": "https://tokencalc.dev/ai",
+        }
+        score = reranker.score_record("tech", "best ai tools", spam_rec)
+        assert score == -1.0
+        assert reranker.is_quality_record("tech", "best ai tools", spam_rec) is False
+
+    def test_authority_domain_boost(self):
+        reranker = SearchReranker()
+        auth_rec = {
+            "title": "Python 3.13 Documentation",
+            "snippet": "Official documentation for Python release features",
+            "domain": "docs.python.org",
+            "url": "https://docs.python.org/3.13/",
+        }
+        score = reranker.score_record("tech", "python documentation", auth_rec)
+        assert score > 0.5
+        assert reranker.is_quality_record("tech", "python documentation", auth_rec) is True
+
+    def test_cross_source_consensus_boost(self):
+        reranker = SearchReranker()
+        # Source 1 and Source 2 share consensus facts
+        records = [
+            {
+                "title": "SpaceX Starship orbital launch test",
+                "snippet": "Starship completed orbital insertion successfully with Super Heavy booster recovery.",
+                "domain": "reuters.com",
+                "url": "https://reuters.com/starship",
+                "score": "1.0",
+            },
+            {
+                "title": "Starship orbital flight update",
+                "snippet": "Super Heavy booster successfully completed orbital flight test milestones.",
+                "domain": "nasaspaceflight.com",
+                "url": "https://nasaspaceflight.com/starship",
+                "score": "1.0",
+            },
+            {
+                "title": "Random cooking recipe",
+                "snippet": "Delicious homemade pasta with tomato sauce.",
+                "domain": "cooking.com",
+                "url": "https://cooking.com/pasta",
+                "score": "1.0",
+            },
+        ]
+        reranked = reranker.lightweight_rerank("tech", "starship orbital launch", records)
+        # First two records should have higher score than third due to consensus boost
+        assert float(reranked[0]["score"]) > float(reranked[2]["score"])
 
 
 class TestSearchEngineFacade:

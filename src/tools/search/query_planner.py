@@ -1,4 +1,4 @@
-"""Query planning, temporal analysis, and intent splitting."""
+"""Query planning, temporal analysis, and multi-intent decomposition."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ import re
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
-from src.tools.constants import SEARCH_TOPICS
+from src.tools.search.mixins.ranking import SearchRankingMixin
 
 
-class QueryPlanner:
+class QueryPlanner(SearchRankingMixin):
     """Analyzes search queries, detects time sensitivity, and decomposes multi-intents."""
 
     def __init__(
@@ -29,7 +29,7 @@ class QueryPlanner:
             r'vừa xong|mới đây|hôm trước|hôm kia|hiện tại|now|thời sự|thời sự hôm nay|'
             r'thông báo mới|lịch thi đấu|kết quả|giá vàng|tỷ giá|chứng khoán|thời tiết|'
             r'tin tức|news|sự kiện|event|vừa xảy ra)\b',
-            re.IGNORECASE
+            re.IGNORECASE,
         )
         self._year_rx = re.compile(r'\b(19\d{2}|20\d{2})\b')
         self._time_sensitive_suffixes = [
@@ -95,7 +95,7 @@ class QueryPlanner:
             return intents
         if any(len(intent) < 20 for intent in intents):
             return [base]
-        return intents[:self.intent_batch_size]
+        return intents[: self.intent_batch_size]
 
     def determine_batch_size(self, intents: List[str]) -> int:
         if not intents:
@@ -106,11 +106,5 @@ class QueryPlanner:
         return batch
 
     def classify_topic(self, query: str) -> str:
-        lowered = (query or "").strip().lower()
-        for topic, config in SEARCH_TOPICS.items():
-            if topic == "general":
-                continue
-            for keyword in config.get("keywords", []):
-                if keyword in lowered:
-                    return topic
-        return "general"
+        """Classify query topic using multi-lingual script and keyword catalogs."""
+        return self._classify_topic(query)
