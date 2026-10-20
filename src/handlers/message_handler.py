@@ -2,7 +2,6 @@ import os
 import re
 import uuid
 import json
-import copy
 import asyncio
 import unicodedata
 from datetime import datetime
@@ -137,20 +136,12 @@ class MessageHandler:
         return self._pipeline
 
     def _pipeline_for_message(self, force_vision_model: bool = False) -> GeminiPipeline:
-        """Return a per-message pipeline with the right slot roles.
+        """Return the normal pipeline; capable final/reasoning models read images natively.
 
-        Image messages get a shallow clone so concurrent text messages cannot
-        have their model roles overwritten by the vision switch.
+        ``force_vision_model`` remains in the signature for callers from older
+        deployments, but image messages no longer require a separate slot.
         """
-        pipeline = self.pipeline
-        if not force_vision_model:
-            return pipeline
-
-        vision_pipeline = copy.copy(pipeline)
-        vision_pipeline.reasoning_role = "vision"
-        vision_pipeline.final_role = "vision"
-        vision_pipeline.fallback_role = "vision"
-        return vision_pipeline
+        return self.pipeline
 
     def _normalize_intent_text(self, text: str) -> str:
         lowered = (text or "").lower()

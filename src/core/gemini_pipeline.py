@@ -244,6 +244,26 @@ def _long_output_prompt(base_prompt: str) -> str:
     )
 
 
+def _build_synthesis_messages(
+    original_messages: List[Dict[str, Any]],
+    synthesis_prompt: str,
+) -> List[Dict[str, Any]]:
+    """Keep current-turn image parts when rebuilding the final prompt."""
+    parts: List[Dict[str, Any]] = [{"text": synthesis_prompt}]
+    for message in reversed(original_messages or []):
+        if message.get("role") != "user":
+            continue
+        for raw_part in message.get("parts", []) or []:
+            if isinstance(raw_part, dict):
+                inline_data = raw_part.get("inline_data")
+            else:
+                inline_data = getattr(raw_part, "inline_data", None)
+            if inline_data:
+                parts.append({"inline_data": inline_data})
+        break
+    return [{"role": "user", "parts": parts}]
+
+
 def _continuation_prompt(accumulated_text: str, part_index: int, max_parts: int) -> str:
     tail = (accumulated_text or "")[-5000:]
     return (
@@ -691,10 +711,10 @@ class GeminiPipeline:
                     "max_output_tokens": int(getattr(self.config, "FINAL_MAX_OUTPUT_TOKENS", 8192) or 8192),
                 }
 
-                final_messages = [{
-                    "role": "user",
-                    "parts": [{"text": _long_output_prompt(get_final_synthesis_prompt())}]
-                }]
+                final_messages = _build_synthesis_messages(
+                    original_messages,
+                    _long_output_prompt(get_final_synthesis_prompt()),
+                )
 
                 self.logger.info(f"Final output for user {user_id} (attempt {attempt + 1}/{MAX_RETRIES})")
 
@@ -823,10 +843,10 @@ class GeminiPipeline:
                     "max_output_tokens": int(getattr(self.config, "FALLBACK_MAX_OUTPUT_TOKENS", 8192) or 8192),
                 }
 
-                final_messages = [{
-                    "role": "user",
-                    "parts": [{"text": _long_output_prompt(get_final_synthesis_prompt())}],
-                }]
+                final_messages = _build_synthesis_messages(
+                    original_messages,
+                    _long_output_prompt(get_final_synthesis_prompt()),
+                )
 
                 self.logger.info(f"Fallback: attempt {attempt + 1}/{MAX_RETRIES} for {user_id}")
 
