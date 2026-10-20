@@ -17,8 +17,11 @@ def make_handler(limit):
     return handler
 
 
-def message(user_id):
-    return SimpleNamespace(value={"user_id": user_id})
+def message(user_id, message_id=None):
+    value = {"user_id": user_id}
+    if message_id is not None:
+        value["message_id"] = message_id
+    return SimpleNamespace(value=value)
 
 
 def install_tracker(handler):
@@ -97,3 +100,33 @@ def test_image_pipeline_uses_native_vision_capable_roles():
     assert base.reasoning_role == "reasoning"
     assert base.final_role == "final"
     assert base.fallback_role == "fallback"
+
+
+def test_duplicate_message_is_claimed_once():
+    handler = make_handler(1)
+    handler.logger = SimpleNamespace(warning=lambda _message: None)
+    handler._incoming_consumer = None
+
+    class FakeKafka:
+        def __init__(self):
+            self.claims = 0
+
+        async def claim_message_once(self, _message_id):
+            self.claims += 1
+            return self.claims == 1
+
+    handler.kafka_service = FakeKafka()
+    calls = []
+
+    async def fake_process(_msg):
+        calls.append(True)
+
+    handler.process_message = fake_process
+    async def run():
+        await asyncio.gather(
+            handler._process_message_guarded(message("u1", "m1")),
+            handler._process_message_guarded(message("u1", "m1")),
+        )
+
+    asyncio.run(run())
+    assert len(calls) == 1

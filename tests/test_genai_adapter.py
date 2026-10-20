@@ -1,12 +1,22 @@
 import os
 import sys
+import base64
+import asyncio
+import json
+import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from google.genai import types as genai_types
 
 from src.core.config import logger
-from src.core.llm.genai_client import DEFAULT_GENAI_BASE_URL, GenAIClient, build_request_config, messages_to_genai_contents
+from src.core.llm.genai_client import (
+    DEFAULT_GENAI_BASE_URL,
+    GenAIClient,
+    _contents_to_router_wire,
+    build_request_config,
+    messages_to_genai_contents,
+)
 
 
 def make_client(**kw):
@@ -30,6 +40,54 @@ def test_inline_data_passthrough_bytes():
     contents = messages_to_genai_contents(None, [msg])
     assert contents[0]["parts"][1]["inline_data"]["data"] == b"\x89PNG"
     assert contents[0]["parts"][1]["inline_data"]["mime_type"] == "image/png"
+
+
+def test_custom_endpoint_uses_standard_base64_for_inline_data():
+    wire = _contents_to_router_wire([
+        {"role": "user", "parts": [{"inline_data": {"data": b"abc123", "mime_type": "image/png"}}]},
+    ])
+    encoded = wire[0]["parts"][0]["inlineData"]["data"]
+    assert encoded == base64.b64encode(b"abc123").decode("ascii")
+    assert "-" not in encoded and "_" not in encoded
+
+
+def test_custom_endpoint_generate_sends_router_compatible_image_payload(monkeypatch):
+    client = make_client(base_url="http://127.0.0.1:58100")
+    captured = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, _url, *, headers, json):
+            captured["headers"] = headers
+            captured["body"] = json
+            return httpx.Response(
+                200,
+                json={"candidates": [{"content": {"parts": [{"text": "ok"}]}}]},
+                request=httpx.Request("POST", _url),
+            )
+
+    monkeypatch.setattr("src.core.llm.genai_client.httpx.AsyncClient", FakeAsyncClient)
+    response = asyncio.run(client.generate(
+        model_id="gemini-flash-lite",
+        system_instruction="",
+        generation_config={},
+        messages=[{
+            "role": "user",
+            "parts": [{"inline_data": {"data": b"abc123", "mime_type": "image/png"}}],
+        }],
+    ))
+
+    encoded = captured["body"]["contents"][0]["parts"][0]["inlineData"]["data"]
+    assert response.candidates[0].content.parts[0].text == "ok"
+    assert encoded == base64.b64encode(b"abc123").decode("ascii")
 
 
 def test_function_call_and_response_passthrough():

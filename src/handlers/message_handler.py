@@ -288,6 +288,15 @@ class MessageHandler:
         waiting for their first message to finish.
         """
         user_id = str((msg.value or {}).get("user_id") or "")
+        message_id = str((msg.value or {}).get("message_id") or "")
+        if message_id:
+            claim_once = getattr(getattr(self, "kafka_service", None), "claim_message_once", None)
+            if callable(claim_once) and not await claim_once(message_id):
+                self.logger.warning(f"Skipping duplicate incoming message {message_id} for user {user_id}")
+                consumer = getattr(self, "_incoming_consumer", None)
+                if consumer:
+                    await consumer.ack(msg)
+                return
         user_lock = self._user_locks.setdefault(user_id, asyncio.Lock()) if user_id else None
 
         if user_lock is not None:
@@ -621,7 +630,7 @@ class MessageHandler:
                 await self._incoming_consumer.ack(msg)
 
         except Exception as e:
-            self.logger.error(f"Error processing message for {user_id}: {e}")
+            self.logger.exception(f"Error processing message for {user_id}")
             try:
                 await self._publish_outgoing({
                     "action": "reply",

@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
+
+import httpx
 
 from google import genai
 from google.genai import types as genai_types
@@ -105,6 +109,74 @@ def messages_to_genai_contents(system_instruction: Optional[str], messages: List
     return contents
 
 
+def _bytes_to_standard_base64(data: Any) -> str:
+    """Encode image bytes with the standard alphabet expected by router_api."""
+    if isinstance(data, bytes):
+        return base64.b64encode(data).decode("ascii")
+    if isinstance(data, bytearray):
+        return base64.b64encode(bytes(data)).decode("ascii")
+    value = str(data or "")
+    if value.startswith("data:") and ";base64," in value:
+        value = value.split(";base64,", 1)[1]
+    padding = "=" * (-len(value) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(value + padding)
+    except Exception:
+        return value
+    return base64.b64encode(decoded).decode("ascii")
+
+
+def _contents_to_router_wire(contents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    wire_contents: List[Dict[str, Any]] = []
+    for content in contents:
+        wire_parts: List[Dict[str, Any]] = []
+        for part in content.get("parts", []) or []:
+            if part.get("text") is not None:
+                wire_parts.append({"text": part["text"]})
+            elif part.get("inline_data"):
+                inline = part["inline_data"] or {}
+                wire_part = {
+                    "inlineData": {
+                        "data": _bytes_to_standard_base64(inline.get("data")),
+                        "mimeType": inline.get("mime_type") or "application/octet-stream",
+                    }
+                }
+                if part.get("thought_signature") is not None:
+                    wire_part["thoughtSignature"] = _bytes_to_standard_base64(part["thought_signature"])
+                wire_parts.append(wire_part)
+            elif part.get("function_call"):
+                call = part["function_call"] or {}
+                wire_parts.append({
+                    "functionCall": {
+                        "name": call.get("name") or "",
+                        "args": call.get("args") or {},
+                    }
+                })
+            elif part.get("function_response"):
+                response = part["function_response"] or {}
+                wire_parts.append({
+                    "functionResponse": {
+                        "name": response.get("name") or "",
+                        "response": response.get("response") or {},
+                    }
+                })
+        if wire_parts:
+            wire_contents.append({"role": content.get("role", "user"), "parts": wire_parts})
+    return wire_contents
+
+
+def _tools_to_router_wire(tools: Optional[List[Any]]) -> Optional[List[Dict[str, Any]]]:
+    if not tools:
+        return None
+    result: List[Dict[str, Any]] = []
+    for tool in tools:
+        if hasattr(tool, "model_dump"):
+            result.append(tool.model_dump(by_alias=True, exclude_none=True))
+        elif isinstance(tool, dict):
+            result.append(tool)
+    return result or None
+
+
 def build_request_config(
     generation_config: Dict[str, Any],
     safety_settings: Any,
@@ -147,6 +219,10 @@ class GenAIClient:
         self._client = genai.Client(api_key=api_key, http_options=http_options)
 
     @property
+    def _uses_custom_endpoint(self) -> bool:
+        return bool(self.base_url and self.base_url != DEFAULT_GENAI_BASE_URL)
+
+    @property
     def raw_client(self):
         return self._client
 
@@ -159,6 +235,15 @@ class GenAIClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Any]] = None,
     ) -> LLMResponse:
+        if self._uses_custom_endpoint:
+            return await self._generate_custom_endpoint(
+                model_id=model_id,
+                system_instruction=system_instruction,
+                generation_config=generation_config,
+                messages=messages,
+                tools=tools,
+            )
+
         contents = messages_to_genai_contents(system_instruction, messages)
         config_dict = build_request_config(generation_config, self.safety_settings, tools)
         config = genai_types.GenerateContentConfig(**config_dict)
@@ -172,6 +257,50 @@ class GenAIClient:
         except Exception as e:
             raise LLMError(classify_error(e), str(e), raw=e) from e
         return LLMResponse(candidates=list(response.candidates or []), raw=response)
+
+    async def _generate_custom_endpoint(
+        self,
+        *,
+        model_id: str,
+        system_instruction: str,
+        generation_config: Dict[str, Any],
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Any]],
+    ) -> LLMResponse:
+        contents = messages_to_genai_contents(None, messages)
+        request_body: Dict[str, Any] = {
+            "contents": _contents_to_router_wire(contents),
+            "generationConfig": {
+                "temperature": generation_config.get("temperature"),
+                "topP": generation_config.get("top_p"),
+                "topK": generation_config.get("top_k"),
+                "maxOutputTokens": generation_config.get("max_output_tokens"),
+            },
+        }
+        request_body["generationConfig"] = {
+            key: value for key, value in request_body["generationConfig"].items()
+            if value is not None
+        }
+        if system_instruction:
+            request_body["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+        wire_tools = _tools_to_router_wire(tools)
+        if wire_tools:
+            request_body["tools"] = wire_tools
+
+        url = f"{self.base_url}/v1beta/models/{quote(model_id, safe='')}:generateContent"
+        timeout_s = (self.timeout_ms / 1000.0) if self.timeout_ms else None
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                response = await client.post(url, headers=headers, json=request_body)
+            if response.is_error:
+                detail = response.text[:800]
+                raise RuntimeError(f"GenAI endpoint HTTP {response.status_code}: {detail}")
+            payload = response.json()
+            parsed = genai_types.GenerateContentResponse.model_validate(payload)
+        except Exception as e:
+            raise LLMError(classify_error(e), str(e), raw=e) from e
+        return LLMResponse(candidates=list(parsed.candidates or []), raw=parsed)
 
     async def list_models(self) -> List[Dict[str, str]]:
         def _list() -> List[Dict[str, str]]:
