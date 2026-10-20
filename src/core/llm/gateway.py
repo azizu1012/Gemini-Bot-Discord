@@ -24,7 +24,7 @@ from src.core.llm.base import (
 )
 from src.core.llm.genai_client import GenAIClient
 from src.core.llm.openai_client import OpenAIClient
-from src.core.llm.resolver import EndpointResolver, get_endpoint_resolver
+from src.core.llm.resolver import EndpointResolver, get_endpoint_resolver, normalize_base_url
 
 
 def _extract_text(response: LLMResponse) -> str:
@@ -122,7 +122,7 @@ class LLMGateway:
         raise last_error or LLMError("other", "LLM call failed")
 
     async def list_models_for(self, *, sdk: str, base_url: str, api_key: str) -> List[Dict[str, str]]:
-        client = self._client_factory(sdk, base_url or "", api_key)
+        client = self._client_factory(sdk, normalize_base_url(sdk, base_url), api_key)
         try:
             return await client.list_models()
         finally:

@@ -54,7 +54,6 @@ class Config:
         # --- DATABASE & MESSAGE QUEUE ---
         self.DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://localhost:5432/azuris")
         self.REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        self.KAFKA_BOOTSTRAP_SERVERS = ""  # deprecated - Kafka replaced by Redis Streams
 
         # --- FILE PATHS (ABSOLUTE & CWD-INDEPENDENT) ---
         self.NOTE_PATH = self._resolve_runtime_path("NOTE_PATH", "data/notes.txt")
@@ -79,12 +78,6 @@ class Config:
         self.TOKEN = os.getenv("DISCORD_TOKEN")
         self.ADMIN_ID = os.getenv("ADMIN_ID", "")
         self.ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "")
-        self.HABE_USER_ID = os.getenv("HABE_USER_ID", "")
-        self.MIRA_USER_ID = os.getenv("MIRA_USER_ID", "")
-        self.ADO_FAT_USER_ID = os.getenv("ADO_FAT_USER_ID", "")
-        self.MUC_RIM_USER_ID = os.getenv("MUC_RIM_USER_ID", "")
-        self.SUC_VIEN_USER_ID = os.getenv("SUC_VIEN_USER_ID", "")
-        self.CHUI_USER_ID = os.getenv("CHUI_USER_ID", "")
 
         # --- DONATE ENCRYPTION ---
         self.DONATE_ENCRYPTION_KEY = os.getenv("DONATE_ENCRYPTION_KEY", "")
@@ -218,12 +211,6 @@ logger = config.logger
 TOKEN = config.TOKEN
 ADMIN_ID = config.ADMIN_ID
 ADMIN_TOKEN = config.ADMIN_TOKEN
-HABE_USER_ID = config.HABE_USER_ID
-MIRA_USER_ID = config.MIRA_USER_ID
-ADO_FAT_USER_ID = config.ADO_FAT_USER_ID
-MUC_RIM_USER_ID = config.MUC_RIM_USER_ID
-SUC_VIEN_USER_ID = config.SUC_VIEN_USER_ID
-CHUI_USER_ID = config.CHUI_USER_ID
 SAFETY_SETTINGS = config.SAFETY_SETTINGS
 SPAM_THRESHOLD = config.SPAM_THRESHOLD
 SPAM_WINDOW = config.SPAM_WINDOW

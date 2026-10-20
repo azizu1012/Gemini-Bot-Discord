@@ -9,6 +9,7 @@ from __future__ import annotations
 import threading
 import time
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet
 
@@ -23,6 +24,42 @@ SDK_ORDER = ("genai", "openai")
 
 _ENCRYPT_PREFIX = "fernet:"
 _PLAIN_PREFIX = "plain:"
+
+
+def normalize_base_url(sdk: str, url: str) -> str:
+    """Chuẩn hóa base URL người dùng nhập tay.
+
+    Các lỗi thường gặp khi cấu hình endpoint qua Discord modal:
+    - Dán thiếu scheme: ``127.0.0.1:58100/v1`` → tự thêm ``http://``.
+    - Dán kèm đuôi API: ``.../v1/models`` hoặc ``.../v1/chat/completions``.
+    - Endpoint OpenAI-compatible chỉ nhập host, thiếu ``/v1`` → tự thêm.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return DEFAULT_BASE_URLS.get(sdk, "")
+
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    parts = urlsplit(raw)
+    path = parts.path.rstrip("/")
+
+    for suffix in ("/chat/completions", "/completions", "/models"):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)]
+            break
+
+    if sdk == "genai":
+        # google-genai tự ghép /v1beta sau base_url. Nếu base_url đã có version
+        # thì SDK sẽ gọi /v1beta/v1beta/... → 404. Vì vậy bóc version ở đây.
+        for version in ("/v1beta", "/v1alpha", "/v1"):
+            if path.endswith(version):
+                path = path[: -len(version)]
+                break
+    elif sdk == "openai" and path in ("", "/v1beta", "/v1alpha"):
+        path = "/v1"
+
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
 
 def encrypt_api_key(raw: str, fernet_key: str) -> str:
@@ -120,7 +157,7 @@ class EndpointResolver:
         fernet_key = getattr(self.config, "DONATE_ENCRYPTION_KEY", "") or ""
         return {
             "sdk": sdk,
-            "base_url": row.get("base_url") or DEFAULT_BASE_URLS.get(sdk, ""),
+            "base_url": normalize_base_url(sdk, row.get("base_url") or ""),
             "api_key": decrypt_api_key(row.get("api_key_encrypted") or "", fernet_key),
             "is_active": bool(row.get("is_active")),
         }

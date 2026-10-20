@@ -15,8 +15,9 @@
 | `genai` | Gọi Google Gemini trực tiếp hoặc qua proxy tương thích GenAI | `https://generativelanguage.googleapis.com` | Text, Tools, Vision |
 | `openai` | Router/LLM tương thích OpenAI (`/v1/chat/completions`) | (bắt buộc nhập) | Text, Tools, Vision. KHÔNG grounding |
 
-- `genai`: bỏ trống URL khi gọi Google direct; nhập URL + key khi đi qua proxy nội bộ (router_api).
-- `openai`: nhập URL đầy đủ tới `/v1`, ví dụ `http://127.0.0.1:58100/v1`.
+- `genai`: nhập **host gốc, KHÔNG kèm `/v1`, `/v1beta` hay `/v1alpha`** — google-genai SDK tự ghép `/v1beta`. Ví dụ router: `http://127.0.0.1:58100`.
+- `openai`: nhập URL đầy đủ tới `/v1`, ví dụ `http://127.0.0.1:58100/v1`. Nếu chỉ nhập host, bot tự thêm `/v1`.
+- Bot tự chuẩn hóa URL trước khi lưu/gọi: thêm `http://` khi thiếu scheme, bỏ đuôi `/models` hoặc `/chat/completions`; `genai` tự bóc version (`/v1`, `/v1beta`, `/v1alpha`), `openai` tự thêm `/v1` nếu thiếu.
 - Đổi SDK active là thao tác thủ công (`/endpoint switch`). Runtime KHÔNG tự nhảy provider.
 
 ## 3. Lệnh /endpoint (ADMIN ONLY)
@@ -73,8 +74,8 @@ API key: <Google AI Studio key>
 
 ```text
 SDK: genai
-Base URL: http://127.0.0.1:58100
-API key: <ROUTER_AUTH_KEY của router_api>
+Base URL: http://127.0.0.1:58100     # KHÔNG thêm /v1 hay /v1beta
+API key: <key do router_api cấp>
 ```
 
 ### LLM tương thích OpenAI
@@ -85,12 +86,33 @@ Base URL: http://127.0.0.1:58100/v1
 API key: <key>
 ```
 
+### Cấu hình trực tiếp bằng CLI (khi Discord UI lỗi)
+
+Khi không thao tác được qua `/endpoint config`, ghi thẳng vào PostgreSQL bằng script
+(idempotent, tự mã hóa key bằng `DONATE_ENCRYPTION_KEY`):
+
+```bash
+python scripts/configure_endpoint.py \
+    --sdk openai \
+    --base-url http://127.0.0.1:58100/v1 \
+    --api-key <key> \
+    --reasoning gemini-flash \
+    --final gemini-flash \
+    --fallback gemini-flash-lite \
+    --vision gemini-flash
+
+python scripts/configure_endpoint.py --show   # xem cấu hình hiện tại
+```
+
+Thêm `--no-active` để lưu endpoint mà không đặt làm SDK active. Có thể cấu hình
+song song cả `genai` (host gốc) lẫn `openai` (`/v1`) rồi `/endpoint switch` khi cần.
+
 ## 7. Troubleshooting
 
 | Hiện tượng | Nguyên nhân thường gặp | Cách xử lý |
 |------------|------------------------|------------|
 | `401 Unauthorized` | Key sai/hết hạn | `/endpoint config` nhập lại key |
-| `Không lấy được danh sách model` | URL sai, thiếu `/v1`, proxy chưa chạy | Kiểm tra bằng `/endpoint test` |
+| `Không lấy được danh sách model` | URL sai (genai lỡ thêm `/v1`, openai thiếu `/v1`), proxy chưa chạy | Kiểm tra bằng `/endpoint test`; xem lại quy tắc URL ở mục 2 |
 | Slot báo ⚠️/❌ | Model không có trong danh sách endpoint | `/endpoint models` chọn lại |
 | Trả lời chậm | Endpoint xa / model lớn | Xem latency ở `/endpoint test` |
 | Muốn đổi provider | Chưa `/endpoint switch` | Switch thủ công — runtime không tự nhảy |

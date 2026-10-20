@@ -188,16 +188,21 @@ class SchemaMixin:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_keywords ON rag_chunks USING GIN (keywords)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_summary_trgm ON rag_chunks USING GIN (chunk_summary gin_trgm_ops)")
 
-            # Rename bảng của cơ chế key-rotation cũ (giữ dữ liệu để rollback).
-            # Idempotent: IF EXISTS bỏ qua khi bảng đã được rename từ lần trước.
-            for _old_name, _deprecated_name in (
-                ("api_key_pool", "_deprecated_api_key_pool"),
-                ("api_key_rate_limits", "_deprecated_api_key_rate_limits"),
-                ("custom_api_models", "_deprecated_custom_api_models"),
-                ("bot_model_config", "_deprecated_bot_model_config"),
-                ("custom_api_provider_config", "_deprecated_custom_api_provider_config"),
+            # Cơ chế key-rotation cũ đã bị xóa hoàn toàn (endpoint/key giờ nằm trong
+            # llm_endpoints). Dọn sạch cả bảng cũ lẫn bảng đã rename từ các bản trước.
+            for _legacy_name in (
+                "api_key_pool",
+                "api_key_rate_limits",
+                "custom_api_models",
+                "bot_model_config",
+                "custom_api_provider_config",
+                "_deprecated_api_key_pool",
+                "_deprecated_api_key_rate_limits",
+                "_deprecated_custom_api_models",
+                "_deprecated_bot_model_config",
+                "_deprecated_custom_api_provider_config",
             ):
-                await conn.execute(f"ALTER TABLE IF EXISTS {_old_name} RENAME TO {_deprecated_name}")
+                await conn.execute(f"DROP TABLE IF EXISTS {_legacy_name} CASCADE")
 
     async def backup_db(self) -> None:
         return None

@@ -12,6 +12,7 @@ from src.core.llm.resolver import (
     decrypt_api_key,
     encrypt_api_key,
     mask_api_key,
+    normalize_base_url,
     resolve_model_id,
 )
 
@@ -66,6 +67,22 @@ def test_resolve_model_id_default_rules():
     assert resolve_model_id({}, "final") is None
 
 
+def test_normalize_base_url():
+    # OpenAI-compatible: luôn có /v1, tự thêm scheme khi thiếu.
+    assert normalize_base_url("openai", "http://127.0.0.1:58100") == "http://127.0.0.1:58100/v1"
+    assert normalize_base_url("openai", "127.0.0.1:58100/v1/") == "http://127.0.0.1:58100/v1"
+    assert normalize_base_url("openai", "http://127.0.0.1:58100/v1/chat/completions") == "http://127.0.0.1:58100/v1"
+    assert normalize_base_url("openai", "http://127.0.0.1:58100/v1beta") == "http://127.0.0.1:58100/v1"
+    assert normalize_base_url("openai", "") == "https://api.openai.com/v1"
+
+    # GenAI native: KHÔNG được có version, SDK tự ghép /v1beta.
+    assert normalize_base_url("genai", "http://127.0.0.1:58100") == "http://127.0.0.1:58100"
+    assert normalize_base_url("genai", "http://127.0.0.1:58100/v1") == "http://127.0.0.1:58100"
+    assert normalize_base_url("genai", "http://127.0.0.1:58100/v1beta/") == "http://127.0.0.1:58100"
+    assert normalize_base_url("genai", "http://127.0.0.1:58100/v1alpha/models") == "http://127.0.0.1:58100"
+    assert normalize_base_url("genai", "") == "https://generativelanguage.googleapis.com"
+
+
 def test_resolver_flow():
     async def run():
         fernet = Fernet.generate_key().decode()
@@ -73,7 +90,8 @@ def test_resolver_flow():
             endpoints={
                 "genai": {
                     "sdk": "genai",
-                    "base_url": "http://127.0.0.1:58100",
+                    # Giá trị cũ lỡ lưu kèm /v1 — resolver phải tự chuẩn hóa về host.
+                    "base_url": "http://127.0.0.1:58100/v1",
                     "api_key_encrypted": encrypt_api_key("router-key", fernet),
                     "is_active": True,
                 }
@@ -109,5 +127,6 @@ if __name__ == "__main__":
     test_plain_fallback_when_no_fernet_key()
     test_mask()
     test_resolve_model_id_default_rules()
+    test_normalize_base_url()
     test_resolver_flow()
     print("ALL PASS")

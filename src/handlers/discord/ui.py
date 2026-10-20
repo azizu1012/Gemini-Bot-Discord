@@ -1,8 +1,9 @@
 import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 import discord
 from src.database.repository import DatabaseRepository
-from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key
+from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key, normalize_base_url
 
 
 def _flatten_note_preview(note: Dict[str, Any], max_len: int = 80) -> str:
@@ -297,7 +298,11 @@ def normalize_models(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         model_id = str((item or {}).get("id") or "").strip()
         if not model_id or model_id in seen:
             continue
-        display = str((item or {}).get("name") or "").strip() or model_id
+        display = (
+            str((item or {}).get("name") or (item or {}).get("display_name") or (item or {}).get("display") or "")
+            .strip()
+            or model_id
+        )
         seen[model_id] = {"id": model_id, "name": display}
     return sorted(seen.values(), key=lambda m: m["id"].lower())
 
@@ -505,6 +510,16 @@ class EndpointConfigFlow:
         await interaction.response.send_modal(EndpointConfigModal(flow=self, sdk=sdk, default_url=default_url))
 
     async def configure(self, interaction: discord.Interaction, sdk: str, base_url: str, api_key: str) -> None:
+        base_url = normalize_base_url(sdk, base_url)
+        parsed = urlsplit(base_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            await interaction.response.send_message(
+                f"❌ Base URL không hợp lệ: `{base_url}`.\n"
+                "Ví dụ hợp lệ: `http://127.0.0.1:58100/v1`",
+                ephemeral=True,
+            )
+            return
+
         try:
             raw_models = await self.gateway.list_models_for(sdk=sdk, base_url=base_url, api_key=api_key)
         except Exception as e:
