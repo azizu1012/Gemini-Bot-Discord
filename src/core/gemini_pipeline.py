@@ -194,6 +194,22 @@ def _clean_response_artifacts(text: str) -> str:
     return text
 
 
+def _extract_image_recognition_result(tool_results: str) -> str:
+    """Return a usable image-tool result without exposing the internal marker."""
+    if not tool_results:
+        return ""
+
+    match = re.search(
+        r"(?:^|\n)\[image_recognition(?:\|[^\]]+)?\]\s*(.*?)(?=\n\[[A-Za-z_][^\]]*\]|\Z)",
+        tool_results,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
+        return ""
+
+    return _clean_response_artifacts(match.group(1).strip())
+
+
 def _candidate_text(candidate: Any) -> str:
     parts = getattr(getattr(candidate, "content", None), "parts", None) or []
     text_parts = []
@@ -247,9 +263,13 @@ def _long_output_prompt(base_prompt: str) -> str:
 def _build_synthesis_messages(
     original_messages: List[Dict[str, Any]],
     synthesis_prompt: str,
+    include_images: bool = True,
 ) -> List[Dict[str, Any]]:
-    """Keep current-turn image parts when rebuilding the final prompt."""
+    """Rebuild the final prompt, optionally preserving current-turn image parts."""
     parts: List[Dict[str, Any]] = [{"text": synthesis_prompt}]
+    if not include_images:
+        return [{"role": "user", "parts": parts}]
+
     for message in reversed(original_messages or []):
         if message.get("role") != "user":
             continue
@@ -389,6 +409,13 @@ class GeminiPipeline:
         """Two-Tier Model Strategy: Flash-Lite (reasoning) -> Flash (final output)."""
 
         reasoning_result, tool_results = await self._call_gemini_reasoning_loop(messages, user_id, privacy_context)
+
+        # The vision tool already produced the answer; avoid a second quota-sensitive
+        # synthesis request for image-only turns.
+        image_result = _extract_image_recognition_result(tool_results)
+        if image_result and not re.search(r"\[(?!image_recognition(?:\]|\|))[A-Za-z_]", tool_results, re.IGNORECASE):
+            self.logger.info(f"Returning image recognition result directly for {user_id}.")
+            return image_result
 
         if tool_results and not _is_tool_result_sufficient(tool_results):
             partial_ok = self.config.SEARCH_ALLOW_PARTIAL_ANSWER and _has_minimum_search_evidence(tool_results)
@@ -714,6 +741,7 @@ class GeminiPipeline:
                 final_messages = _build_synthesis_messages(
                     original_messages,
                     _long_output_prompt(get_final_synthesis_prompt()),
+                    include_images=not bool(_extract_image_recognition_result(tool_results)),
                 )
 
                 self.logger.info(f"Final output for user {user_id} (attempt {attempt + 1}/{MAX_RETRIES})")
@@ -803,12 +831,21 @@ class GeminiPipeline:
                 )
                 continue
 
+        image_result = _extract_image_recognition_result(tool_results)
+        if image_result:
+            self.logger.warning(f"❌ Final output failed; returning image recognition result for {user_id}")
+            return image_result
+
         self.logger.warning(f"❌ Final output completely failed. Using fallback lite model for {user_id}")
         return await self._fallback_lite_as_flash(original_messages, reasoning_result, tool_results, user_id, privacy_context)
 
     async def _fallback_lite_as_flash(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
         MAX_RETRIES = self.config.FALLBACK_MAX_API_RETRIES
         user_facing_error = "Xin lỗi, mình chưa lấy được kết quả ổn định lúc này. Bạn thử lại sau ít phút nhé."
+        image_result = _extract_image_recognition_result(tool_results)
+        if image_result:
+            self.logger.warning(f"Returning image recognition result without fallback synthesis for {user_id}")
+            return image_result
 
         for attempt in range(MAX_RETRIES):
             try:
@@ -846,6 +883,7 @@ class GeminiPipeline:
                 final_messages = _build_synthesis_messages(
                     original_messages,
                     _long_output_prompt(get_final_synthesis_prompt()),
+                    include_images=not bool(image_result),
                 )
 
                 self.logger.info(f"Fallback: attempt {attempt + 1}/{MAX_RETRIES} for {user_id}")
