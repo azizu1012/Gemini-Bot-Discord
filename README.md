@@ -1,152 +1,214 @@
-# 🤖 AZURIS DISCORD ASSISTANT BOT
+<div align="center">
 
-> 📖 **Tài liệu kỹ thuật đầy đủ:** Xem [`docs/`](docs/) — Nguồn Sự Thật Kỹ Thuật duy nhất. Các tính năng đã gỡ: [`docs/deprecated.md`](docs/deprecated.md).
+<img src="assets/azuris-banner.svg" alt="Azuris Discord AI Assistant" width="100%" />
 
-**Azuris** là một trợ lý AI tiên tiến hoạt động trên nền tảng Discord, được xây dựng trên kiến trúc hướng sự kiện phân tán (**Event-Driven Distributed Architecture**) sử dụng **PostgreSQL**, **Redis Streams**, và pipeline lập luận đa bước qua **LLM endpoint** (Google GenAI native hoặc OpenAI-compatible). 
+<p>
+  <a href="README.vi.md">Tiếng Việt</a> ·
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/endpoint_and_models.md">Endpoint Guide</a> ·
+  <a href="docs/operations.md">Operations</a>
+</p>
 
-Hệ thống được thiết kế tối ưu hóa cho cả môi trường VPS cá nhân và doanh nghiệp vừa với cơ chế tự cấp phát hạ tầng cục bộ (**Zero-Docker Local Runtime**).
+<p>
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Discord.py-2.6.4-5865F2?logo=discord&logoColor=white" alt="discord.py" />
+  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16" />
+  <img src="https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white" alt="Redis Streams" />
+  <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret-scan.yml/badge.svg" alt="Secret scan" />
+</p>
 
----
+<p><strong>A reliable, endpoint-first AI assistant for Discord.</strong><br />
+Multi-step reasoning, tool calling, long-term memory, multimodal input, voice-room utilities, and local infrastructure in one focused bot.</p>
 
-## ✨ TÍNH NĂNG NỔI BẬT
+</div>
 
-* **Lập luận đa bước (Contextual Chat & Reasoning)**: Pipeline 2 tầng (Reasoning Loop + Final Synthesis) giúp bot suy nghĩ sâu sắc trước khi trả lời.
-* **Gọi công cụ tự động (Tool-Calling)**: Tìm kiếm web thời gian thực (Web Search), tra cứu thời tiết, ghi chú cá nhân và nhận diện hình ảnh.
-* **Nhận diện hình ảnh đa phương thức (Vision)**: Đọc và phân tích ảnh đính kèm cực nhanh thông qua SDK Google GenAI chính thức.
-* **Endpoint linh hoạt (Endpoint-only)**: Cấu hình URL + API key + 4 model slot ngay trong Discord qua nhóm lệnh `/endpoint`; hỗ trợ Gemini native và mọi LLM tương thích OpenAI (router nội bộ, OpenAI, LM Studio...).
-* **Trí nhớ dài hạn (Long-term Memory)**: Lưu giữ sở thích và thông tin cá nhân hóa của từng người dùng thông qua cơ chế ghi chú `user_notes` tối ưu hóa bằng chỉ mục GIN.
-* **Hạ tầng cục bộ tự cấp phát (Zero-Docker)**: Tự động tải và chạy Redis, PostgreSQL trực tiếp trong thư mục dự án.
-* **Phân quyền lai động-tĩnh (Hybrid Roles)**: Quản lý 4 nhóm quyền (Admin, Moderator, Premium, Free User) bảo mật tuyệt đối.
+## Overview
 
----
+Azuris is an event-driven Discord AI assistant built around PostgreSQL, Redis Streams, and configurable LLM endpoints. It supports Google GenAI-compatible and OpenAI-compatible providers without hard-coding a provider-specific key pool into the application.
 
-## 🚀 HƯỚNG DẪN KHỞI CHẠY NHANH (QUICK START)
+The project is designed for self-hosted deployments on Windows or Linux. PostgreSQL and Redis can run from the repository local runtime, so Docker is optional.
 
-### 📋 Yêu cầu hệ thống
-* **Python**: Phiên bản 3.10 trở lên.
-* **Hệ điều hành**: Windows 10/11 hoặc Linux (Ubuntu/Debian).
+## Why Azuris
 
----
+| Capability | What it provides |
+| --- | --- |
+| 🧠 Reasoning pipeline | Separate reasoning and final-synthesis stages with bounded retries and deadlines |
+| 🧰 Tool calling | Web search, WeatherAPI.com weather, calculator, notes, role management, and image recognition |
+| 🔌 Endpoint-first LLM | Configure SDK, URL, API key, and four model slots from Discord with /endpoint |
+| 🖼️ Multimodal | Process image attachments and vision requests through the active endpoint |
+| 🧾 Long-term memory | User-scoped notes, JSONB metadata, global-fact promotion, and file notes |
+| 🔊 Voice rooms | Lock rooms, manage allowlists, move members, and apply room policies |
+| 🛡️ Safety controls | Secret scanning, URL validation, user isolation, role checks, and sanitized errors |
+| ⚡ Reliable runtime | Redis-backed event flow, per-user serialization, concurrency limits, and LLM deadlines |
 
-### 💻 Hướng dẫn trên Windows (PowerShell Native)
+## Architecture
 
-1. **Tải thư viện Python và cài đặt hạ tầng cục bộ**:
-   ```powershell
-   # Cài đặt thư viện Python
-   pip install -r requirements.txt
+Discord → Redis Streams → worker → LLM/tools → PostgreSQL → Redis → Discord
 
-   # Tải và tự động cấu hình PostgreSQL, Redis cục bộ
-   powershell -ExecutionPolicy Bypass -File .\install_services.ps1
-   ```
+```mermaid
+flowchart LR
+    U[Discord users] --> G[Discord gateway<br/>bot_core.py]
+    G --> I[(Redis Stream<br/>discord-incoming)]
+    I --> W[Message worker<br/>message_handler.py]
+    W --> P[Reasoning + synthesis<br/>GeminiPipeline]
+    P --> T[Tools<br/>search · weather · notes · vision]
+    P --> L[LLM Gateway]
+    L --> E[(PostgreSQL<br/>endpoints · history · notes)]
+    L --> R[GenAI or OpenAI-compatible<br/>endpoint]
+    W --> O[(Redis Stream<br/>discord-outgoing)]
+    O --> G
+```
 
-2. **Cấu hình biến môi trường**:
-   Mở file `.env` vừa được tạo ở thư mục gốc và điền các API keys cần thiết:
-   ```env
-   DISCORD_TOKEN=your_discord_bot_token
-   # Sinh Fernet key: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-   DONATE_ENCRYPTION_KEY=your_fernet_key
-   ```
-   > Endpoint LLM (URL + API key + model) được cấu hình sau khi bot online bằng `/endpoint config` — không dùng biến môi trường.
+For the detailed module map and data flow, see [docs/architecture.md](docs/architecture.md).
 
-3. **Chạy kiểm tra hệ thống (Preflight Check)**:
-   ```powershell
-   powershell .\run_bot.ps1 --preflight-only
-   ```
+## Quick Start
 
-4. **Khởi chạy Bot & Hạ tầng ngầm**:
-   ```powershell
-   powershell .\run_bot.ps1 --server
-   ```
+### Requirements
 
-5. **Tắt hạ tầng an toàn khi không sử dụng**:
-   ```powershell
-   powershell .\stop_infra.ps1
-   ```
+- Python 3.10 or newer
+- Windows 10/11 or Linux
+- A Discord bot token
+- PostgreSQL 16 and Redis, either local or externally managed
+- At least one configured LLM endpoint
 
----
+### Windows
 
-### 🐧 Hướng dẫn trên Linux VPS (PM2 Production)
+```powershell
+python -m venv .venv
+.\\.venv\\Scripts\\Activate.ps1
+python -m pip install -r requirements.txt
 
-1. **Cấp quyền thực thi và cài đặt hạ tầng cục bộ**:
-   ```bash
-   chmod +x install_services.sh run_bot.sh stop_infra.sh
-   ./install_services.sh
-   ```
+powershell -ExecutionPolicy Bypass -File .\\install_services.ps1
+Copy-Item .env.example .env
+# Edit .env and fill in the required secrets.
 
-2. **Cấu hình môi trường ảo Python và cài đặt thư viện**:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+powershell .\\run_bot.ps1 --preflight-only
+powershell .\\run_bot.ps1 --server
+```
 
-3. **Cấu hình biến môi trường**:
-   Chỉnh sửa file `.env` để điền các token bảo mật:
-   ```bash
-   nano .env
-   ```
+Stop the bot and local services with:
 
-4. **Khởi chạy Bot & Hạ tầng với PM2**:
-   ```bash
-   # Chạy kiểm tra preflight trước
-   ./run_bot.sh --preflight-only
+```powershell
+powershell .\\stop_bot.ps1
+powershell .\\stop_infra.ps1
+```
 
-   # Khởi chạy bot và hạ tầng ngầm dưới sự giám sát của PM2
-   ./run_bot.sh --pm2 --server
-   ```
+### Linux
 
-5. **Xem logs hoạt động**:
-   ```bash
-   pm2 logs azuris-bot --lines 100
-   ```
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 
-6. **Tắt hạ tầng an toàn**:
-   ```bash
-   ./stop_infra.sh
-   ```
+chmod +x install_services.sh run_bot.sh stop_infra.sh
+./install_services.sh
+cp .env.example .env
+# Edit .env and fill in the required secrets.
 
----
+./run_bot.sh --preflight-only
+./run_bot.sh --pm2 --server
+```
 
-## 📡 CẤU HÌNH LLM ENDPOINT (`/endpoint`)
+## Configuration
 
-Azuris chạy theo mô hình **endpoint-only**: không còn xoay vòng API key trong code. Toàn bộ cấu hình LLM lưu trong PostgreSQL và thay đổi trực tiếp trong Discord.
+Copy [.env.example](.env.example) to .env. Never commit .env or paste it into issues, pull requests, or chat.
 
-**Cách cấu hình (Admin):**
-1. `/endpoint config` → chọn SDK: `genai` (Gemini native) hoặc `openai` (LLM tương thích OpenAI).
-2. Nhập URL endpoint (bỏ trống = mặc định Google; `openai` bắt buộc, ví dụ `http://127.0.0.1:58100/v1`).
-3. Nhập API key — key được mã hóa bằng `DONATE_ENCRYPTION_KEY` trước khi ghi DB.
-4. Chọn model cho 4 slot: Reasoning → Final → Fallback → Vision (25 model/trang, có tìm kiếm theo tên).
-5. Kiểm tra bằng `/endpoint test`; xem lại bằng `/endpoint view`.
+Minimum configuration:
 
-Chi tiết đầy đủ: [`docs/endpoint_and_models.md`](docs/endpoint_and_models.md) · Tính năng đã gỡ: [`docs/deprecated.md`](docs/deprecated.md).
+```env
+DISCORD_TOKEN=your-discord-bot-token
+ADMIN_IDS=your-discord-user-id
+DATABASE_URL=postgresql://azuris:password@127.0.0.1:55432/azuris
+REDIS_URL=redis://127.0.0.1:6379/0
+DONATE_ENCRYPTION_KEY=your-fernet-key
+WEATHER_API_KEY=your-weatherapi-key
+```
 
----
+Generate a Fernet key with:
 
-## 💬 DANH SÁCH LỆNH SLASH COMMANDS THÔNG DỤNG
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
 
-### 🛠️ Lệnh Quản trị & Cấu hình (Admin/Moderator)
-* `/endpoint`: Nhóm lệnh cấu hình LLM endpoint — `config`, `view`, `switch`, `models`, `test` (ADMIN ONLY).
-* `/health_check`: Kiểm tra endpoint đang active, latency, 4 model slot và kết nối PostgreSQL.
-* `/moderator`: Thăng chức hoặc hạ chức Moderator động (Chỉ dành cho Admin).
-* `/premium`: Thêm hoặc xóa trạng thái thành viên Premium cho người dùng.
-* `/reset-all`: Reset toàn bộ cơ sở dữ liệu và xóa sạch cache (Chỉ dành cho Admin).
-* `/global-notes`: Xem và quản lý các ghi chú chung của hệ thống.
+Endpoint API keys are encrypted before being stored in PostgreSQL. Plaintext endpoint-key storage is disabled by default; only enable ALLOW_PLAINTEXT_ENDPOINT_KEYS=true for an explicitly accepted local-development risk.
 
-### 🎨 Lệnh Giải trí & Tiện ích
-* `/imagine`: Tạo ảnh nghệ thuật bằng AI (Hỗ trợ custom image generator hoặc Gemini Imagen mặc định).
-* `/ping`: Kiểm tra độ trễ kết nối mạng của bot.
-* `/reset-chat`: Xóa sạch lịch sử trò chuyện của bạn để bắt đầu cuộc hội thoại mới.
-* `/donate`: Hiển thị mã QR ủng hộ duy trì bot (tự động xóa sau 2 phút để bảo mật).
+## LLM Endpoints
 
-### 🔊 Lệnh Phòng thoại (Voice Room Management)
-* `/lock` / `/unlock`: Khóa hoặc mở khóa phòng thoại cá nhân của bạn.
-* `/set_room`: Đặt giới hạn số lượng thành viên tối đa cho phòng thoại.
-* `/add_privet` / `/remove_privet`: Thêm hoặc xóa người dùng khỏi danh sách được phép vào phòng thoại riêng tư.
-* `/move` / `/move_all`: Di chuyển thành viên hoặc toàn bộ phòng sang kênh thoại khác.
+Azuris stores both provider configurations in PostgreSQL and activates one SDK at a time. Each endpoint has four model slots:
 
----
+| Slot | Purpose | Fallback rule |
+| --- | --- | --- |
+| reasoning | Tool-aware reasoning loop | Falls back to final |
+| final | User-facing synthesis | First available model |
+| fallback | Same-provider retry model | Falls back to reasoning, then final |
+| vision | Image understanding | Falls back to final |
 
----
+Configure from Discord:
 
-*Chúc bạn có những trải nghiệm tuyệt vời cùng trợ lý thông minh **Azuris**!*
+```text
+/endpoint config
+/endpoint view
+/endpoint models
+/endpoint test
+/endpoint switch
+```
+
+For a local router_api:
+
+```text
+GenAI-compatible:  http://127.0.0.1:58100
+OpenAI-compatible: http://127.0.0.1:58100/v1
+```
+
+Loopback is supported for local routers. Link-local, cloud-metadata, and unsafe private-network targets are blocked by default; see ALLOW_PRIVATE_ENDPOINT_HOSTS for an explicit trusted-LAN exception. Full details are in [docs/endpoint_and_models.md](docs/endpoint_and_models.md).
+
+## Discord Commands
+
+| Area | Commands |
+| --- | --- |
+| 🔧 Administration | /endpoint, /health_check, /moderator, /premium, /reset-all, /global-notes |
+| 💬 Assistant | /ping, /reset-chat, /imagine, /donate |
+| 🔊 Voice rooms | /lock, /unlock, /locklist, /allow, /allowremove, /allowlist, /move, /move_all, /set_room |
+
+Permissions are enforced through static admin/moderator configuration and database-backed roles. Voice-room commands use owner/allowlist checks.
+
+## Testing
+
+```bash
+python -m pytest -q
+python -m compileall -q src scripts tests
+```
+
+The CI workflow runs compilation, PostgreSQL/Redis-backed tests, and the secret scan on every pull request. The repository current suite contains 171 passing tests.
+
+## Security Notes
+
+- Keep .env, database credentials, Discord tokens, API keys, and Fernet keys private.
+- Rotate credentials immediately if the project directory or logs were shared.
+- Use a dedicated Discord bot with only the permissions it needs.
+- Keep DONATE_ENCRYPTION_KEY stable after endpoint keys have been stored; changing it requires re-encrypting stored keys.
+- Review docs/incidents.md before changing runtime, Redis, or pipeline behavior.
+- Run python scripts/scan_secrets.py --git before publishing a branch.
+
+## Documentation
+
+- [docs/architecture.md](docs/architecture.md) — system design and data flow
+- [docs/configuration.md](docs/configuration.md) — environment variables and database schema
+- [docs/endpoint_and_models.md](docs/endpoint_and_models.md) — endpoint and model-slot behavior
+- [docs/operations.md](docs/operations.md) — installation, operations, logs, and troubleshooting
+- [docs/deprecated.md](docs/deprecated.md) — removed and deprecated features
+- [README.vi.md](README.vi.md) — Vietnamese documentation
+
+## Contributing
+
+1. Create a focused branch from main.
+2. Add or update tests in tests/.
+3. Run the local test and compile commands.
+4. Open a pull request and wait for CI and secret-scan checks.
+5. Merge only after all required checks pass.
+
+## License
+
+See [LICENSE](LICENSE).
