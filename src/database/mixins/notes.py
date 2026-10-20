@@ -75,7 +75,7 @@ class NotesMixin:
             return item
         return None
 
-    async def update_user_note_db(self, note_id: str, content: str, metadata: dict) -> bool:
+    async def update_user_note_db(self, note_id: str, user_id: str, content: str, metadata: dict) -> bool:
         pool = await self._ensure_pool()
         if isinstance(metadata, str):
             try:
@@ -89,10 +89,15 @@ class NotesMixin:
 
         async with pool.acquire() as conn:
             result = await conn.execute(
-                "UPDATE user_notes SET content = $1, metadata = $2, updated_at = CURRENT_TIMESTAMP WHERE note_id = $3",
+                """
+                UPDATE user_notes
+                SET content = $1, metadata = $2, updated_at = CURRENT_TIMESTAMP
+                WHERE note_id = $3 AND user_id = $4
+                """,
                 content,
                 metadata_val,
                 note_id,
+                user_id,
             )
         return result != "UPDATE 0"
 

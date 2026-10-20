@@ -73,14 +73,11 @@ class FakeRepo:
         self.slots = None
         self.active = None
 
-    async def upsert_llm_endpoint(self, sdk, base_url, encrypted, updated_by):
+    async def save_endpoint_config(self, sdk, base_url, encrypted, slots, updated_by):
         self.endpoint = (sdk, base_url, encrypted, updated_by)
-
-    async def upsert_llm_model_slots(self, sdk, slots, updated_by):
         self.slots = (sdk, slots, updated_by)
-
-    async def set_active_sdk(self, sdk, updated_by):
         self.active = sdk
+        return True
 
 
 class FakeConfig:

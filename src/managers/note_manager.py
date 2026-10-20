@@ -196,7 +196,7 @@ class NoteManager:
             }
             
             if existing_note:
-                success = await self.db_repo.update_user_note_db(existing_note['note_id'], content, metadata)
+                success = await self.db_repo.update_user_note_db(existing_note['note_id'], user_id, content, metadata)
                 if success:
                     self.logger.info(f"File note updated for {user_id}. File: {filename}")
                 else:

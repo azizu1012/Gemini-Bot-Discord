@@ -553,9 +553,7 @@ class EndpointConfigFlow:
         encrypted = encrypt_api_key(api_key, getattr(self.config, "DONATE_ENCRYPTION_KEY", "") or "")
         updated_by = f"admin:{self.admin_user_id}"
         try:
-            await self.db_repo.upsert_llm_endpoint(sdk, base_url, encrypted, updated_by)
-            await self.db_repo.upsert_llm_model_slots(sdk, slots, updated_by)
-            await self.db_repo.set_active_sdk(sdk, updated_by)
+            await self.db_repo.save_endpoint_config(sdk, base_url, encrypted, slots, updated_by)
         except Exception as e:
             logger.exception("Endpoint config failed while saving to DB (sdk=%s)", sdk)
             await interaction.followup.send(f"❌ Lỗi lưu DB: `{str(e)[:300]}`", ephemeral=True)
