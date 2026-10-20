@@ -93,16 +93,21 @@ Azuris_refactor_code_base/
 │   │   │   └── ui.py             # UI helpers, embeds
 │   │   └── message_handler.py    # Worker: xử lý tin nhắn từ Redis
 │   │
-│   ├── instructions/             # Prompt files (.txt) cho Gemini
-│   │   ├── azuris_system_prompt.txt
-│   │   ├── fallback_system_prompt.txt
-│   │   ├── lite_reasoning_prompt.txt
-│   │   ├── identity_capability_prompt.txt
-│   │   ├── retrieval_prompts.txt
-│   │   ├── role_contract.txt
-│   │   ├── file_index_reasoning_prompt.txt
-│   │   ├── file_index_validation_prompt.txt
-│   │   ├── system_prompt.py / lite_sys_prompt.py / fallback_sys_prompt.py
+│   ├── instructions/             # OOP Prompt Subsystem
+│   │   ├── manager.py            # PromptManager (OOP singleton: load, cache, hot-reload)
+│   │   ├── models.py             # Domain models (PromptTemplate, RetrievalPrompts, RoleContracts)
+│   │   ├── builders.py           # Builders & formatters (IdentityPromptBuilder, FallbackPromptFormatter)
+│   │   ├── prompts.py            # Facade constants & functions tương thích ngược
+│   │   ├── system_prompt.py / lite_sys_prompt.py / fallback_sys_prompt.py # Re-export facades
+│   │   └── templates/            # Thư mục chứa toàn bộ file template (.txt)
+│   │       ├── azuris_system_prompt.txt
+│   │       ├── fallback_system_prompt.txt
+│   │       ├── lite_reasoning_prompt.txt
+│   │       ├── identity_capability_prompt.txt
+│   │       ├── retrieval_prompts.txt
+│   │       ├── role_contract.txt
+│   │       ├── file_index_reasoning_prompt.txt
+│   │       └── file_index_validation_prompt.txt
 │   │
 │   ├── managers/
 │   │   ├── cache_manager.py      # Singleton KV Cache RAM (TTL+LRU)
