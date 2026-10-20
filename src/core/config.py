@@ -84,6 +84,8 @@ class Config:
 
         # --- GEMINI TIMEOUT (endpoint/key cấu hình qua /endpoint, lưu PostgreSQL) ---
         self.GEMINI_TIMEOUT_MS = self._get_int("GEMINI_TIMEOUT_MS", 60000, min_value=5000)
+        # Hard upper bound for one full reasoning + final pipeline call.
+        self.LLM_TOTAL_TIMEOUT_SECONDS = self._get_int("LLM_TOTAL_TIMEOUT_SECONDS", 120, min_value=15, max_value=600)
 
         # --- SEARCH API KEYS ---
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
@@ -111,6 +113,7 @@ class Config:
         self.MODERATOR_USER_IDS = [i.strip() for i in self.MODERATOR_ID_RAW.split(",") if i.strip()] if self.MODERATOR_ID_RAW else []
 
         # --- PRODUCTION STABILITY TUNING ---
+        self.MAX_CONCURRENT_MESSAGES = self._get_int("MAX_CONCURRENT_MESSAGES", 3, min_value=1, max_value=10)
         self.REASONING_MAX_API_RETRIES = self._get_int("REASONING_MAX_API_RETRIES", 5, min_value=1, max_value=6)
         self.REASONING_MAX_LOOPS = self._get_int("REASONING_MAX_LOOPS", 3, min_value=1, max_value=6)
         self.FINAL_MAX_API_RETRIES = self._get_int("FINAL_MAX_API_RETRIES", 3, min_value=1, max_value=6)
@@ -236,6 +239,7 @@ DEFAULT_DM_LIMIT = config.DEFAULT_DM_LIMIT
 PREMIUM_DM_LIMIT = config.PREMIUM_DM_LIMIT
 ADMIN_USER_IDS = config.ADMIN_USER_IDS
 MODERATOR_USER_IDS = config.MODERATOR_USER_IDS
+MAX_CONCURRENT_MESSAGES = config.MAX_CONCURRENT_MESSAGES
 REASONING_MAX_API_RETRIES = config.REASONING_MAX_API_RETRIES
 REASONING_MAX_LOOPS = config.REASONING_MAX_LOOPS
 FINAL_MAX_API_RETRIES = config.FINAL_MAX_API_RETRIES
@@ -249,6 +253,7 @@ PROJECT_ROOT = str(config.PROJECT_ROOT)
 LOG_PATH = config.LOG_PATH
 DONATE_ENCRYPTION_KEY = config.DONATE_ENCRYPTION_KEY
 GEMINI_TIMEOUT_MS = config.GEMINI_TIMEOUT_MS
+LLM_TOTAL_TIMEOUT_SECONDS = config.LLM_TOTAL_TIMEOUT_SECONDS
 
 
 # Global DB pool

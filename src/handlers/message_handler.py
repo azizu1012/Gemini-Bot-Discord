@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import json
+import copy
 import asyncio
 import unicodedata
 from datetime import datetime
@@ -63,6 +64,11 @@ class MessageHandler:
         self.file_chunk_dir = self.config.FILE_CHUNK_DIR
         self._image_download_sem = asyncio.Semaphore(3)
         self._incoming_consumer: Optional[RedisStreamConsumer] = None
+        self._worker_semaphore = asyncio.Semaphore(
+            int(getattr(self.config, "MAX_CONCURRENT_MESSAGES", 3) or 3)
+        )
+        self._user_locks: Dict[str, asyncio.Lock] = {}
+        self._worker_tasks: set = set()
 
 
     async def _publish_outgoing(self, payload: Dict[str, Any], user_id: Optional[str]) -> bool:
@@ -130,16 +136,21 @@ class MessageHandler:
             )
         return self._pipeline
 
-    async def _refresh_pipeline_roles(self, force_vision_model: bool = False) -> None:
+    def _pipeline_for_message(self, force_vision_model: bool = False) -> GeminiPipeline:
+        """Return a per-message pipeline with the right slot roles.
+
+        Image messages get a shallow clone so concurrent text messages cannot
+        have their model roles overwritten by the vision switch.
+        """
         pipeline = self.pipeline
-        if force_vision_model:
-            pipeline.reasoning_role = "vision"
-            pipeline.final_role = "vision"
-            pipeline.fallback_role = "vision"
-        else:
-            pipeline.reasoning_role = "reasoning"
-            pipeline.final_role = "final"
-            pipeline.fallback_role = "fallback"
+        if not force_vision_model:
+            return pipeline
+
+        vision_pipeline = copy.copy(pipeline)
+        vision_pipeline.reasoning_role = "vision"
+        vision_pipeline.final_role = "vision"
+        vision_pipeline.fallback_role = "vision"
+        return vision_pipeline
 
     def _normalize_intent_text(self, text: str) -> str:
         lowered = (text or "").lower()
@@ -266,6 +277,36 @@ class MessageHandler:
             chunks.append(current_text)
         return chunks
 
+    async def _call_pipeline_with_deadline(self, pipeline, messages, user_id, privacy_context):
+        """Run one full reasoning + final turn under a hard wall-clock limit.
+
+        This prevents provider slot starvation from turning into an unbounded
+        multi-retry hang. On timeout the caller sends the normal busy message.
+        """
+        timeout_seconds = float(getattr(self.config, "LLM_TOTAL_TIMEOUT_SECONDS", 120) or 120)
+        return await asyncio.wait_for(
+            pipeline.call_gemini_api(messages, user_id, privacy_context),
+            timeout=timeout_seconds,
+        )
+
+    async def _process_message_guarded(self, msg: _RedisMsg):
+        """Process messages concurrently while preserving per-user order.
+
+        The per-user lock is acquired before the global semaphore so a user
+        with several queued messages cannot occupy every worker slot while
+        waiting for their first message to finish.
+        """
+        user_id = str((msg.value or {}).get("user_id") or "")
+        user_lock = self._user_locks.setdefault(user_id, asyncio.Lock()) if user_id else None
+
+        if user_lock is not None:
+            async with user_lock:
+                async with self._worker_semaphore:
+                    await self.process_message(msg)
+        else:
+            async with self._worker_semaphore:
+                await self.process_message(msg)
+
     async def start_worker(self):
         """Start the Redis Streams consumer and listen for incoming messages."""
         self.logger.info("Starting Worker...")
@@ -289,7 +330,9 @@ class MessageHandler:
 
         try:
             async for msg in consumer:
-                await self.process_message(msg)
+                task = asyncio.create_task(self._process_message_guarded(msg))
+                self._worker_tasks.add(task)
+                task.add_done_callback(self._worker_tasks.discard)
         except asyncio.CancelledError:
             self.logger.info("Worker task cancelled")
             raise
@@ -299,6 +342,13 @@ class MessageHandler:
             await self.shutdown()
 
     async def shutdown(self):
+        tasks = list(self._worker_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._worker_tasks.clear()
+
         try:
             await self.search_subtask_client.close()
         except Exception:
@@ -549,8 +599,8 @@ class MessageHandler:
                 user_parts.extend(downloaded_images)
             messages.append({"role": "user", "parts": user_parts})
 
-            await self._refresh_pipeline_roles(force_vision_model=bool(downloaded_images))
-            response_text = await self.pipeline.call_gemini_api(messages, user_id, privacy_context)
+            pipeline = self._pipeline_for_message(force_vision_model=bool(downloaded_images))
+            response_text = await self._call_pipeline_with_deadline(pipeline, messages, user_id, privacy_context)
 
             # 8. Log reply and Split response chunks sequentially
             await self.db_repo.log_message_db(user_id, "assistant", response_text)
