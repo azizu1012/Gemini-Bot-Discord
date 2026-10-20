@@ -35,7 +35,19 @@ async def main():
         names = {row["table_name"] for row in tables}
         assert "llm_endpoints" in names, "llm_endpoints chưa được tạo"
         assert "llm_model_slots" in names, "llm_model_slots chưa được tạo"
-        assert "api_key_pool" not in names, "api_key_pool vẫn tồn tại (phải rename sang _deprecated_api_key_pool)"
+        legacy_tables = {
+            "api_key_pool",
+            "api_key_rate_limits",
+            "custom_api_models",
+            "bot_model_config",
+            "custom_api_provider_config",
+            "_deprecated_api_key_pool",
+            "_deprecated_api_key_rate_limits",
+            "_deprecated_custom_api_models",
+            "_deprecated_bot_model_config",
+            "_deprecated_custom_api_provider_config",
+        }
+        assert not (legacy_tables & names), f"Bảng key-rotation cũ chưa bị xóa: {legacy_tables & names}"
     finally:
         await conn.close()
 
