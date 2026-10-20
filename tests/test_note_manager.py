@@ -12,9 +12,19 @@ from src.managers.note_manager import NoteManager
 class FakeDbRepo:
     def __init__(self):
         self.saved = []
+        self.updated = None
 
     async def add_user_note_db(self, user_id, note_id, content, metadata, scope=None, importance=None, note_type=None, fact_hash=None):
         self.saved.append(content)
+        return True
+
+    async def get_file_note_by_filename_db(self, user_id, filename):
+        if filename == "existing.txt":
+            return {"note_id": "note-1"}
+        return None
+
+    async def update_user_note_db(self, note_id, user_id, content, metadata):
+        self.updated = (note_id, user_id, content, metadata)
         return True
 
     async def count_distinct_users_by_fact_hash_db(self, fact_hash):
@@ -65,6 +75,16 @@ def test_gateway_error_falls_back_to_truncation():
     assert len(db.saved) == 1
     assert db.saved[0].endswith("...")
     assert len(db.saved[0]) == 1003
+
+
+def test_file_note_update_is_user_scoped():
+    db = FakeDbRepo()
+    nm = NoteManager(db, gateway=FakeGateway())
+    asyncio.run(nm.save_file_note_to_db("u1", "nội dung mới", "existing.txt"))
+    assert db.updated is not None
+    assert db.updated[0] == "note-1"
+    assert db.updated[1] == "u1"
+    assert db.updated[2] == "nội dung mới"
 
 
 if __name__ == "__main__":

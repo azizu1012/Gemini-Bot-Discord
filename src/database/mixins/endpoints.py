@@ -61,6 +61,62 @@ class EndpointsMixin:
                 )
         return result.endswith(" 1")
 
+    async def save_endpoint_config(
+        self,
+        sdk: str,
+        base_url: str,
+        api_key_encrypted: str,
+        slots: Dict[str, Optional[str]],
+        updated_by: str,
+    ) -> bool:
+        """Persist endpoint, model slots, and active SDK in one transaction."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO llm_endpoints (sdk, base_url, api_key_encrypted, is_active, updated_by, updated_at)
+                    VALUES ($1, $2, $3, FALSE, $4, CURRENT_TIMESTAMP)
+                    ON CONFLICT (sdk) DO UPDATE SET
+                        base_url = EXCLUDED.base_url,
+                        api_key_encrypted = EXCLUDED.api_key_encrypted,
+                        updated_by = EXCLUDED.updated_by,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    sdk,
+                    base_url,
+                    api_key_encrypted,
+                    updated_by,
+                )
+                for slot, model_id in slots.items():
+                    await conn.execute(
+                        """
+                        INSERT INTO llm_model_slots (sdk, slot, model_id, updated_by, updated_at)
+                        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+                        ON CONFLICT (sdk, slot) DO UPDATE SET
+                            model_id = EXCLUDED.model_id,
+                            updated_by = EXCLUDED.updated_by,
+                            updated_at = CURRENT_TIMESTAMP
+                        """,
+                        sdk,
+                        slot,
+                        model_id,
+                        updated_by,
+                    )
+                await conn.execute("UPDATE llm_endpoints SET is_active = FALSE WHERE is_active = TRUE")
+                result = await conn.execute(
+                    """
+                    UPDATE llm_endpoints
+                    SET is_active = TRUE, updated_by = $2, updated_at = CURRENT_TIMESTAMP
+                    WHERE sdk = $1
+                    """,
+                    sdk,
+                    updated_by,
+                )
+                if not result.endswith(" 1"):
+                    raise RuntimeError(f"Failed to activate endpoint: {sdk}")
+        return True
+
     async def get_llm_model_slots(self, sdk: str) -> Dict[str, Optional[str]]:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
