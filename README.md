@@ -120,7 +120,7 @@ Minimum configuration:
 ```env
 DISCORD_TOKEN=your-discord-bot-token
 ADMIN_IDS=your-discord-user-id
-DATABASE_URL=postgresql://azuris:password@127.0.0.1:55432/azuris
+DATABASE_URL=postgresql://azuris@127.0.0.1:55432/azuris
 REDIS_URL=redis://127.0.0.1:6379/0
 DONATE_ENCRYPTION_KEY=your-fernet-key
 WEATHER_API_KEY=your-weatherapi-key
