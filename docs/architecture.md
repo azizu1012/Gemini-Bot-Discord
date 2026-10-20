@@ -125,7 +125,14 @@ Azuris_refactor_code_base/
 │   │
 │   ├── tools/
 │   │   ├── tools.py              # Function Calling definitions
-│   │   ├── search_engine.py      # Web search engine
+│   │   ├── search/               # Search subsystem (OOP composite engine & mixins)
+│   │   │   ├── engine.py         # SearchEngine composite coordinator
+│   │   │   ├── reranker.py       # SearchReranker (consensus boost, authority ranking)
+│   │   │   ├── query_planner.py  # QueryPlanner (temporal transformations, multi-intent)
+│   │   │   ├── url_safety.py     # SSRF security shield (private IPs, loopback, cloud metadata)
+│   │   │   ├── mixins/           # data, text, evidence, ranking mixins
+│   │   │   ├── languages/        # vi, en, ja, korea, chinese, spanish catalogs
+│   │   │   └── providers/        # duckduckgo, serpapi, tavily, exa, fetcher
 │   │   ├── weather_service.py    # OpenWeatherMap
 │   │   ├── calculator_service.py # Calculator
 │   │   ├── helpers.py            # Helper utilities
