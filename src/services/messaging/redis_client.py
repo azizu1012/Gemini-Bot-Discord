@@ -253,6 +253,17 @@ class RedisStreamService:
 
         return False
 
+    async def claim_message_once(self, message_id: str, ttl_seconds: int = 900) -> bool:
+        """Claim an incoming Discord message once across worker processes."""
+        if self._redis is None:
+            return True
+        key = f"azuris:incoming:claimed:{message_id}"
+        try:
+            return bool(await self._redis.set(key, "1", nx=True, ex=max(60, int(ttl_seconds))))
+        except Exception as e:
+            self.logger.warning(f"Failed to claim incoming message {message_id}: {e}")
+            return True
+
     async def stop(self) -> None:
         """Stop all consumers and close Redis connection."""
         self.logger.info(f"Stopping RedisStreamService for {self.client_id}...")
