@@ -114,17 +114,23 @@ def register_slash_commands(bot_core_instance):
                 await db_repo.update_endpoint_check_status(active, True, None)
             except Exception as e:
                 await db_repo.update_endpoint_check_status(active, False, str(e)[:300])
+                logger.exception("Health check endpoint failed (sdk=%s)", active)
                 embed.add_field(
                     name=f"Endpoint `{active}`",
-                    value=f"❌ Lỗi: `{str(e)[:200]}`",
+                    value="❌ Endpoint kiểm tra thất bại. Xem log server để biết chi tiết.",
                     inline=False,
                 )
 
         try:
             await db_repo.init_db()
             embed.add_field(name="PostgreSQL", value="✅ OK", inline=True)
-        except Exception as e:
-            embed.add_field(name="PostgreSQL", value=f"❌ `{str(e)[:120]}`", inline=True)
+        except Exception:
+            logger.exception("PostgreSQL health check failed")
+            embed.add_field(
+                name="PostgreSQL",
+                value="❌ Kiểm tra thất bại. Xem log server để biết chi tiết.",
+                inline=True,
+            )
 
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -227,8 +233,12 @@ def register_slash_commands(bot_core_instance):
             raw_models = await gateway.list_models_for(
                 sdk=active, base_url=ep.get("base_url") or "", api_key=ep.get("api_key") or ""
             )
-        except Exception as e:
-            await interaction.followup.send(f"❌ Không lấy được danh sách model: `{str(e)[:300]}`", ephemeral=True)
+        except Exception:
+            logger.exception("Endpoint models refresh failed (sdk=%s)", active)
+            await interaction.followup.send(
+                "❌ Không lấy được danh sách model. Kiểm tra log server để biết chi tiết.",
+                ephemeral=True,
+            )
             return
         models = normalize_models(raw_models)
         if not models:
@@ -285,7 +295,11 @@ def register_slash_commands(bot_core_instance):
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             await db_repo.update_endpoint_check_status(active, False, str(e)[:300])
-            await interaction.followup.send(f"❌ Endpoint lỗi: `{str(e)[:300]}`", ephemeral=True)
+            logger.exception("Endpoint test failed (sdk=%s)", active)
+            await interaction.followup.send(
+                "❌ Endpoint lỗi. Kiểm tra log server để biết chi tiết.",
+                ephemeral=True,
+            )
 
     bot.tree.add_command(endpoint_group)
 
@@ -663,8 +677,11 @@ def register_slash_commands(bot_core_instance):
         except discord.Forbidden:
             await interaction.followup.send(f"Cannot send message to {target_user.display_name}! 😢", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"Error sending message! 😓 Error: {str(e)}", ephemeral=True)
             logger.error(f"Error sending message to {user_id}: {e}")
+            await interaction.followup.send(
+                "❌ Không gửi được tin nhắn. Kiểm tra log server.",
+                ephemeral=True,
+            )
 
     donate_platforms = {
         "kofi": {
@@ -918,8 +935,12 @@ def register_slash_commands(bot_core_instance):
                 return
             ok, msg = await room_tools_service.move_member(target_member, target_channel, interaction.user)
             await interaction.followup.send(msg, ephemeral=True)
-        except Exception as e:
-            await interaction.followup.send(f"❌ Lỗi: {e}", ephemeral=True)
+        except Exception:
+            logger.exception("Voice member move failed")
+            await interaction.followup.send(
+                "❌ Không thể chuyển thành viên. Kiểm tra quyền bot và log server.",
+                ephemeral=True,
+            )
 
     @bot.tree.command(name="move_all", description="Chuyển bạn và toàn bộ người trong allowlist sang phòng khác")
     @owner_check

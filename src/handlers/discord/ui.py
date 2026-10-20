@@ -1,10 +1,10 @@
 import logging
 import os
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlsplit
 import discord
 from src.database.repository import DatabaseRepository
-from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key, normalize_base_url
+from src.core.llm.endpoint_url import validate_endpoint_url
+from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key, is_valid_fernet_key, normalize_base_url
 
 
 logger = logging.getLogger(__name__)
@@ -515,11 +515,27 @@ class EndpointConfigFlow:
 
     async def configure(self, interaction: discord.Interaction, sdk: str, base_url: str, api_key: str) -> None:
         base_url = normalize_base_url(sdk, base_url)
-        parsed = urlsplit(base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        url_ok, url_error = validate_endpoint_url(base_url)
+        if not url_ok:
             await interaction.response.send_message(
-                f"❌ Base URL không hợp lệ: `{base_url}`.\n"
+                f"❌ Base URL không hợp lệ: {url_error}.\n"
                 "Ví dụ hợp lệ: `http://127.0.0.1:58100/v1`",
+                ephemeral=True,
+            )
+            return
+
+        fernet_key = getattr(self.config, "DONATE_ENCRYPTION_KEY", "") or ""
+        if not fernet_key and not getattr(self.config, "ALLOW_PLAINTEXT_ENDPOINT_KEYS", False):
+            await interaction.response.send_message(
+                "❌ Chưa cấu hình DONATE_ENCRYPTION_KEY nên từ chối lưu API key dạng plaintext.\n"
+                "Đặt DONATE_ENCRYPTION_KEY hoặc ALLOW_PLAINTEXT_ENDPOINT_KEYS=true nếu chấp nhận rủi ro.",
+                ephemeral=True,
+            )
+            return
+        if fernet_key and not is_valid_fernet_key(fernet_key):
+            await interaction.response.send_message(
+                "❌ DONATE_ENCRYPTION_KEY không hợp lệ. Tạo key bằng:\n"
+                "`python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"`",
                 ephemeral=True,
             )
             return
@@ -531,10 +547,11 @@ class EndpointConfigFlow:
 
         try:
             raw_models = await self.gateway.list_models_for(sdk=sdk, base_url=base_url, api_key=api_key)
-        except Exception as e:
+        except Exception:
             logger.exception("Endpoint config failed while listing models (sdk=%s url=%s)", sdk, base_url)
             await interaction.followup.send(
-                f"❌ Không kết nối/không lấy được model list từ endpoint:\n`{str(e)[:300]}`\nCấu hình CHƯA được lưu.",
+                "❌ Không kết nối/không lấy được model list từ endpoint. "
+                "Cấu hình CHƯA được lưu. Kiểm tra log server để biết chi tiết.",
                 ephemeral=True,
             )
             return
@@ -550,13 +567,16 @@ class EndpointConfigFlow:
         if slots is None:
             return
 
-        encrypted = encrypt_api_key(api_key, getattr(self.config, "DONATE_ENCRYPTION_KEY", "") or "")
+        encrypted = encrypt_api_key(api_key, fernet_key)
         updated_by = f"admin:{self.admin_user_id}"
         try:
             await self.db_repo.save_endpoint_config(sdk, base_url, encrypted, slots, updated_by)
-        except Exception as e:
+        except Exception:
             logger.exception("Endpoint config failed while saving to DB (sdk=%s)", sdk)
-            await interaction.followup.send(f"❌ Lỗi lưu DB: `{str(e)[:300]}`", ephemeral=True)
+            await interaction.followup.send(
+                "❌ Lỗi lưu DB. Cấu hình CHƯA được lưu. Kiểm tra log server để biết chi tiết.",
+                ephemeral=True,
+            )
             return
 
         self.resolver.invalidate()

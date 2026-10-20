@@ -62,6 +62,16 @@ def normalize_base_url(sdk: str, url: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
 
 
+def is_valid_fernet_key(fernet_key: str) -> bool:
+    if not fernet_key:
+        return False
+    try:
+        Fernet(fernet_key.encode())
+        return True
+    except Exception:
+        return False
+
+
 def encrypt_api_key(raw: str, fernet_key: str) -> str:
     if not raw:
         return raw

@@ -87,6 +87,18 @@ def test_file_note_update_is_user_scoped():
     assert db.updated[2] == "nội dung mới"
 
 
+class FailingDbRepo(FakeDbRepo):
+    async def add_user_note_db(self, *args, **kwargs):
+        raise RuntimeError("db password=super-secret")
+
+
+def test_save_note_error_is_sanitized():
+    nm = NoteManager(FailingDbRepo(), gateway=FakeGateway())
+    result = asyncio.run(nm.save_note_to_db("u1", "Ghi chú ngắn", "manual"))
+    assert result == "Lỗi khi lưu note. Vui lòng thử lại."
+    assert "super-secret" not in result
+
+
 if __name__ == "__main__":
     test_long_note_summarized_via_gateway()
     test_short_note_skips_gateway()

@@ -157,7 +157,7 @@ class NoteManager:
 
         except Exception as e:
             self.logger.error(f"Exception in save_note_to_db: {e}")
-            return f"Exception when saving note: {e}"
+            return "Lỗi khi lưu note. Vui lòng thử lại."
     
     async def save_file_note_to_db(self, user_id: str, content: str, filename: str, source: str = "file_upload") -> bool:
         """Save parsed file content to database. Updates if file already exists."""
