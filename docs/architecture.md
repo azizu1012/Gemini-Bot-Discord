@@ -83,7 +83,8 @@ Azuris_refactor_code_base/
 │   │   └── prompt_loader.py      # Tải prompt từ instructions/ (LRU)
 │   │
 │   ├── database/
-│   │   └── repository.py         # asyncpg, 17 bảng, connection pool
+│   │   ├── mixins/               # Domain mixins (schema, state, roles, audit, chat, notes, endpoints)
+│   │   └── repository.py         # asyncpg composite repository, 17 bảng, connection pool
 │   │
 │   ├── handlers/
 │   │   ├── discord/
