@@ -7,9 +7,9 @@ from typing import Iterator, List, Optional, Set
 
 import discord
 from src.core.config import logger
-from src.voice.models import LockOutcome, LockRecord
-from src.voice.purge import purge_foreign_messages
-from src.voice.store import LockStore, WhitelistStore
+from src.voice.models import LockOutcome, LockRecord, PurgeReport
+from src.voice.purge import VoicePurgeService, voice_purge_service
+from src.voice.store import LockStoreProtocol, WhitelistStoreProtocol
 
 
 def is_member_overwrite(target: object) -> bool:
@@ -21,16 +21,18 @@ class RoomLockService:
 
     def __init__(
         self,
-        store: LockStore,
-        whitelist: WhitelistStore,
+        store: LockStoreProtocol,
+        whitelist: WhitelistStoreProtocol,
         bot: discord.Client,
         owner_id: int,
+        purge_service: Optional[VoicePurgeService] = None,
         logger_override=None,
     ) -> None:
         self.store = store
         self.whitelist = whitelist
         self.bot = bot
         self.owner_id = owner_id
+        self.purge_service = purge_service or voice_purge_service
         self.logger = logger_override or logger
 
     def is_locked(self, channel_id: int) -> bool:
@@ -138,8 +140,8 @@ class RoomLockService:
                 pass
         return kicked
 
-    async def clean_messages(self, channel: discord.VoiceChannel, record: LockRecord):
-        return await purge_foreign_messages(
+    async def clean_messages(self, channel: discord.VoiceChannel, record: LockRecord) -> PurgeReport:
+        return await self.purge_service.purge_foreign_messages(
             channel,
             cutoff=record.locked_at,
             allowed_ids=self.allowed_ids(),
@@ -201,18 +203,12 @@ class RoomLockService:
             base.connect = False
             base.add_reactions = False
             try:
-                await channel.set_permissions(channel.guild.default_role, overwrite=base, reason="Khôi phục khóa phòng")
+                await channel.set_permissions(
+                    channel.guild.default_role,
+                    overwrite=base,
+                    reason="Bảo vệ phòng khóa",
+                )
                 return True
             except (discord.Forbidden, discord.HTTPException):
-                return False
-        return False
-
-    async def ensure_name(self, channel: discord.VoiceChannel) -> bool:
-        rec = self.record(channel.id)
-        if rec and rec.enforced_name and channel.name != rec.enforced_name:
-            try:
-                await channel.edit(name=rec.enforced_name, reason="Khôi phục tên phòng khóa")
-                return True
-            except (discord.Forbidden, discord.HTTPException):
-                return False
+                pass
         return False
