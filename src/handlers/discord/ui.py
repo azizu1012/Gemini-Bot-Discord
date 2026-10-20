@@ -286,12 +286,11 @@ class ImageHistoryView(discord.ui.View):
 
 MODELS_PER_PAGE = 25
 
-SLOT_ORDER = ("reasoning", "final", "fallback", "vision")
+SLOT_ORDER = ("reasoning", "final", "fallback")
 SLOT_LABELS = {
     "reasoning": "🧠 Reasoning",
     "final": "✍️ Final",
     "fallback": "🪂 Fallback",
-    "vision": "👁️ Vision",
 }
 
 
@@ -493,7 +492,7 @@ class EndpointConfigModal(discord.ui.Modal, title="Cấu hình Endpoint"):
 
 
 class EndpointConfigFlow:
-    """Điều phối /endpoint config: SDK → modal URL/Key → validate + fetch models → picker 4 slot → lưu DB."""
+    """Điều phối /endpoint config: SDK → modal URL/Key → validate + fetch models → picker 3 slot → lưu DB."""
 
     def __init__(self, *, gateway, resolver, db_repo, config, admin_user_id: str):
         self.gateway = gateway
@@ -583,7 +582,7 @@ class EndpointConfigFlow:
         await interaction.followup.send(embed=self.summary_embed(sdk, base_url, slots), ephemeral=True)
 
     async def run_slot_pickers(self, interaction: discord.Interaction, models: List[Dict[str, Any]]) -> Optional[Dict[str, Optional[str]]]:
-        """Chạy picker tuần tự cho 4 slot (reasoning → final → fallback → vision). Trả None nếu hết hạn."""
+        """Chạy picker tuần tự cho 3 slot (reasoning → final → fallback). Trả None nếu hết hạn."""
         slots: Dict[str, Optional[str]] = {}
         for slot in SLOT_ORDER:
             view = ModelPickerView(models=models, slot=slot)
@@ -603,5 +602,5 @@ class EndpointConfigFlow:
         embed = discord.Embed(title="✅ Đã lưu cấu hình endpoint", color=discord.Color.green())
         embed.add_field(name="SDK active", value=f"`{sdk}`", inline=True)
         embed.add_field(name="URL", value=f"`{base_url}`", inline=True)
-        embed.add_field(name="4 slot", value="\n".join(lines), inline=False)
+        embed.add_field(name="3 slot", value="\n".join(lines), inline=False)
         return embed

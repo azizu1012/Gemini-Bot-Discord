@@ -135,14 +135,6 @@ class MessageHandler:
             )
         return self._pipeline
 
-    def _pipeline_for_message(self, force_vision_model: bool = False) -> GeminiPipeline:
-        """Return the normal pipeline; capable final/reasoning models read images natively.
-
-        ``force_vision_model`` remains in the signature for callers from older
-        deployments, but image messages no longer require a separate slot.
-        """
-        return self.pipeline
-
     def _normalize_intent_text(self, text: str) -> str:
         lowered = (text or "").lower()
         no_diacritics = "".join(
@@ -599,7 +591,7 @@ class MessageHandler:
                 user_parts.extend(downloaded_images)
             messages.append({"role": "user", "parts": user_parts})
 
-            pipeline = self._pipeline_for_message(force_vision_model=bool(downloaded_images))
+            pipeline = self.pipeline
             response_text = await self._call_pipeline_with_deadline(pipeline, messages, user_id, privacy_context)
 
             # 8. Log reply and Split response chunks sequentially

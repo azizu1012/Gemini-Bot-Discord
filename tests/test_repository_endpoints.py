@@ -66,7 +66,7 @@ async def main():
         await repo.upsert_llm_endpoint("genai", "https://example.test", "plain:test-key", "self-test")
         await repo.upsert_llm_model_slots(
             "genai",
-            {"reasoning": "m-reasoning", "final": "m-final", "fallback": None, "vision": None},
+            {"reasoning": "m-reasoning", "final": "m-final", "fallback": None},
             "self-test",
         )
         ok = await repo.set_active_sdk("genai", "self-test")

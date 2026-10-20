@@ -64,12 +64,11 @@ def test_resolve_model_id_default_rules():
     assert resolve_model_id(slots, "final") == "m-final"
     assert resolve_model_id(slots, "reasoning") == "m-final"
     assert resolve_model_id(slots, "fallback") == "m-final"
-    assert resolve_model_id(slots, "vision") == "m-final"
 
-    slots2 = {"final": "m-final", "reasoning": "m-reason", "fallback": "m-fb", "vision": "m-vis"}
+    slots2 = {"final": "m-final", "reasoning": "m-reason", "fallback": "m-fb"}
     assert resolve_model_id(slots2, "reasoning") == "m-reason"
     assert resolve_model_id(slots2, "fallback") == "m-fb"
-    assert resolve_model_id(slots2, "vision") == "m-vis"
+    assert resolve_model_id(slots2, "unsupported") is None
 
     assert resolve_model_id({}, "final") is None
 
@@ -115,7 +114,7 @@ def test_resolver_flow():
         assert ep["api_key"] == "router-key"
         assert ep["base_url"] == "http://127.0.0.1:58100"
 
-        sm = await r.resolve_role("vision")
+        sm = await r.resolve_role("final")
         assert sm.sdk == "genai"
         assert sm.model_id == "gemini-3-flash-preview"
 

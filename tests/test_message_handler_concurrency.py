@@ -80,28 +80,6 @@ def test_same_user_messages_are_serialized():
     assert state["max_active"] == 1
 
 
-def test_image_pipeline_uses_native_vision_capable_roles():
-    handler = object.__new__(MessageHandler)
-    base = SimpleNamespace(
-        reasoning_role="reasoning",
-        final_role="final",
-        fallback_role="fallback",
-    )
-    handler._pipeline = base
-
-    normal = handler._pipeline_for_message(False)
-    vision = handler._pipeline_for_message(True)
-
-    assert normal is base
-    assert vision is base
-    assert vision.reasoning_role == "reasoning"
-    assert vision.final_role == "final"
-    assert vision.fallback_role == "fallback"
-    assert base.reasoning_role == "reasoning"
-    assert base.final_role == "final"
-    assert base.fallback_role == "fallback"
-
-
 def test_duplicate_message_is_claimed_once():
     handler = make_handler(1)
     handler.logger = SimpleNamespace(warning=lambda _message: None)

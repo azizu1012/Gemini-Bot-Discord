@@ -5,15 +5,15 @@
 ## 1. Mô hình endpoint-only
 
 - Bot KHÔNG tự quản lý pool key. Mỗi lần gọi LLM, bot đọc cấu hình endpoint đang active từ PostgreSQL.
-- Cấu hình gồm: `sdk` (2 lựa chọn), `base_url`, `api_key` (mã hóa khi lưu) và 4 model slot.
+- Cấu hình gồm: `sdk` (2 lựa chọn), `base_url`, `api_key` (mã hóa khi lưu) và 3 model slot.
 - Không kiểm tra endpoint lúc khởi động. Chưa cấu hình → mọi lệnh chat trả ephemeral: `Bot chưa được cấu hình, hãy liên hệ admin.`
 
 ## 2. Hai SDK
 
 | SDK | Dùng khi | URL mặc định | Tính năng |
 |-----|----------|--------------|-----------|
-| `genai` | Gọi Google Gemini trực tiếp hoặc qua proxy tương thích GenAI | `https://generativelanguage.googleapis.com` | Text, Tools, Vision |
-| `openai` | Router/LLM tương thích OpenAI (`/v1/chat/completions`) | (bắt buộc nhập) | Text, Tools, Vision. KHÔNG grounding |
+| `genai` | Gọi Google Gemini trực tiếp hoặc qua proxy tương thích GenAI | `https://generativelanguage.googleapis.com` | Text, Tools, native image input |
+| `openai` | Router/LLM tương thích OpenAI (`/v1/chat/completions`) | (bắt buộc nhập) | Text, Tools, native image input. KHÔNG grounding |
 
 - `genai`: nhập **host gốc, KHÔNG kèm `/v1`, `/v1beta` hay `/v1alpha`** — google-genai SDK tự ghép `/v1beta`. Ví dụ router: `http://127.0.0.1:58100`.
 - `openai`: nhập URL đầy đủ tới `/v1`, ví dụ `http://127.0.0.1:58100/v1`. Nếu chỉ nhập host, bot tự thêm `/v1`.
@@ -24,11 +24,11 @@
 
 | Lệnh | Mô tả |
 |------|-------|
-| `/endpoint config` | Chọn SDK → nhập URL/key → chọn model cho 4 slot |
-| `/endpoint view` | Xem cấu hình 2 SDK + key đã ẩn + 4 slot |
+| `/endpoint config` | Chọn SDK → nhập URL/key → chọn model cho 3 slot |
+| `/endpoint view` | Xem cấu hình 2 SDK + key đã ẩn + 3 slot |
 | `/endpoint switch` | Đổi SDK đang active (không cần nhập lại key) |
-| `/endpoint models` | Fetch lại danh sách model của SDK active và gán lại 4 slot |
-| `/endpoint test` | Ping endpoint, đo latency, xác minh 4 model slot tồn tại |
+| `/endpoint models` | Fetch lại danh sách model của SDK active và gán lại 3 slot |
+| `/endpoint test` | Ping endpoint, đo latency, xác minh 3 model slot tồn tại |
 
 ### Luồng `/endpoint config`
 
@@ -36,20 +36,18 @@
 2. Nhập `base_url` (bỏ trống = URL mặc định; riêng `openai` bắt buộc).
 3. Nhập API key (mã hóa trước khi ghi DB).
 4. Bot fetch danh sách model; lỗi → báo lỗi, không lưu.
-5. Chọn model cho từng slot: Reasoning → Final → Fallback → Vision.
+5. Chọn model cho từng slot: Reasoning → Final → Fallback.
    - 25 model/trang, nút ◀ ▶, nút 🔍 tìm kiếm theo tên.
    - Nút "Bỏ trống" = dùng default rule (mục 4).
-6. Lưu endpoint + 4 slot, đặt SDK vừa cấu hình làm active, xóa cache resolver.
+6. Lưu endpoint + 3 slot, đặt SDK vừa cấu hình làm active, xóa cache resolver.
 
-## 4. Bốn model slot & default rule
+## 4. Ba model slot & default rule
 
 | Slot | Vai trò | Default khi bỏ trống |
 |------|---------|----------------------|
 | `reasoning` | Vòng lặp suy luận + gọi tools | `final` |
 | `final` | Tổng hợp câu trả lời cuối | Model đầu tiên trong danh sách |
 | `fallback` | Thử lại khi model chính lỗi | `reasoning` → `final` |
-| `vision` | Phân tích ảnh | `final` |
-
 - `fallback` PHẢI cùng provider với endpoint active. Không tự chuyển provider — muốn đổi thì `/endpoint switch` thủ công.
 - Khi model chính lỗi: retry cùng model theo `*_MAX_API_RETRIES`, sau đó thử `fallback` đúng 1 lần. Hết lượt → báo lỗi cho user.
 
@@ -98,8 +96,7 @@ python scripts/configure_endpoint.py \
     --api-key <key> \
     --reasoning gemini-flash \
     --final gemini-flash \
-    --fallback gemini-flash-lite \
-    --vision gemini-flash
+    --fallback gemini-flash-lite
 
 python scripts/configure_endpoint.py --show   # xem cấu hình hiện tại
 ```

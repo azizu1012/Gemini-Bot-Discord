@@ -107,8 +107,7 @@ def resolve_model_id(slots: Dict[str, Optional[str]], role: str) -> Optional[str
     final = slots.get("final") or None
     reasoning = slots.get("reasoning") or final
     fallback = slots.get("fallback") or reasoning or final
-    vision = slots.get("vision") or final
-    table = {"reasoning": reasoning, "final": final, "fallback": fallback, "vision": vision}
+    table = {"reasoning": reasoning, "final": final, "fallback": fallback}
     return table.get(role)
 
 

@@ -89,7 +89,7 @@ def _save(repo):
             "genai",
             "http://127.0.0.1:58100",
             "fernet:test",
-            {"reasoning": "m1", "final": "m2", "fallback": None, "vision": None},
+            {"reasoning": "m1", "final": "m2", "fallback": None},
             "admin:1",
         )
     )
@@ -101,11 +101,11 @@ def test_save_endpoint_config_writes_everything_in_one_transaction():
 
     assert _save(repo) is True
     assert conn.transaction_exc is None
-    assert len(conn.calls) == 7
+    assert len(conn.calls) == 6
     assert "INSERT INTO llm_endpoints" in conn.calls[0][0]
     assert "INSERT INTO llm_model_slots" in conn.calls[1][0]
-    assert "is_active = FALSE" in conn.calls[5][0]
-    assert "SET is_active = TRUE" in conn.calls[6][0]
+    assert "is_active = FALSE" in conn.calls[4][0]
+    assert "SET is_active = TRUE" in conn.calls[5][0]
 
 
 def test_save_endpoint_config_rolls_back_on_slot_failure():

@@ -72,7 +72,7 @@ def register_slash_commands(bot_core_instance):
         bot_core_instance.confirmation_pending[user_id] = {"timestamp": datetime.now(), "awaiting": True}
         await interaction.followup.send("Clear chat history? Reply **yes** or **y** in 60 seconds! 😳", ephemeral=True)
 
-    @bot.tree.command(name="health_check", description="Kiểm tra endpoint LLM, 4 model slot và PostgreSQL (ADMIN ONLY)")
+    @bot.tree.command(name="health_check", description="Kiểm tra endpoint LLM, 3 model slot và PostgreSQL (ADMIN ONLY)")
     @is_moderator_or_admin()
     async def health_check_slash(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -110,7 +110,7 @@ def register_slash_commands(bot_core_instance):
                     value=f"URL: `{ep.get('base_url')}`\nLatency: `{latency_ms} ms`",
                     inline=False,
                 )
-                embed.add_field(name="4 slot", value="\n".join(slot_lines), inline=False)
+                embed.add_field(name="3 slot", value="\n".join(slot_lines), inline=False)
                 await db_repo.update_endpoint_check_status(active, True, None)
             except Exception as e:
                 await db_repo.update_endpoint_check_status(active, False, str(e)[:300])
@@ -139,7 +139,7 @@ def register_slash_commands(bot_core_instance):
         description="Quản lý endpoint LLM: config / view / switch / models / test (ADMIN ONLY)",
     )
 
-    @endpoint_group.command(name="config", description="Cấu hình endpoint mới: chọn SDK → URL/Key → chọn model 4 slot")
+    @endpoint_group.command(name="config", description="Cấu hình endpoint mới: chọn SDK → URL/Key → chọn model 3 slot")
     @is_admin()
     async def endpoint_config(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -152,7 +152,7 @@ def register_slash_commands(bot_core_instance):
         )
         await flow.start(interaction)
 
-    @endpoint_group.command(name="view", description="Xem cấu hình endpoint hiện tại (URL, key ẩn, 4 slot)")
+    @endpoint_group.command(name="view", description="Xem cấu hình endpoint hiện tại (URL, key ẩn, 3 slot)")
     @is_admin()
     async def endpoint_view(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -218,7 +218,7 @@ def register_slash_commands(bot_core_instance):
             "🔁 Chọn SDK muốn kích hoạt:", view=SDKChoiceView(on_choose), ephemeral=True
         )
 
-    @endpoint_group.command(name="models", description="Fetch lại danh sách model và gán lại 4 slot")
+    @endpoint_group.command(name="models", description="Fetch lại danh sách model và gán lại 3 slot")
     @is_admin()
     async def endpoint_models(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -258,7 +258,7 @@ def register_slash_commands(bot_core_instance):
         resolver.invalidate()
         await interaction.followup.send(embed=flow.summary_embed(active, ep.get("base_url") or "", slots), ephemeral=True)
 
-    @endpoint_group.command(name="test", description="Ping endpoint + xác minh 4 model slot tồn tại + đo latency")
+    @endpoint_group.command(name="test", description="Ping endpoint + xác minh 3 model slot tồn tại + đo latency")
     @is_admin()
     async def endpoint_test(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -291,7 +291,7 @@ def register_slash_commands(bot_core_instance):
             )
             embed.add_field(name="SDK", value=f"`{active}`", inline=True)
             embed.add_field(name="Latency", value=f"`{latency_ms} ms`", inline=True)
-            embed.add_field(name="4 slot", value="\n".join(lines), inline=False)
+            embed.add_field(name="3 slot", value="\n".join(lines), inline=False)
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
             await db_repo.update_endpoint_check_status(active, False, str(e)[:300])

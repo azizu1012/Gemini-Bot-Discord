@@ -31,7 +31,7 @@ def test_shapes():
 
     sm = SlotModel(sdk="genai", model_id="gemini-3-flash-preview", role="final")
     assert (sm.sdk, sm.model_id, sm.role) == ("genai", "gemini-3-flash-preview", "final")
-    assert SLOTS == ("reasoning", "final", "fallback", "vision")
+    assert SLOTS == ("reasoning", "final", "fallback")
 
 
 def test_error_classes():
