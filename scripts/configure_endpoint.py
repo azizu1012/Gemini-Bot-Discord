@@ -1,4 +1,4 @@
-"""Cấu hình endpoint LLM + 4 model slot trực tiếp vào PostgreSQL.
+"""Cấu hình endpoint LLM + 3 model slot trực tiếp vào PostgreSQL.
 
 Dùng khi không thể thao tác qua Discord UI (`/endpoint config`), hoặc để khôi phục
 cấu hình sau khi database bị xoá/trống.
@@ -11,8 +11,7 @@ Ví dụ (router_api nội bộ, giao thức OpenAI-compatible):
         --api-key <router-key> \
         --reasoning gemini-flash \
         --final gemini-flash \
-        --fallback gemini-flash-lite \
-        --vision gemini-flash
+        --fallback gemini-flash-lite
 
 Xem cấu hình hiện tại:
 
@@ -48,7 +47,7 @@ from src.core.llm.resolver import (  # noqa: E402
 )
 
 SDKS = ("openai", "genai")
-SLOTS = ("reasoning", "final", "fallback", "vision")
+SLOTS = ("reasoning", "final", "fallback")
 
 
 def _database_url(explicit: str | None) -> str:
@@ -99,7 +98,7 @@ async def save(args: argparse.Namespace, url: str) -> None:
 
     slots = {slot: getattr(args, slot) for slot in SLOTS if getattr(args, slot) is not None}
     if not slots:
-        raise SystemExit("Cần ít nhất một slot (--reasoning/--final/--fallback/--vision).")
+        raise SystemExit("Cần ít nhất một slot (--reasoning/--final/--fallback).")
 
     fernet_key = getattr(config, "DONATE_ENCRYPTION_KEY", "") or ""
     if not fernet_key and not getattr(config, "ALLOW_PLAINTEXT_ENDPOINT_KEYS", False):
@@ -169,7 +168,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reasoning", help="Model id cho slot reasoning")
     parser.add_argument("--final", help="Model id cho slot final")
     parser.add_argument("--fallback", help="Model id cho slot fallback")
-    parser.add_argument("--vision", help="Model id cho slot vision")
     parser.add_argument("--database-url", help="Ghi đè DATABASE_URL")
     parser.add_argument("--no-active", dest="active", action="store_false", help="Không đặt làm SDK active")
     parser.add_argument("--show", action="store_true", help="Chỉ hiển thị cấu hình hiện tại")

@@ -35,8 +35,8 @@ Dự án hướng tới self-host trên Windows hoặc Linux. PostgreSQL và Red
 | --- | --- |
 | 🧠 Reasoning pipeline | Tách reasoning và final synthesis, có retry, timeout và giới hạn vòng lặp |
 | 🧰 Tool calling | Web search, thời tiết WeatherAPI.com, calculator, notes, quản lý role và nhận diện ảnh |
-| 🔌 LLM endpoint-first | Cấu hình SDK, URL, API key và bốn model slot bằng /endpoint trên Discord |
-| 🖼️ Multimodal | Xử lý ảnh đính kèm và yêu cầu vision qua endpoint đang active |
+| 🔌 LLM endpoint-first | Cấu hình SDK, URL, API key và ba model slot bằng /endpoint trên Discord |
+| 🖼️ Multimodal | Xử lý ảnh đính kèm bằng khả năng đọc ảnh native của model active |
 | 🧾 Long-term memory | Note theo user, metadata JSONB, global fact promotion và file notes |
 | 🔊 Voice rooms | Khóa phòng, allowlist, di chuyển thành viên và áp dụng chính sách phòng |
 | 🛡️ An toàn | Quét secret, kiểm tra URL, cô lập dữ liệu, kiểm tra role và ẩn lỗi nội bộ |
@@ -54,7 +54,7 @@ flowchart LR
     G --> I[(Redis Stream<br/>discord-incoming)]
     I --> W[Worker xử lý tin nhắn<br/>message_handler.py]
     W --> P[Reasoning + synthesis<br/>GeminiPipeline]
-    P --> T[Tools<br/>search · weather · notes · vision]
+    P --> T[Tools<br/>search · weather · notes · image recognition]
     P --> L[LLM Gateway]
     L --> E[(PostgreSQL<br/>endpoint · history · notes)]
     L --> R[GenAI hoặc OpenAI-compatible<br/>endpoint]
@@ -138,15 +138,13 @@ API key của endpoint được mã hóa trước khi lưu vào PostgreSQL. Mặ
 
 ## LLM Endpoint
 
-Azuris lưu cả hai cấu hình provider trong PostgreSQL nhưng chỉ active một SDK tại một thời điểm. Mỗi endpoint có bốn model slot:
+Azuris lưu cả hai cấu hình provider trong PostgreSQL nhưng chỉ active một SDK tại một thời điểm. Mỗi endpoint có ba model slot:
 
 | Slot | Vai trò | Quy tắc fallback |
 | --- | --- | --- |
 | reasoning | Vòng reasoning có tool | Fallback về final |
 | final | Tổng hợp câu trả lời | Model đầu tiên khả dụng |
 | fallback | Model retry cùng provider | Fallback về reasoning, rồi final |
-| vision | Hiểu ảnh | Fallback về final |
-
 Cấu hình từ Discord:
 
 ```text

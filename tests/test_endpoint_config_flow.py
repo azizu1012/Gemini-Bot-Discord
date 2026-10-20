@@ -99,7 +99,7 @@ def _make_flow(gateway, repo, config=None):
     )
 
     async def fake_pickers(interaction, models):
-        return {"reasoning": "gemini-flash", "final": "gemini-flash", "fallback": None, "vision": None}
+        return {"reasoning": "gemini-flash", "final": "gemini-flash", "fallback": None}
 
     flow.run_slot_pickers = fake_pickers  # type: ignore[assignment]
     return flow

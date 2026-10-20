@@ -152,7 +152,7 @@ class SchemaMixin:
                 """
                 CREATE TABLE IF NOT EXISTS llm_model_slots (
                     sdk TEXT NOT NULL,
-                    slot TEXT NOT NULL CHECK (slot IN ('reasoning','final','fallback','vision')),
+                    slot TEXT NOT NULL CHECK (slot IN ('reasoning','final','fallback')),
                     model_id TEXT,
                     updated_by TEXT,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

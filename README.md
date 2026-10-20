@@ -35,8 +35,8 @@ The project is designed for self-hosted deployments on Windows or Linux. Postgre
 | --- | --- |
 | 🧠 Reasoning pipeline | Separate reasoning and final-synthesis stages with bounded retries and deadlines |
 | 🧰 Tool calling | Web search, WeatherAPI.com weather, calculator, notes, role management, and image recognition |
-| 🔌 Endpoint-first LLM | Configure SDK, URL, API key, and four model slots from Discord with /endpoint |
-| 🖼️ Multimodal | Process image attachments and vision requests through the active endpoint |
+| 🔌 Endpoint-first LLM | Configure SDK, URL, API key, and three model slots from Discord with /endpoint |
+| 🖼️ Multimodal | Process image attachments with the active model's native image understanding |
 | 🧾 Long-term memory | User-scoped notes, JSONB metadata, global-fact promotion, and file notes |
 | 🔊 Voice rooms | Lock rooms, manage allowlists, move members, and apply room policies |
 | 🛡️ Safety controls | Secret scanning, URL validation, user isolation, role checks, and sanitized errors |
@@ -52,7 +52,7 @@ flowchart LR
     G --> I[(Redis Stream<br/>discord-incoming)]
     I --> W[Message worker<br/>message_handler.py]
     W --> P[Reasoning + synthesis<br/>GeminiPipeline]
-    P --> T[Tools<br/>search · weather · notes · vision]
+    P --> T[Tools<br/>search · weather · notes · image recognition]
     P --> L[LLM Gateway]
     L --> E[(PostgreSQL<br/>endpoints · history · notes)]
     L --> R[GenAI or OpenAI-compatible<br/>endpoint]
@@ -136,15 +136,13 @@ Endpoint API keys are encrypted before being stored in PostgreSQL. Plaintext end
 
 ## LLM Endpoints
 
-Azuris stores both provider configurations in PostgreSQL and activates one SDK at a time. Each endpoint has four model slots:
+Azuris stores both provider configurations in PostgreSQL and activates one SDK at a time. Each endpoint has three model slots:
 
 | Slot | Purpose | Fallback rule |
 | --- | --- | --- |
 | reasoning | Tool-aware reasoning loop | Falls back to final |
 | final | User-facing synthesis | First available model |
 | fallback | Same-provider retry model | Falls back to reasoning, then final |
-| vision | Image understanding | Falls back to final |
-
 Configure from Discord:
 
 ```text

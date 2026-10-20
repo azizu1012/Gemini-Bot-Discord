@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-SLOTS = ("reasoning", "final", "fallback", "vision")
+SLOTS = ("reasoning", "final", "fallback")
 
 
 class LLMError(Exception):
@@ -35,7 +35,7 @@ class LLMUnsupportedError(LLMError):
 class SlotModel:
     sdk: str        # "genai" | "openai"
     model_id: str   # id model thật trên endpoint (đã resolve theo default rule)
-    role: str       # "reasoning" | "final" | "fallback" | "vision"
+    role: str       # "reasoning" | "final" | "fallback"
 
 
 @dataclass

@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 
 class EndpointsMixin:
-    """Mixin providing CRUD operations for LLM endpoints and 4 model slots."""
+    """Mixin providing CRUD operations for LLM endpoints and 3 model slots."""
 
     async def get_llm_endpoints(self) -> Dict[str, Dict[str, Any]]:
         pool = await self._ensure_pool()
