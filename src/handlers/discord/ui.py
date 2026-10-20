@@ -1,9 +1,13 @@
+import logging
 import os
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 import discord
 from src.database.repository import DatabaseRepository
 from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key, normalize_base_url
+
+
+logger = logging.getLogger(__name__)
 
 
 def _flatten_note_preview(note: Dict[str, Any], max_len: int = 80) -> str:
@@ -520,10 +524,16 @@ class EndpointConfigFlow:
             )
             return
 
+        # Modal submit là một interaction MỚI, chưa được defer. Nếu gọi network
+        # (list_models) trước khi defer, interaction sẽ hết hạn sau 3 giây và
+        # followup.send sau đó ném "Interaction has not been responded to".
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
         try:
             raw_models = await self.gateway.list_models_for(sdk=sdk, base_url=base_url, api_key=api_key)
         except Exception as e:
-            await interaction.response.send_message(
+            logger.exception("Endpoint config failed while listing models (sdk=%s url=%s)", sdk, base_url)
+            await interaction.followup.send(
                 f"❌ Không kết nối/không lấy được model list từ endpoint:\n`{str(e)[:300]}`\nCấu hình CHƯA được lưu.",
                 ephemeral=True,
             )
@@ -531,7 +541,7 @@ class EndpointConfigFlow:
 
         models = normalize_models(raw_models)
         if not models:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Endpoint trả về danh sách model rỗng. Cấu hình CHƯA được lưu.", ephemeral=True
             )
             return
@@ -547,6 +557,7 @@ class EndpointConfigFlow:
             await self.db_repo.upsert_llm_model_slots(sdk, slots, updated_by)
             await self.db_repo.set_active_sdk(sdk, updated_by)
         except Exception as e:
+            logger.exception("Endpoint config failed while saving to DB (sdk=%s)", sdk)
             await interaction.followup.send(f"❌ Lỗi lưu DB: `{str(e)[:300]}`", ephemeral=True)
             return
 
