@@ -139,6 +139,24 @@ def test_generate_text_extracts():
     asyncio.run(run())
 
 
+def test_generate_vision_uses_final_slot_for_native_vision_models():
+    async def run():
+        from src.core.llm.base import Candidate, Content, Part
+
+        resp = LLMResponse([Candidate(Content([Part(text="đã đọc ảnh")]))])
+        roles = {"final": SlotModel("openai", "vision-capable", "final")}
+        g, clients = make_gateway(roles, [resp])
+        result = await g.generate_vision(
+            image_bytes=b"png",
+            mime_type="image/png",
+            question="Có gì trong ảnh?",
+        )
+        assert result == "đã đọc ảnh"
+        assert clients["openai"].calls == ["vision-capable"]
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     test_not_configured()
     test_primary_success()
@@ -147,4 +165,5 @@ if __name__ == "__main__":
     test_fallback_role_does_not_chain()
     test_fallback_skipped_when_same_model()
     test_generate_text_extracts()
+    test_generate_vision_uses_final_slot_for_native_vision_models()
     print("ALL PASS")

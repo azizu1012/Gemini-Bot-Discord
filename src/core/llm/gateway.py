@@ -142,9 +142,11 @@ class LLMGateway:
         )
         return _extract_text(response)
 
-    async def generate_vision(self, *, image_bytes: bytes, mime_type: str, question: str) -> str:
+    async def generate_vision(self, image_bytes: bytes, mime_type: str, question: str) -> str:
         response = await self.generate(
-            role="vision",
+            # Keep this compatibility facade, but use the native final model
+            # so vision no longer requires a dedicated endpoint slot.
+            role="final",
             system_instruction="",
             generation_config={"temperature": 0.2},
             messages=[{

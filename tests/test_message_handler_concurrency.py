@@ -77,7 +77,7 @@ def test_same_user_messages_are_serialized():
     assert state["max_active"] == 1
 
 
-def test_vision_pipeline_roles_do_not_mutate_shared_pipeline():
+def test_image_pipeline_uses_native_vision_capable_roles():
     handler = object.__new__(MessageHandler)
     base = SimpleNamespace(
         reasoning_role="reasoning",
@@ -90,10 +90,10 @@ def test_vision_pipeline_roles_do_not_mutate_shared_pipeline():
     vision = handler._pipeline_for_message(True)
 
     assert normal is base
-    assert vision is not base
-    assert vision.reasoning_role == "vision"
-    assert vision.final_role == "vision"
-    assert vision.fallback_role == "vision"
+    assert vision is base
+    assert vision.reasoning_role == "reasoning"
+    assert vision.final_role == "final"
+    assert vision.fallback_role == "fallback"
     assert base.reasoning_role == "reasoning"
     assert base.final_role == "final"
     assert base.fallback_role == "fallback"
