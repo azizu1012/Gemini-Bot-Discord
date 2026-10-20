@@ -132,14 +132,14 @@ Azuris_refactor_code_base/
 │   │   └── constants.py          # Constants
 │   │
 │   └── voice/
-│       ├── models.py             # LockRecord, LockOutcome, PurgeReport
-│       ├── store.py              # LockStore, WhitelistStore (atomic JSON)
+│       ├── models.py             # Domain models (LockRecord, LockOutcome, PurgeReport, RoleMovePlan)
+│       ├── store.py              # LockStore, WhitelistStore + LockStoreProtocol, WhitelistStoreProtocol
 │       ├── lock_service.py       # RoomLockService (lock, unlock, enforce)
 │       ├── tools_service.py      # RoomToolsService (move, move_all, set_room)
-│       ├── purge.py              # Dọn tin nhắn/reaction ngoài allowlist
-│       ├── role_hierarchy.py     # Tính toán thứ tự role (/rolerank)
-│       ├── ui.py                 # RolePickerView, RolePositionView
-│       └── voice_lock.py         # VoiceLockManager facade
+│       ├── purge.py              # VoicePurgeService (OOP dọn tin nhắn/reaction ngoài allowlist)
+│       ├── role_hierarchy.py     # RoleHierarchyService (OOP tính toán & lập plan role rank)
+│       ├── ui.py                 # RolePickerView, RolePositionView (UI components)
+│       └── voice_lock.py         # VoiceLockManager facade tương thích ngược
 │
 ├── assets/encrypted/             # QR donate mã hóa Fernet
 ├── data/                         # Dữ liệu runtime (gitignored)

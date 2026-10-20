@@ -1,4 +1,4 @@
-"""Atomic file-based stores for voice room locks and whitelists."""
+"""Atomic file-based stores and storage protocols for voice room locks and whitelists."""
 
 from __future__ import annotations
 
@@ -6,9 +6,55 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Protocol, Set, Tuple, runtime_checkable
 
 from src.voice.models import LockRecord, utcnow
+
+
+@runtime_checkable
+class LockStoreProtocol(Protocol):
+    """Protocol defining the interface for voice lock persistence."""
+
+    def lock(self, channel_id: int, locked_by: Optional[int] = None) -> LockRecord:
+        ...
+
+    def unlock(self, channel_id: int) -> Optional[LockRecord]:
+        ...
+
+    def get(self, channel_id: int) -> Optional[LockRecord]:
+        ...
+
+    def is_locked(self, channel_id: int) -> bool:
+        ...
+
+    def set_enforced_name(self, channel_id: int, name: Optional[str]) -> None:
+        ...
+
+    def records(self) -> Iterator[LockRecord]:
+        ...
+
+    def channel_ids(self) -> Set[int]:
+        ...
+
+
+@runtime_checkable
+class WhitelistStoreProtocol(Protocol):
+    """Protocol defining the interface for voice room whitelist persistence."""
+
+    def add(self, user_id: int, username: str = "") -> None:
+        ...
+
+    def remove(self, user_id: int) -> bool:
+        ...
+
+    def contains(self, user_id: int) -> bool:
+        ...
+
+    def ids(self) -> Set[int]:
+        ...
+
+    def entries(self) -> List[Tuple[int, str]]:
+        ...
 
 
 class JsonStore:
