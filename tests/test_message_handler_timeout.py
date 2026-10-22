@@ -34,3 +34,9 @@ def test_deadline_raises_timeout_for_slow_pipeline():
     handler = make_handler(0.05, slow)
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(handler._call_pipeline_with_deadline(handler._pipeline, [], "u", {}))
+
+
+def test_default_timeout_is_240_seconds(monkeypatch):
+    from src.core.config import Config
+    monkeypatch.delenv("LLM_TOTAL_TIMEOUT_SECONDS", raising=False)
+    assert Config._get_int("LLM_TOTAL_TIMEOUT_SECONDS", 240, min_value=15, max_value=600) == 240

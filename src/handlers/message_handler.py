@@ -266,7 +266,7 @@ class MessageHandler:
         This prevents provider slot starvation from turning into an unbounded
         multi-retry hang. On timeout the caller sends the normal busy message.
         """
-        timeout_seconds = float(getattr(self.config, "LLM_TOTAL_TIMEOUT_SECONDS", 120) or 120)
+        timeout_seconds = float(getattr(self.config, "LLM_TOTAL_TIMEOUT_SECONDS", 240) or 240)
         return await asyncio.wait_for(
             pipeline.call_gemini_api(messages, user_id, privacy_context),
             timeout=timeout_seconds,
