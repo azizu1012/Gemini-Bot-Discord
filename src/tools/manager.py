@@ -138,8 +138,8 @@ class ToolsManager:
         return max(1, min(6, value))
 
     def _load_search_subtasks_enabled(self) -> bool:
-        raw = os.getenv("SEARCH_SUBTASKS_ENABLED", "true").strip().lower()
-        return raw not in {"0", "false", "no", "off"}
+        raw = os.getenv("SEARCH_SUBTASKS_ENABLED", "false").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     def _load_search_subtask_timeout_seconds(self) -> int:
         raw = os.getenv("SEARCH_SUBTASK_TIMEOUT_SEC", "15").strip()

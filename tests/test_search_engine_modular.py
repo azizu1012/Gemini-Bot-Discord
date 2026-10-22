@@ -192,3 +192,15 @@ class TestSearchEngineFacade:
         assert first == "result-1"
         assert second == "result-2"
         assert inflight == {}
+
+    def test_search_subtasks_disabled_by_default(self, monkeypatch):
+        import os
+        from src.tools.manager import ToolsManager
+
+        monkeypatch.delenv("SEARCH_SUBTASKS_ENABLED", raising=False)
+        tm = ToolsManager.__new__(ToolsManager)
+        tm.logger = None
+        assert tm._load_search_subtasks_enabled() is False
+
+        monkeypatch.setenv("SEARCH_SUBTASKS_ENABLED", "true")
+        assert tm._load_search_subtasks_enabled() is True

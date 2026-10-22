@@ -86,7 +86,7 @@ class Config:
         # --- GEMINI TIMEOUT (endpoint/key cấu hình qua /endpoint, lưu PostgreSQL) ---
         self.GEMINI_TIMEOUT_MS = self._get_int("GEMINI_TIMEOUT_MS", 60000, min_value=5000)
         # Hard upper bound for one full reasoning + final pipeline call.
-        self.LLM_TOTAL_TIMEOUT_SECONDS = self._get_int("LLM_TOTAL_TIMEOUT_SECONDS", 120, min_value=15, max_value=600)
+        self.LLM_TOTAL_TIMEOUT_SECONDS = self._get_int("LLM_TOTAL_TIMEOUT_SECONDS", 240, min_value=15, max_value=600)
 
         # --- SEARCH API KEYS ---
         self.SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
