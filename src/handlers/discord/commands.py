@@ -14,6 +14,7 @@ from src.handlers.discord.ui import (
     ImageHistoryView,
     EndpointConfigFlow,
     SDKChoiceView,
+    ConfirmActionView,
     SLOT_LABELS,
     SLOT_ORDER,
     normalize_models,
@@ -65,12 +66,39 @@ def register_slash_commands(bot_core_instance):
     async def ping(interaction: discord.Interaction):
         await interaction.response.send_message("Bot đang hoạt động.", ephemeral=True)
 
-    @bot.tree.command(name="reset-chat", description="Clear your chat history")
+    @bot.tree.command(name="reset-chat", description="Xóa lịch sử trò chuyện của bạn")
     async def reset_chat_slash(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         user_id = str(interaction.user.id)
-        bot_core_instance.confirmation_pending[user_id] = {"timestamp": datetime.now(), "awaiting": True}
-        await interaction.followup.send("Clear chat history? Reply **yes** or **y** in 60 seconds! 😳", ephemeral=True)
+
+        async def _do_reset(btn_interaction: discord.Interaction) -> str:
+            await db_repo.clear_user_data_db(user_id)
+            try:
+                await kafka_service.publish(
+                    "discord-incoming",
+                    payload={"type": "invalidate_cache", "user_id": user_id},
+                    key=user_id,
+                )
+            except Exception as e:
+                logger.error(f"Failed to publish invalidate_cache for user {user_id}: {e}")
+            return "✅ Đã xóa toàn bộ lịch sử trò chuyện và ghi nhớ của bạn."
+
+        view = ConfirmActionView(
+            owner_id=interaction.user.id,
+            on_confirm=_do_reset,
+            confirm_label="Xóa lịch sử",
+            cancel_label="Hủy",
+            cancel_text="❌ Đã hủy yêu cầu xóa lịch sử chat.",
+            timeout=60,
+        )
+        msg = await interaction.followup.send(
+            "🗑️ **Xác nhận xóa lịch sử chat**: Bạn có chắc chắn muốn xóa toàn bộ lịch sử trò chuyện không? "
+            "Thao tác này chỉ ảnh hưởng đến dữ liệu của riêng bạn và không thể hoàn tác.",
+            view=view,
+            ephemeral=True,
+            wait=True,
+        )
+        view.message = msg
 
     @bot.tree.command(name="health_check", description="Kiểm tra endpoint LLM, 3 model slot và PostgreSQL (ADMIN ONLY)")
     @is_moderator_or_admin()
@@ -565,13 +593,42 @@ def register_slash_commands(bot_core_instance):
                 await interaction.followup.send(f"👤 **{user.display_name}** là người dùng bình thường.", ephemeral=True)
             return
 
-    @bot.tree.command(name="reset-all", description="Clear all DB (ADMIN ONLY)")
+    @bot.tree.command(name="reset-all", description="Xóa toàn bộ database hệ thống (ADMIN ONLY)")
     @is_admin()
     async def reset_all_slash(interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         admin_id = str(interaction.user.id)
-        bot_core_instance.admin_confirmation_pending[admin_id] = {"timestamp": datetime.now(), "awaiting": True}
-        await interaction.followup.send("⚠️ **ADMIN CONFIRM**: Reply **YES RESET** in 60 seconds to clear all DB!", ephemeral=True)
+
+        async def _do_reset_all(btn_interaction: discord.Interaction) -> str:
+            if not await bot_core_instance._is_admin_user(admin_id):
+                return "❌ Bạn không có quyền admin để thực hiện thao tác này."
+            await db_repo.clear_all_data_db()
+            try:
+                await kafka_service.publish(
+                    "discord-incoming",
+                    payload={"type": "invalidate_all_cache"},
+                    key="all",
+                )
+            except Exception as e:
+                logger.error(f"Failed to publish invalidate_all_cache: {e}")
+            return "✅ Đã xóa toàn bộ cơ sở dữ liệu hệ thống (messages, notes)."
+
+        view = ConfirmActionView(
+            owner_id=interaction.user.id,
+            on_confirm=_do_reset_all,
+            confirm_label="Xóa tất cả",
+            cancel_label="Hủy",
+            cancel_text="❌ Đã hủy yêu cầu xóa toàn bộ dữ liệu hệ thống.",
+            timeout=60,
+        )
+        msg = await interaction.followup.send(
+            "⚠️ **CẢNH BÁO ADMIN**: Bạn có chắc chắn muốn xóa TOÀN BỘ dữ liệu của mọi người dùng trong database không? "
+            "Toàn bộ tin nhắn và ghi chú sẽ bị xóa vĩnh viễn và không thể khôi phục!",
+            view=view,
+            ephemeral=True,
+            wait=True,
+        )
+        view.message = msg
 
     @bot.tree.command(name="global-notes", description="Browse global shared memory notes (ADMIN ONLY)")
     @app_commands.describe(limit="Max notes to load (1-100)")
