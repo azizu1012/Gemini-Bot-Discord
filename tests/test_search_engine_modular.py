@@ -168,3 +168,27 @@ class TestSearchEngineFacade:
         assert engine.planner is not None
         assert engine.reranker is not None
         assert engine.cache is not None
+
+    def test_time_sensitive_inflight_task_is_released(self):
+        import asyncio
+
+        async def scenario():
+            engine = SearchEngine()
+            calls = []
+
+            async def fake_pipeline(query, force_fallback):
+                calls.append(query)
+                return f"result-{len(calls)}"
+
+            engine._execute_search_pipeline = fake_pipeline
+            query = "tin tức hôm nay"
+            first = await engine.run_search_apis(query)
+            second = await engine.run_search_apis(query)
+            return calls, first, second, dict(engine.inflight_search_tasks)
+
+        calls, first, second, inflight = asyncio.run(scenario())
+        # Truy vấn time-sensitive phải chạy lại thay vì join task cũ đã hoàn tất.
+        assert len(calls) == 2
+        assert first == "result-1"
+        assert second == "result-2"
+        assert inflight == {}

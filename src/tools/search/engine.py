@@ -346,6 +346,10 @@ class SearchEngine:
             return ""
         except Exception as e:
             self.logger.error(f"Search pipeline error: {e}")
-            async with self.cache_lock:
-                self.inflight_search_tasks.pop(normalized_key, None)
             return ""
+        finally:
+            # Luôn gỡ inflight task sau khi xong; nếu giữ lại, truy vấn time-sensitive
+            # sẽ join một task đã hoàn tất và trả kết quả cũ mãi mãi (đồng thời rò rỉ RAM).
+            async with self.cache_lock:
+                if self.inflight_search_tasks.get(normalized_key) is task:
+                    self.inflight_search_tasks.pop(normalized_key, None)
