@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 import discord
 from src.database.repository import DatabaseRepository
 from src.core.llm.endpoint_url import validate_endpoint_url
@@ -604,3 +604,61 @@ class EndpointConfigFlow:
         embed.add_field(name="URL", value=f"`{base_url}`", inline=True)
         embed.add_field(name="3 slot", value="\n".join(lines), inline=False)
         return embed
+
+
+class ConfirmActionView(discord.ui.View):
+    """Hộp xác nhận ephemeral với 2 nút ❌/⭕, chỉ người gọi lệnh bấm được.
+
+    `on_confirm` nhận interaction và trả về nội dung thay thế cho tin nhắn xác nhận.
+    """
+
+    def __init__(
+        self,
+        *,
+        owner_id: int,
+        on_confirm: Callable[[discord.Interaction], Awaitable[str]],
+        confirm_label: str = "Xác nhận",
+        cancel_label: str = "Hủy",
+        cancel_text: str = "❌ Đã hủy yêu cầu.",
+        timeout: int = 60,
+    ):
+        super().__init__(timeout=timeout)
+        self.owner_id = int(owner_id)
+        self._on_confirm = on_confirm
+        self._cancel_text = cancel_text
+        self.message: Optional[discord.Message] = None
+        self.cancel_button.label = cancel_label
+        self.confirm_button.label = confirm_label
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "❌ Chỉ người gọi lệnh mới có thể thao tác với nút xác nhận này.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(label="Hủy", emoji="❌", style=discord.ButtonStyle.secondary)
+    async def cancel_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content=self._cancel_text, view=None)
+        self.stop()
+
+    @discord.ui.button(label="Xác nhận", emoji="⭕", style=discord.ButtonStyle.danger)
+    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        try:
+            result_text = await self._on_confirm(interaction)
+        except Exception:
+            logger.exception("Confirm action failed for user %s", interaction.user.id)
+            result_text = "❌ Có lỗi xảy ra khi thực hiện thao tác. Vui lòng thử lại."
+        await interaction.edit_original_response(content=result_text, view=None)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(content="⏳ Đã hết thời gian xác nhận (60 giây). Vui lòng gọi lại lệnh nếu cần.", view=None)
+        except discord.HTTPException:
+            pass
