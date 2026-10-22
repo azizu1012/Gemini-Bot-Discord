@@ -138,6 +138,72 @@ def test_manager_delegates_image_recognition():
     assert result == "delegated:https://example.com/a.png:hỏi"
 
 
+def test_vision_turn_cache_hit_without_network():
+    gw = FakeGateway()
+    tool = VisionTool(gateway=gw)
+    tool.register_turn_image(
+        "https://cdn.discordapp.com/attachments/123/456/test.png?ex=abc&hm=xyz",
+        b"cached-bytes",
+        "image/png",
+        filename="test.png",
+    )
+
+    # Gọi với URL bị model cắt cụt query string
+    result = asyncio.run(tool.run_image_recognition(
+        "https://cdn.discordapp.com/attachments/123/456/test.png",
+        "Xem ảnh này",
+    ))
+    assert result == "Mô tả: một chú mèo."
+    assert len(gw.calls) == 1
+    assert gw.calls[0][0] == b"cached-bytes"
+
+    # Gọi với filename
+    tool.clear_turn_images()
+    assert tool._turn_images == {}
+
+
+def test_vision_refreshes_discord_cdn_url_on_404():
+    gw = FakeGateway()
+    tool = VisionTool(gateway=gw)
+
+    # Giả lập Discord CDN trả về 404 lần đầu, và sau khi refresh trả về 200
+    called_urls = []
+
+    class RefreshingSession:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, timeout=None, allow_redirects=True):
+            called_urls.append(url)
+            if "refreshed=true" in url:
+                return FakeResponse(status=200, content_type="image/png", body=b"refreshed-bytes")
+            return FakeResponse(status=404, content_type="text/plain", body=b"Not Found")
+
+    async def fake_refresh(url):
+        return f"{url}?refreshed=true"
+
+    original_session = vision_mod.aiohttp.ClientSession
+    vision_mod.aiohttp.ClientSession = RefreshingSession
+    tool._refresh_discord_url = fake_refresh
+    try:
+        result = asyncio.run(tool.run_image_recognition(
+            "https://cdn.discordapp.com/attachments/123/456/pic.jpg?ex=expired",
+            "Mô tả",
+        ))
+        assert result == "Mô tả: một chú mèo."
+        assert len(gw.calls) == 1
+        assert gw.calls[0][0] == b"refreshed-bytes"
+        assert len(called_urls) >= 2
+    finally:
+        vision_mod.aiohttp.ClientSession = original_session
+
+
 if __name__ == "__main__":
     test_vision_uses_gateway_and_caches()
     test_vision_without_gateway_returns_error()

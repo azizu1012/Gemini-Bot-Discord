@@ -82,3 +82,13 @@ class TestLatexNormalizerOOP:
         normalizer = LatexNormalizer(symbols_map=custom_symbols)
         res = normalizer.normalize("Kết quả: $\\custom_op$")
         assert res == "Kết quả: ⚡"
+
+    def test_implies_and_arrows_normalized(self):
+        text = (
+            "t₁ = 1 \\implies x² = 1 \\implies x = ± 1\n"
+            "t₂ = 4 \\implies x² = 4 \\implies x = ± 2"
+        )
+        res = latex_to_markdown(text)
+        assert "t₁ = 1 ⇒ x² = 1 ⇒ x = ± 1" in res
+        assert "t₂ = 4 ⇒ x² = 4 ⇒ x = ± 2" in res
+        assert "\\implies" not in res
