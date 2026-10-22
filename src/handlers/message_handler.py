@@ -515,6 +515,8 @@ class MessageHandler:
                                 "mime_type": mime
                             }
                         })
+                        if hasattr(self, "tools_mgr") and getattr(self.tools_mgr, "vision", None):
+                            self.tools_mgr.vision.register_turn_image(img_url, img_bytes, mime, filename=fname)
                         # Log text thô kèm URL vào DB/Cache
                         attachment_data += f"\n[System Note: User uploaded an image: {fname}. URL: {img_url}]\n"
                     else:
@@ -650,6 +652,9 @@ class MessageHandler:
                     )
                 except Exception:
                     pass
+
+                if hasattr(self, "tools_mgr") and getattr(self.tools_mgr, "vision", None):
+                    self.tools_mgr.vision.clear_turn_images()
 
                 await self.db_repo.clear_user_processing_state(user_id)
 

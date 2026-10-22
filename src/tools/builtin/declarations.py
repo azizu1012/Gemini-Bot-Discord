@@ -121,7 +121,14 @@ def get_gemini_tools(is_admin: bool = False) -> List[genai_types.Tool]:
                 parameters={  # type: ignore[arg-type]
                     "type": "object",
                     "properties": {
-                        "image_url": {"type": "string", "description": "URL công khai của hình ảnh cần nhận diện."},
+                        "image_url": {
+                            "type": "string",
+                            "description": (
+                                "URL công khai của hình ảnh cần nhận diện. "
+                                "QUAN TRỌNG: Nếu là link Discord CDN, phải giữ nguyên vẹn 100% URL đầy đủ "
+                                "kèm các tham số xác thực ?ex=...&is=...&hm=..., tuyệt đối KHÔNG ĐƯỢC cắt bỏ đuôi query parameter."
+                            ),
+                        },
                         "question": {"type": "string", "description": "Câu hỏi cụ thể của người dùng về hình ảnh (ví dụ: 'đếm số lượng', 'người này là ai?', 'đây là gì?')."}
                     },
                     "required": ["image_url", "question"]
