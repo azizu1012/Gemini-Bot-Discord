@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from src.core.config import config, logger
 from src.tools.search.engine import SearchEngine
@@ -227,61 +226,9 @@ class ToolsManager:
 
     # ── Vision delegation ──────────────────────────────────
 
-    def _get_image_recognition_cache(self, image_url: str, question: str):
-        if not hasattr(self, "image_recognition_cache"):
-            self.image_recognition_cache = {}
-        cache_key = f"{image_url}:{question}"
-        return self.image_recognition_cache.get(cache_key)
-
-    def _set_image_recognition_cache(self, image_url: str, question: str, data: str):
-        if not hasattr(self, "image_recognition_cache"):
-            self.image_recognition_cache = {}
-        cache_key = f"{image_url}:{question}"
-        if len(self.image_recognition_cache) >= 1000:
-            oldest_key = next(iter(self.image_recognition_cache))
-            del self.image_recognition_cache[oldest_key]
-        self.image_recognition_cache[cache_key] = data
-
-    def _guess_mime_type(self, image_url: str) -> str:
-        lowered = (image_url or "").lower().split("?")[0]
-        if lowered.endswith(".png"):
-            return "image/png"
-        if lowered.endswith(".webp"):
-            return "image/webp"
-        if lowered.endswith(".gif"):
-            return "image/gif"
-        return "image/jpeg"
-
     async def run_image_recognition(self, image_url: str, question: str) -> str:
-        if not image_url:
-            return "Lỗi: Không tìm thấy URL hình ảnh hợp lệ để nhận diện."
-
-        cached = self._get_image_recognition_cache(image_url, question)
-        if cached:
-            self.logger.info(f"Image recognition cache hit for {image_url}")
-            return cached
-
-        if getattr(self, "gateway", None) is None:
-            return "Lỗi: Chưa cấu hình LLM Gateway cho tính năng nhận diện ảnh."
-
-        mime_type = self._guess_mime_type(image_url)
-        try:
-            import src.tools.tools as tools_mod
-            import requests
-            req_lib = getattr(tools_mod, "requests", requests)
-            response = await asyncio.to_thread(req_lib.get, image_url, timeout=10)
-            image_bytes = getattr(response, "content", b"")
-            prompt_text = question or "Mô tả chi tiết và chính xác những gì bạn nhìn thấy trong hình ảnh này."
-            result_text = await self.gateway.generate_vision(
-                image_bytes=image_bytes,
-                mime_type=mime_type,
-                question=prompt_text,
-            )
-            self._set_image_recognition_cache(image_url, question, result_text)
-            return result_text
-        except Exception as e:
-            self.logger.error(f"Image recognition error via LLMGateway: {e}")
-            return f"Đã xảy ra lỗi khi gọi AI nhận diện hình ảnh: {e}"
+        """Ủy quyền cho VisionTool để chỉ tồn tại một luồng tải/nhận diện ảnh."""
+        return await self.vision.run_image_recognition(image_url, question)
 
     # ── Search delegation ──────────────────────────────────
 
@@ -300,7 +247,9 @@ class ToolsManager:
 
         try:
             if name == "web_search":
-                query = args.get("query", "")
+                query = str(args.get("query") or "").strip()
+                if not query:
+                    return "Lỗi: 'query' không được rỗng cho web_search."
                 result = ""
                 if self.search_subtasks_enabled and self.search_subtask_client:
                     intents = self._split_multi_intents(query)
@@ -326,16 +275,16 @@ class ToolsManager:
                 return result
 
             elif name == "get_weather":
-                city = args.get("city", "Ho Chi Minh City")
-                return self.weather.run_weather(city)
+                city = str(args.get("city") or "").strip() or None
+                return await asyncio.to_thread(self.weather.run_weather, city)
 
             elif name == "calculate":
-                eq = args.get("equation", "")
+                eq = str(args.get("equation") or "")
                 return await asyncio.to_thread(self.calculator.run_calculator, eq)
 
             elif name == "save_note":
-                content = (args.get("note_content") or "").strip()
-                source = (args.get("source") or "chat_inference").strip() or "chat_inference"
+                content = str(args.get("note_content") or "").strip()
+                source = str(args.get("source") or "chat_inference").strip() or "chat_inference"
                 if not content:
                     return "Lỗi: 'note_content' không được rỗng."
                 if not self.note_mgr:
@@ -343,13 +292,13 @@ class ToolsManager:
                 return await self.note_mgr.save_note_to_db(user_id, content, source)
 
             elif name == "retrieve_notes":
-                query = (args.get("query") or "").strip()
+                query = str(args.get("query") or "").strip()
                 if not self.note_mgr:
                     return "Lỗi hệ thống: memory manager chưa sẵn sàng."
                 return await self.note_mgr.retrieve_notes_from_db(user_id, query)
 
             elif name == "delete_note":
-                note_id = (args.get("note_id") or "").strip()
+                note_id = str(args.get("note_id") or "").strip()
                 if not note_id:
                     return "Lỗi: 'note_id' không được rỗng."
                 if not self.note_mgr:
@@ -357,16 +306,16 @@ class ToolsManager:
                 return await self.note_mgr.delete_note_from_db(user_id, note_id)
 
             elif name == "image_recognition":
-                image_url = args.get("image_url")
-                question = args.get("question")
-                if not image_url or not question:
-                    return "Lỗi: 'image_url' và 'question' không được rỗng cho image_recognition."
+                image_url = str(args.get("image_url") or "").strip()
+                question = str(args.get("question") or "").strip()
+                if not image_url:
+                    return "Lỗi: 'image_url' không được rỗng cho image_recognition."
                 return await self.run_image_recognition(image_url, question)
 
             elif name == "manage_user_role":
-                target_user_id = (args.get("target_user_id") or "").strip()
-                action = (args.get("action") or "").strip()
-                role = (args.get("role") or "").strip()
+                target_user_id = str(args.get("target_user_id") or "").strip()
+                action = str(args.get("action") or "").strip()
+                role = str(args.get("role") or "").strip()
                 if not target_user_id or not action or not role:
                     return "Lỗi: Thiếu tham số bắt buộc 'target_user_id', 'action' hoặc 'role'."
                 if self.db_repo is None:

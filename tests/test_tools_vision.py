@@ -2,21 +2,48 @@
 import asyncio
 import os
 import sys
+from contextlib import contextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.core.config import logger
 from src.core.llm.base import LLMError
+from src.tools.builtin import vision as vision_mod
+from src.tools.builtin.vision import VisionTool
 from src.tools.tools import ToolsManager
 
 
 class FakeResponse:
-    content = b"fake-image-bytes"
+    def __init__(self, status=200, content_type="image/png", body=b"fake-image-bytes", headers=None):
+        self.status = status
+        self.headers = {"Content-Type": content_type}
+        if headers:
+            self.headers.update(headers)
+        self._body = body
+
+    async def read(self):
+        return self._body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
-class FakeRequests:
-    def get(self, url, timeout=None):
-        return FakeResponse()
+class FakeSession:
+    response = FakeResponse()
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def get(self, url, timeout=None, allow_redirects=True):
+        return type(self).response
 
 
 class FakeGateway:
@@ -31,23 +58,23 @@ class FakeGateway:
         return "Mô tả: một chú mèo."
 
 
-def make_tools(gateway):
-    t = ToolsManager.__new__(ToolsManager)
-    t.logger = logger
-    t.gateway = gateway
-    t.image_recognition_cache = {}
-    return t
+@contextmanager
+def _patch_session(response=None):
+    original = vision_mod.aiohttp.ClientSession
+    FakeSession.response = response or FakeResponse()
+    vision_mod.aiohttp.ClientSession = FakeSession
+    try:
+        yield
+    finally:
+        vision_mod.aiohttp.ClientSession = original
 
 
 def test_vision_uses_gateway_and_caches():
-    import src.tools.tools as tools_mod
-
-    original_requests = tools_mod.requests
-    tools_mod.requests = FakeRequests()
-    try:
+    with _patch_session():
         gw = FakeGateway()
-        t = make_tools(gw)
-        result = asyncio.run(t.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
+        tool = VisionTool(gateway=gw)
+
+        result = asyncio.run(tool.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
         assert result == "Mô tả: một chú mèo."
         assert len(gw.calls) == 1
         image_bytes, mime_type, question = gw.calls[0]
@@ -56,36 +83,66 @@ def test_vision_uses_gateway_and_caches():
         assert question == "Đây là gì?"
 
         # Lần 2 phải ăn cache — không gọi gateway thêm
-        result2 = asyncio.run(t.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
+        result2 = asyncio.run(tool.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
         assert result2 == "Mô tả: một chú mèo."
         assert len(gw.calls) == 1
-    finally:
-        tools_mod.requests = original_requests
 
 
 def test_vision_without_gateway_returns_error():
-    t = make_tools(None)
-    result = asyncio.run(t.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
+    tool = VisionTool(gateway=None)
+    result = asyncio.run(tool.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
     assert "gateway" in result.lower()
 
 
 def test_vision_gateway_error_returns_message():
-    import src.tools.tools as tools_mod
-
-    original_requests = tools_mod.requests
-    tools_mod.requests = FakeRequests()
-    try:
+    with _patch_session():
         gw = FakeGateway(error=LLMError("rate_limit", "boom"))
-        t = make_tools(gw)
-        result = asyncio.run(t.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
-        assert "Đã xảy ra lỗi" in result
+        tool = VisionTool(gateway=gw)
+        result = asyncio.run(tool.run_image_recognition("https://example.com/cat.png", "Đây là gì?"))
+        assert "Lỗi khi xử lý hình ảnh" in result
         assert "boom" in result
-    finally:
-        tools_mod.requests = original_requests
+
+
+def test_vision_rejects_non_image_response():
+    with _patch_session(FakeResponse(content_type="text/html", body=b"<html></html>")):
+        gw = FakeGateway()
+        tool = VisionTool(gateway=gw)
+        result = asyncio.run(tool.run_image_recognition("https://example.com/not-an-image", "Đây là gì?"))
+        assert "không trả về hình ảnh" in result
+        assert gw.calls == []
+
+
+def test_vision_blocks_redirect_to_internal_host():
+    redirect = FakeResponse(
+        status=302,
+        content_type="text/plain",
+        body=b"",
+        headers={"Location": "http://127.0.0.1:55432/secret"},
+    )
+    with _patch_session(redirect):
+        gw = FakeGateway()
+        tool = VisionTool(gateway=gw)
+        result = asyncio.run(tool.run_image_recognition("https://example.com/redirect", "Đây là gì?"))
+        assert "bị chặn" in result
+        assert gw.calls == []
+
+
+def test_manager_delegates_image_recognition():
+    class FakeVision:
+        async def run_image_recognition(self, image_url, question):
+            return f"delegated:{image_url}:{question}"
+
+    mgr = ToolsManager.__new__(ToolsManager)
+    mgr.vision = FakeVision()
+    result = asyncio.run(mgr.run_image_recognition("https://example.com/a.png", "hỏi"))
+    assert result == "delegated:https://example.com/a.png:hỏi"
 
 
 if __name__ == "__main__":
     test_vision_uses_gateway_and_caches()
     test_vision_without_gateway_returns_error()
     test_vision_gateway_error_returns_message()
+    test_vision_rejects_non_image_response()
+    test_vision_blocks_redirect_to_internal_host()
+    test_manager_delegates_image_recognition()
     print("ALL PASS")
