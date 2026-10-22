@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 from src.services.formatting.symbols import (
     GREEK_MAP,
     MATH_FUNCTIONS,
+    MATH_WORDS,
     SUBSCRIPT_MAP,
     SUPERSCRIPT_MAP,
     SYMBOLS_MAP,
@@ -213,8 +214,26 @@ class LatexNormalizer:
         if any(ch in content for ch in "^_{}="):
             return True
         cleaned = content.strip()
-        if re.fullmatch(r"[+-]?(?:\d+|[a-zA-Z]|\d*[a-zA-Z](?:[0-9a-zA-Z+\-*/()= ])*)", cleaned):
+        if not cleaned:
+            return False
+
+        # 1. Số nguyên hoặc số thực/thập phân (có thể kèm dấu âm/dương, dấu chấm lửng ... hoặc …)
+        if re.fullmatch(r"[+-]?(?:\d+(?:\.\d+)?(?:\.{2,3}|…)?|\.\d+(?:\.{2,3}|…)?)", cleaned):
             return True
+
+        # 2. Biểu thức đại số / toán học tổng quát
+        if re.fullmatch(r"[0-9a-zA-Z+\-*/()=.,\s^_{}±∓≤≥≠≈~<>\u00B2\u00B3\u2070-\u209F\u2200-\u22FF]+", cleaned):
+            words = re.findall(r"[a-zA-Z\u00C0-\u024F\u1EA0-\u1EF9]+", cleaned)
+            # Nếu chứa từ tiếng Việt (có dấu) -> câu văn tự nhiên giữa 2 dấu $ (vd: $50 và $100)
+            for w in words:
+                if re.search(r"[\u00C0-\u024F\u1EA0-\u1EF9]", w):
+                    return False
+            # Nếu chứa từ dài (>2 ký tự) không nằm trong danh mục hàm/thuật ngữ toán học (vd: and, apple, price)
+            long_words = [w.lower() for w in words if len(w) > 2 and w.lower() not in MATH_WORDS]
+            if long_words:
+                return False
+            return True
+
         return False
 
     @staticmethod

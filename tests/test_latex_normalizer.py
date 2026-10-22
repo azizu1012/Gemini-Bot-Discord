@@ -92,3 +92,14 @@ class TestLatexNormalizerOOP:
         assert "t₁ = 1 ⇒ x² = 1 ⇒ x = ± 1" in res
         assert "t₂ = 4 ⇒ x² = 4 ⇒ x = ± 2" in res
         assert "\\implies" not in res
+
+    def test_decimal_and_ellipsis_math_values(self):
+        text = (
+            "Nghiệm x = 2.556624\n"
+            "(Giá trị chi tiết: $2.556623925...$)\n"
+            "Các giá trị khác: $3.14$, $0.5$, $-2.5$, $100$."
+        )
+        res = latex_to_markdown(text)
+        assert "(Giá trị chi tiết: 2.556623925...)" in res
+        assert "Các giá trị khác: 3.14, 0.5, -2.5, 100." in res
+        assert "$" not in res

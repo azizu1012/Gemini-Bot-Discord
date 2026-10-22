@@ -64,11 +64,15 @@ SYMBOLS_MAP: dict[str, str] = {
     "emptyset": "∅", "varnothing": "∅",
 }
 
-# Các hàm toán học chuẩn được phép loại bỏ dấu gạch chéo
+# Các hàm và thuật ngữ toán học chuẩn được phép loại bỏ dấu gạch chéo
 MATH_FUNCTIONS: set[str] = {
     "sin", "cos", "tan", "cot", "sec", "csc",
     "arcsin", "arccos", "arctan", "arccot",
     "sinh", "cosh", "tanh", "coth",
     "ln", "log", "exp", "lim", "max", "min",
     "det", "gcd", "deg", "dim", "ker", "hom",
+}
+
+MATH_WORDS: set[str] = MATH_FUNCTIONS | {
+    "mod", "dx", "dy", "dt", "dz", "dr", "dtheta",
 }
