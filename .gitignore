@@ -85,6 +85,7 @@ DOCUMENTATION.md
 
 # Docs folder (never commit)
 docs/
+Donet-qr
 
 # OS specific
 .DS_Store
