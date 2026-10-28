@@ -61,6 +61,13 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
+      # Docker reference bắt buộc lowercase nhưng github.repository giữ nguyên
+      # chữ hoa (Gemini-Bot-Discord) — metadata tự lowercase tag, còn ref digest
+      # ghép tay ở bước Trivy phải lowercase thủ công.
+      - name: Lowercase repo for digest ref
+        if: github.event_name != 'pull_request'
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
       - name: Build (PR — local only)
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v6
@@ -97,7 +104,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          image-ref: ghcr.io/${{ env.REPO_LC }}@${{ steps.build.outputs.digest }}
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
