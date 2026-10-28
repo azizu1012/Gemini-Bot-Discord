@@ -14,9 +14,20 @@
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
+# Dọn page-cache của VM Docker sau khi tắt — đây chính là cục "rác"
+# khiến vmmemWSL phình dù container đã dừng. Chỉ đụng cache, không xóa
+# image/container nào nên lần `up` sau vẫn nhanh.
+function Clear-PageCache {
+    try {
+        if (Get-Command wsl.exe -ErrorAction SilentlyContinue) {
+            wsl.exe -d docker-desktop -u root -e sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" 2>$null | Out-Null
+        }
+    } catch { }
+}
+
 function Show-Help {
-    Write-Host 'Usage: .\run_bot.ps1 [up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update]'
-    Write-Host 'No args = up (build if needed + start).'
+    Write-Host 'Usage: .\run_bot.ps1 [up|down|clean|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update]'
+    Write-Host 'No args = menu. down = tat + don cache nhe. clean = don sau (mat build cache).'
 }
 
 $cmd = 'up'
@@ -39,6 +50,7 @@ if ($noArgs) {
     Write-Host '  [9] Seed DB từ container đang chạy'
     Write-Host '  [10] Backup DB ra file'
     Write-Host '  [11] Update (pull image + build + start)'
+    Write-Host '  [12] Clean sâu (down + xóa build cache + image thừa)'
     Write-Host ''
     $pick = (Read-Host '  Nhập số (Enter = 1)').Trim()
     if (-not $pick) { $pick = '1' }
@@ -54,6 +66,7 @@ if ($noArgs) {
         '9' { $cmd = 'seed' }
         '10' { $cmd = 'backup' }
         '11' { $cmd = 'update' }
+        '12' { $cmd = 'clean' }
         default { $cmd = 'up' }
     }
 }
@@ -68,9 +81,20 @@ switch ($cmd) {
         docker image prune -f | Out-Null
         docker compose ps
     }
-    'down' { docker compose down }
-    'stop-bot' { docker compose stop bot }
-    'stop-infra' { docker compose stop postgres redis }
+    'down' {
+        docker compose down --remove-orphans
+        docker builder prune -f 2>$null | Out-Null
+        Clear-PageCache
+    }
+    'clean' {
+        docker compose down --remove-orphans
+        docker builder prune -af 2>$null | Out-Null
+        docker image prune -f 2>$null | Out-Null
+        Clear-PageCache
+        docker system df
+    }
+    'stop-bot' { docker compose stop bot; Clear-PageCache }
+    'stop-infra' { docker compose stop postgres redis; Clear-PageCache }
     'rebuild' { docker compose up -d --build --force-recreate; docker image prune -f | Out-Null }
     'restart' {
         if ($rest.Count -eq 0) { docker compose restart bot }

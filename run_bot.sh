@@ -10,6 +10,18 @@ rest=("${@:2}")
 noargs=0
 if [ $# -eq 0 ]; then noargs=1; fi
 
+# Dọn page-cache của Linux/VM Docker sau khi tắt — đây chính là cục "rác"
+# khiến vmmemWSL phình dù container đã dừng. Chỉ đụng cache, không xóa
+# image/container nào nên lần `up` sau vẫn nhanh.
+drop_page_cache() {
+  if command -v wsl.exe >/dev/null 2>&1; then
+    wsl.exe -d docker-desktop -u root -e sh -c "sync; echo 3 > /proc/sys/vm/drop_caches" >/dev/null 2>&1 || true
+  elif [ -w /proc/sys/vm/drop_caches ]; then
+    sync 2>/dev/null || true
+    echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
+  fi
+}
+
 # Chạy không tham số: hiện menu thay vì start thẳng.
 if [ "$noargs" -eq 1 ]; then
   echo ''
@@ -25,6 +37,7 @@ if [ "$noargs" -eq 1 ]; then
   echo '  [9] Seed DB từ container đang chạy'
   echo '  [10] Backup DB ra file'
   echo '  [11] Update (pull image + build + start)'
+  echo '  [12] Clean sâu (down + xóa build cache + image thừa)'
   echo ''
   read -rp '  Nhập số (Enter = 1): ' pick
   pick="${pick:-1}"
@@ -40,6 +53,7 @@ if [ "$noargs" -eq 1 ]; then
     9) cmd=seed ;;
     10) cmd=backup ;;
     11) cmd=update ;;
+    12) cmd=clean ;;
     *) cmd=up ;;
   esac
 fi
@@ -50,9 +64,20 @@ case "$cmd" in
     docker image prune -f >/dev/null
     docker compose ps
     ;;
-  down) docker compose down ;;
-  stop-bot) docker compose stop bot ;;
-  stop-infra) docker compose stop postgres redis ;;
+  down)
+    docker compose down --remove-orphans
+    docker builder prune -f >/dev/null 2>&1 || true
+    drop_page_cache
+    ;;
+  clean)
+    docker compose down --remove-orphans
+    docker builder prune -af >/dev/null 2>&1 || true
+    docker image prune -f >/dev/null 2>&1 || true
+    drop_page_cache
+    docker system df
+    ;;
+  stop-bot) docker compose stop bot; drop_page_cache ;;
+  stop-infra) docker compose stop postgres redis; drop_page_cache ;;
   rebuild)
     docker compose up -d --build --force-recreate
     docker image prune -f >/dev/null
@@ -88,7 +113,7 @@ case "$cmd" in
     docker image prune -f >/dev/null
     docker compose ps
     ;;
-  *) echo 'Usage: ./run_bot.sh [up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update]'; exit 1 ;;
+  *) echo 'Usage: ./run_bot.sh [up|down|clean|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update]'; exit 1 ;;
 esac
 
 # Giữ cửa sổ lại khi chạy không tham số (trừ logs -f vốn không bao giờ thoát).
