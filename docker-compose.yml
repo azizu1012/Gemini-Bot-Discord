@@ -89,8 +89,11 @@ services:
       redis:
         condition: service_healthy
     # Secret/token/API key lấy từ file .env hiện có của repo.
+    # required:false để `docker compose config` vẫn pass khi chưa có .env
+    # (CI validate); lúc chạy thật thiếu token thì preflight báo lỗi rõ ràng.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       # Ghi đè URL local (127.0.0.1) trong .env -> trỏ sang service nội bộ.
       # environment thắng env_file theo thứ tự ưu tiên của Compose.
