@@ -244,6 +244,11 @@ Bypass Router 30s khi ConnectError. Timeout 15000ms (int).
 - **Chuẩn runtime mới**: `Dockerfile` (py3.12-slim, non-root UID 1000, không bake secret) + `docker-compose.yml` (bot 1 replica + `postgres:16` + `redis:7-alpine` ephemeral, không publish port) + `.dockerignore` (chặn `.env`, `.venv/`, `src/.runtime/`).
 - **DB ngoài image**: seed `data/db_seed/azuris.sql` qua `/docker-entrypoint-initdb.d`; data live trong bind `./data/postgres` (subfolder của `/data`, tách riêng khỏi file app của bot). Verify: 208 messages / 2 endpoints / 6 slots / 1 note khớp DB cũ. Lệnh 1-phát: `bot.ps1` / `bot.sh` (`up|down|rebuild|logs|ps|seed|backup|update`).
 - **Giới hạn RAM** (Docker Desktop cap 4GB): postgres 768m, redis 256m (+`tmpfs /data` chặn volume mồ côi), bot 1g.
+
+### Session 20 — Trivy gate xanh (bài học về false positive)
+- Trivy fail 26 HIGH thật → nâng dependency (`aiohttp` 3.14.4, `cryptography` 50.0.0, `pypdf` 6.21.2, `urllib3` 2.8.0, `msgpack` 1.2.3, `setuptools` 84.2.1, `wheel` 0.46.2, `jaraco.context` 6.1.0).
+- 7 HIGH còn lại KHÔNG phải package cũ: 2 từ dist-info vendored trong `setuptools/_vendor` (jaraco 5.3.0, wheel 0.45.1 — `setuptools` 84.2.1 vendor bản đã vá nên tự hết), 5 từ `pip/_vendor/bom.cdx.json` (SBOM của deps vendored trong pip, chỉ dùng lúc build) → `skip-files` file SBOM này, dist-info thật vẫn quét.
+- Bài học: đừng tin ngay "cache cũ" — moi log `pip install` trong CI ra đối chiếu mới thấy root cause thật (vendored/SBOM). Build CI để `no-cache` cho tính đúng đắn tuyệt đối.
 - **Compose override URL**: `DATABASE_URL`/`REDIS_URL` trong `environment` thắng `.env` (trỏ sang service nội bộ); `BOT_LOG_PATH=/app/logs/bot.log` tránh ghi writable layer; healthcheck bot = `run_bot.py --preflight`.
 - **Dọn code**: xóa `install_services.*`, `stop_infra.*`, `stop_bot.ps1`, `ecosystem.config.js`; `run_bot.ps1/.sh` giữ lại cho dev local (đường thiếu runtime/pm2 giờ báo lỗi trỏ sang Docker); `.env.example` thêm `AZURIS_DB_USER/PASSWORD/NAME`.
 - **Verify**: 3 service healthy, bot `is online and ready!`, slash sync đủ 26.
