@@ -27,6 +27,13 @@ from src.services.file_index_service import (
 from src.services.search_subtask_client import SearchSubtaskClient
 from src.managers.cleanup_manager import CleanupManager
 from src.core.prompt_loader import build_identity_capability_prompt
+from src.core.nlp_gate import (
+    MAX_CHARS_EASY,
+    EASY_GENERATION_CONFIG,
+    EASY_TIMEOUT_SECONDS,
+    build_easy_system_instruction,
+    classify,
+)
 
 
 class MessageHandler:
@@ -272,6 +279,40 @@ class MessageHandler:
             timeout=timeout_seconds,
         )
 
+    async def _call_easy_with_deadline(
+        self, user_message: str, user_id: str, privacy_context: Dict[str, Any]
+    ) -> str:
+        """Duong tat EASY: 1 call lite + sandwich rut gon (khong reasoning, khong tool).
+
+        Chi dung cho chao hoi/xa giao da qua NLP gate. Loi o bat ky cho nao
+        -> caller fail-open ve full pipeline (khong bao gio de EASY lam hong turn).
+        """
+        identity_instruction = self._build_identity_instruction(privacy_context)
+        bot_name = str(privacy_context.get("bot_name") or "Chad Gibiti")
+        system_instruction = build_easy_system_instruction(
+            user_input=user_message,
+            privacy_context=privacy_context,
+            identity_instruction=identity_instruction,
+            bot_name=bot_name,
+        )
+        response = await asyncio.wait_for(
+            self.gateway.generate(
+                role="reasoning",  # -> model slot lite
+                system_instruction=system_instruction,
+                generation_config=dict(EASY_GENERATION_CONFIG),
+                messages=[{"role": "user", "parts": [{"text": user_message}]}],
+                tools=None,
+            ),
+            timeout=EASY_TIMEOUT_SECONDS,
+        )
+        candidates = getattr(response, "candidates", None) or []
+        for candidate in candidates:
+            for part in getattr(getattr(candidate, "content", None), "parts", None) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    return str(text)
+        raise ValueError("Easy response rong (khong co text).")
+
     async def _process_message_guarded(self, msg: _RedisMsg):
         """Process messages concurrently while preserving per-user order.
 
@@ -389,6 +430,10 @@ class MessageHandler:
 
         content = payload.get('content', '').strip()
         self.logger.info(f"[REDIS-RECV] Consumed message from 'discord-incoming' | User: {user_id} | MsgID: {payload.get('message_id')} | Content Length: {len(content)}")
+
+        # Raw text truoc khi gan intent cues (buoc 5) — NLP gate phan loai tren nay
+        # de cue "[SYSTEM NOTE: ...]" khong lam nhieu diem so / do dai.
+        gate_text = content
 
         # 0. Endpoint gate — chưa cấu hình thì không xử lý chat (không đụng DB, không set processing state).
         # Đặt TRƯỚC khối try/finally để đường thoát sớm không chạy typing-false + clear state vô nghĩa.
@@ -593,8 +638,38 @@ class MessageHandler:
                 user_parts.extend(downloaded_images)
             messages.append({"role": "user", "parts": user_parts})
 
+            # 6b. NLP gate — duong tat EASY cho chao hoi/xa giao: 1 call lite,
+            # khong history, khong tool. Dieu kien: khong attachment, khong RAG
+            # context, tin nhan gon. Gate (~1ms, offline, deterministic).
+            # That bai o bat ky cho nao -> fail-open full pipeline phia duoi.
+            easy_response_text: Optional[str] = None
+            if (
+                not attachments
+                and not (attachment_data or "").strip()
+                and len(gate_text) <= MAX_CHARS_EASY
+            ):
+                gate_decision, gate_score = classify(gate_text)
+                if gate_decision == "EASY":
+                    try:
+                        easy_response_text = await self._call_easy_with_deadline(
+                            user_message, user_id, privacy_context
+                        )
+                        self.logger.info(
+                            f"[NLP-GATE] EASY fast-path cho user {user_id} "
+                            f"(score={gate_score:.2f})."
+                        )
+                    except Exception as e:
+                        self.logger.warning(
+                            f"[NLP-GATE] EASY that bai ({type(e).__name__}: {e}), "
+                            f"fail-open ve full pipeline cho user {user_id}."
+                        )
+                        easy_response_text = None
+
             pipeline = self.pipeline
-            response_text = await self._call_pipeline_with_deadline(pipeline, messages, user_id, privacy_context)
+            if easy_response_text is not None:
+                response_text = easy_response_text
+            else:
+                response_text = await self._call_pipeline_with_deadline(pipeline, messages, user_id, privacy_context)
 
             # 8. Log reply and Split response chunks sequentially
             await self.db_repo.log_message_db(user_id, "assistant", response_text)

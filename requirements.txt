@@ -6,7 +6,7 @@ dateparser==1.4.0
 ddgs==9.14.4
 discord.py==2.6.4
 exa-py==2.13.0
-google-genai==2.8.0
+google-genai==2.33.0
 lxml==6.1.1
 openai==2.38.0
 pypdf==6.12.1
