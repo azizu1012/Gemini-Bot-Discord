@@ -22,14 +22,18 @@ Không publish port nào ra host: bot chỉ dial-out (Discord WS, LLM endpoint, 
 └── downloads/        # Temp download cache
 ```
 
-### Vòng đời
+### Vòng đời (1 nút duy nhất: `run_bot.ps1` / `run_bot.sh`)
 ```powershell
-docker compose up -d --build   # build + start (lần đầu bung seed vào postgres)
-docker compose ps              # cả 3 service phải healthy
-docker compose logs -f bot     # kết thúc bằng "is online and ready!"
-docker compose down            # dừng, giữ data
-# reset toàn bộ: tắt stack, xóa nội dung data/postgres, up lại -> seed bung từ file
+.\run_bot.ps1              # build (nếu cần) + start toàn stack
+.\run_bot.ps1 stop-bot     # chỉ tắt bot, giữ postgres/redis chạy
+.\run_bot.ps1 stop-infra   # chỉ tắt infra, giữ container và data
+.\run_bot.ps1 down         # tắt hết, giữ data
+.\run_bot.ps1 logs         # log bot live
+.\run_bot.ps1 ps           # trạng thái + RAM từng service
+# đủ lệnh: up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update
 ```
+Tương đương Docker thô: `docker compose up -d --build`, `docker compose stop bot`, `docker compose stop postgres redis`, `docker compose down`.
+# reset toàn bộ: tắt stack, xóa nội dung data/postgres, up lại -> seed bung từ file
 
 ### Data & seed portable (đường dẫn tương đối — Windows/Linux đều chạy)
 - Mọi mount đều là **relative** (`./data` gồm cả `./data/postgres` DB engine + `./data/db_seed` seed file, `./uploaded_files`, `./logs`): clone sang máy khác không sửa gì, seed tự bung full DB (endpoint config, history, notes) khi folder `data/postgres` còn trống — không bao giờ new-database.
@@ -40,8 +44,8 @@ docker cp azuris-postgres-1:/tmp/seed.sql data/db_seed/azuris.sql
 ```
 - Backup DB đúng nghĩa: `docker compose exec postgres pg_dump -U azuris azuris > backup.sql`.
 
-### Legacy local (không Docker)
-`run_bot.ps1` / `run_bot.sh` giữ lại cho dev, dùng `src/.runtime` **đã có sẵn**. Các script cấp phát/dừng hạ tầng (`install_services.*`, `stop_infra.*`, `stop_bot.ps1`, `ecosystem.config.js` PM2) đã gỡ — xem [`deprecated.md`](deprecated.md).
+### Legacy local (ĐÃ GỠ — Session 21)
+Runner trực tiếp cũ + toàn bộ `src/.runtime/` (~1GB) đã xóa. Docker là runtime duy nhất — xem [`deprecated.md`](deprecated.md).
 
 ### Logs (Docker)
 - `docker compose logs -f bot` — log bot (ghi ra `./logs/bot.log` qua `BOT_LOG_PATH`)
@@ -242,7 +246,7 @@ Bypass Router 30s khi ConnectError. Timeout 15000ms (int).
 
 ### Session 19 — Docker hóa + DB seed portable + dọn script infra cũ
 - **Chuẩn runtime mới**: `Dockerfile` (py3.12-slim, non-root UID 1000, không bake secret) + `docker-compose.yml` (bot 1 replica + `postgres:16` + `redis:7-alpine` ephemeral, không publish port) + `.dockerignore` (chặn `.env`, `.venv/`, `src/.runtime/`).
-- **DB ngoài image**: seed `data/db_seed/azuris.sql` qua `/docker-entrypoint-initdb.d`; data live trong bind `./data/postgres` (subfolder của `/data`, tách riêng khỏi file app của bot). Verify: 208 messages / 2 endpoints / 6 slots / 1 note khớp DB cũ. Lệnh 1-phát: `bot.ps1` / `bot.sh` (`up|down|rebuild|logs|ps|seed|backup|update`).
+- **DB ngoài image**: seed `data/db_seed/azuris.sql` qua `/docker-entrypoint-initdb.d`; data live trong bind `./data/postgres` (subfolder của `/data`, tách riêng khỏi file app của bot). Verify: 208 messages / 2 endpoints / 6 slots / 1 note khớp DB cũ. Lệnh 1-phát: `run_bot.ps1` / `run_bot.sh` (`up|down|stop-bot|stop-infra|rebuild|restart|logs|ps|seed|backup|update` — tách dừng bot/infra như cơ chế cũ).
 - **Giới hạn RAM** (Docker Desktop cap 4GB): postgres 768m, redis 256m (+`tmpfs /data` chặn volume mồ côi), bot 1g.
 
 ### Session 20 — Trivy gate xanh (bài học về false positive)

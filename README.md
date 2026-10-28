@@ -115,9 +115,23 @@ docker compose up -d
 
 First start restores the full DB from `data/db_seed/azuris.sql`. If the package is private, `docker login ghcr.io` first (or set the package to public).
 
-### Legacy local run (no Docker)
+### One-button runner
 
-`run_bot.ps1` / `run_bot.sh` remain for development without Docker, using a pre-provisioned `src/.runtime` (PostgreSQL + Redis portable binaries). The provisioning scripts (`install_services.*`, `stop_infra.*`) were removed — see [docs/deprecated.md](docs/deprecated.md).
+`run_bot.ps1` (Windows) / `run_bot.sh` (Linux) is the single entry point — everything runs inside Docker:
+
+```powershell
+.\run_bot.ps1              # build (if needed) + start all
+.\run_bot.ps1 stop-bot     # stop only the bot, keep postgres/redis running
+.\run_bot.ps1 stop-infra   # stop only infra, containers and data kept
+.\run_bot.ps1 logs         # follow bot logs
+.\run_bot.ps1 ps           # status + RAM usage per service
+```
+
+Full command list: `up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update`. `down` stops everything but keeps data; emptying `data/postgres` + `up` reseeds the DB from file.
+
+### Legacy local run (removed)
+
+The legacy direct runner and the portable `src/.runtime` (PostgreSQL + Redis binaries, ~1GB) were removed — see [docs/deprecated.md](docs/deprecated.md). Docker is the only runtime.
 
 ## Configuration
 

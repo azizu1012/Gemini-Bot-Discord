@@ -117,9 +117,23 @@ docker compose up -d
 
 Lần start đầu DB bung từ `data/db_seed/azuris.sql`. Package private thì `docker login ghcr.io` trước (hoặc set public).
 
-### Chạy local không Docker (legacy)
+### Lệnh 1 nút duy nhất
 
-`run_bot.ps1` / `run_bot.sh` giữ lại cho dev không Docker, dùng `src/.runtime` đã có sẵn (binary portable PostgreSQL + Redis). Các script cấp phát hạ tầng (`install_services.*`, `stop_infra.*`) đã gỡ — xem [docs/deprecated.md](docs/deprecated.md).
+`run_bot.ps1` (Windows) / `run_bot.sh` (Linux) là cửa duy nhất — mọi thứ chạy trong Docker:
+
+```powershell
+.\run_bot.ps1              # build (nếu cần) + start toàn stack
+.\run_bot.ps1 stop-bot     # chỉ tắt bot, giữ postgres/redis chạy
+.\run_bot.ps1 stop-infra   # chỉ tắt infra, giữ container và data
+.\run_bot.ps1 logs         # xem log bot live
+.\run_bot.ps1 ps           # trạng thái + RAM từng service
+```
+
+Đủ lệnh: `up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update`. `down` tắt hết nhưng giữ data; xóa `data/postgres` + `up` sẽ seed lại DB từ file.
+
+### Chạy local không Docker (đã gỡ)
+
+Runner trực tiếp cũ và `src/.runtime` portable (binary PostgreSQL + Redis, ~1GB) đã xóa — xem [docs/deprecated.md](docs/deprecated.md). Docker là runtime duy nhất.
 
 ## Cấu hình
 

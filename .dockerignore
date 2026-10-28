@@ -39,7 +39,7 @@ Donet-qr/
 progress_report.md
 test_find_bot.ps1
 
-# Legacy local launcher (giữ lại cho dev không Docker; không cần trong image)
+# Host-only Docker runners (không cần trong image)
 run_bot.ps1
 run_bot.sh
 
