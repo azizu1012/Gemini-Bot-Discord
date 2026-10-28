@@ -7,6 +7,42 @@ cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 cmd="${1:-up}"
 rest=("${@:2}")
+noargs=0
+if [ $# -eq 0 ]; then noargs=1; fi
+
+# Chạy không tham số: hiện menu thay vì start thẳng.
+if [ "$noargs" -eq 1 ]; then
+  echo ''
+  echo '  Azuris bot — chọn thao tác:'
+  echo '  [1] Start toàn stack (up)'
+  echo '  [2] Chỉ tắt bot (giữ infra)'
+  echo '  [3] Chỉ tắt infra (giữ container + data)'
+  echo '  [4] Tắt hết (giữ data)'
+  echo '  [5] Restart bot'
+  echo '  [6] Xem log bot'
+  echo '  [7] Trạng thái + RAM'
+  echo '  [8] Build lại (rebuild)'
+  echo '  [9] Seed DB từ container đang chạy'
+  echo '  [10] Backup DB ra file'
+  echo '  [11] Update (pull image + build + start)'
+  echo ''
+  read -rp '  Nhập số (Enter = 1): ' pick
+  pick="${pick:-1}"
+  case "$pick" in
+    1) cmd=up ;;
+    2) cmd=stop-bot ;;
+    3) cmd=stop-infra ;;
+    4) cmd=down ;;
+    5) cmd=restart ;;
+    6) cmd=logs ;;
+    7) cmd=ps ;;
+    8) cmd=rebuild ;;
+    9) cmd=seed ;;
+    10) cmd=backup ;;
+    11) cmd=update ;;
+    *) cmd=up ;;
+  esac
+fi
 
 case "$cmd" in
   up)
@@ -49,3 +85,8 @@ case "$cmd" in
     ;;
   *) echo 'Usage: ./run_bot.sh [up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update]'; exit 1 ;;
 esac
+
+# Giữ cửa sổ lại khi chạy không tham số (trừ logs -f vốn không bao giờ thoát).
+if [ "$noargs" -eq 1 ] && [ "$cmd" != logs ]; then
+  read -rp 'Nhấn Enter để đóng...'
+fi

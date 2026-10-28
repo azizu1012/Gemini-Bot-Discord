@@ -22,6 +22,41 @@ function Show-Help {
 $cmd = 'up'
 $rest = @()
 $noArgs = ($args.Count -eq 0)
+
+# Chạy không tham số (chuột phải > Run with PowerShell, hoặc gõ lệnh trần):
+# hiện menu thay vì start thẳng. Gõ lệnh trực tiếp để bỏ qua menu.
+if ($noArgs) {
+    Write-Host ''
+    Write-Host '  Azuris bot — chọn thao tác:'
+    Write-Host '  [1] Start toàn stack (up)'
+    Write-Host '  [2] Chỉ tắt bot (giữ infra)'
+    Write-Host '  [3] Chỉ tắt infra (giữ container + data)'
+    Write-Host '  [4] Tắt hết (giữ data)'
+    Write-Host '  [5] Restart bot'
+    Write-Host '  [6] Xem log bot'
+    Write-Host '  [7] Trạng thái + RAM'
+    Write-Host '  [8] Build lại (rebuild)'
+    Write-Host '  [9] Seed DB từ container đang chạy'
+    Write-Host '  [10] Backup DB ra file'
+    Write-Host '  [11] Update (pull image + build + start)'
+    Write-Host ''
+    $pick = (Read-Host '  Nhập số (Enter = 1)').Trim()
+    if (-not $pick) { $pick = '1' }
+    switch ($pick) {
+        '1' { $cmd = 'up' }
+        '2' { $cmd = 'stop-bot' }
+        '3' { $cmd = 'stop-infra' }
+        '4' { $cmd = 'down' }
+        '5' { $cmd = 'restart' }
+        '6' { $cmd = 'logs' }
+        '7' { $cmd = 'ps' }
+        '8' { $cmd = 'rebuild' }
+        '9' { $cmd = 'seed' }
+        '10' { $cmd = 'backup' }
+        '11' { $cmd = 'update' }
+        default { $cmd = 'up' }
+    }
+}
 if ($args.Count -ge 1) {
     $cmd = "$($args[0])".ToLower()
     if ($args.Count -gt 1) { $rest = $args[1..($args.Count - 1)] }
@@ -31,8 +66,6 @@ switch ($cmd) {
     'up' {
         docker compose up -d --build
         docker compose ps
-        # Chuột phải > Run with PowerShell: giữ cửa sổ lại để đọc kết quả.
-        if ($noArgs) { pause }
     }
     'down' { docker compose down }
     'stop-bot' { docker compose stop bot }
@@ -72,3 +105,7 @@ switch ($cmd) {
     }
     default { Show-Help }
 }
+
+# Chuột phải > Run with PowerShell: giữ cửa sổ lại để đọc kết quả
+# (trừ logs -f vốn không bao giờ thoát).
+if ($noArgs -and $cmd -ne 'logs') { pause }

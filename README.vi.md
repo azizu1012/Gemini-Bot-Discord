@@ -119,7 +119,7 @@ Lần start đầu DB bung từ `data/db_seed/azuris.sql`. Package private thì 
 
 ### Lệnh 1 nút duy nhất
 
-`run_bot.ps1` (Windows) / `run_bot.sh` (Linux) là cửa duy nhất — mọi thứ chạy trong Docker:
+`run_bot.ps1` (Windows) / `run_bot.sh` (Linux) là cửa duy nhất — mọi thứ chạy trong Docker. Chạy không tham số (hoặc chuột phải → Run with PowerShell) để hiện menu chọn; gõ lệnh trực tiếp để bỏ qua menu:
 
 ```powershell
 .\run_bot.ps1              # build (nếu cần) + start toàn stack

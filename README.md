@@ -117,7 +117,7 @@ First start restores the full DB from `data/db_seed/azuris.sql`. If the package 
 
 ### One-button runner
 
-`run_bot.ps1` (Windows) / `run_bot.sh` (Linux) is the single entry point — everything runs inside Docker:
+`run_bot.ps1` (Windows) / `run_bot.sh` (Linux) is the single entry point — everything runs inside Docker. Run with no arguments (or right-click → Run with PowerShell) for an interactive menu; pass a command directly to skip it:
 
 ```powershell
 .\run_bot.ps1              # build (if needed) + start all
