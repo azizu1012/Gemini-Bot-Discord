@@ -8,8 +8,9 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 
 | Biến | Mặc định | Mô tả |
 |------|----------|-------|
-| `DATABASE_URL` | `postgresql://...` | URL kết nối PostgreSQL (cổng 55432) |
-| `REDIS_URL` | `redis://127.0.0.1:6379/0` | URL kết nối Redis |
+| `DATABASE_URL` | `postgresql://...` | URL kết nối PostgreSQL — legacy local (cổng 55432). Trong Docker bị `environment` của Compose override sang `postgres:5432` |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | URL kết nối Redis — trong Docker bị override sang `redis://redis:6379/0` |
+| `AZURIS_DB_USER` / `AZURIS_DB_PASSWORD` / `AZURIS_DB_NAME` | `azuris` / *(bắt buộc)* / `azuris` | Credential Postgres cho Docker (user/pass/db). Mật khẩu chỉ dùng ký tự URL-safe `[A-Za-z0-9_-]` vì được nhúng vào `DATABASE_URL` |
 | `DISCORD_TOKEN` | — | Token bot Discord |
 | `LOCAL_RUNTIME_ROOT` | `src/.runtime` | Đường dẫn runtime cục bộ |
 | `AZURIS_POSTGRES_START_MODE` | `direct` | Chế độ khởi động PostgreSQL (direct/auto/pg_ctl) |
@@ -21,7 +22,7 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 |------|----------|-------|
 | `GEMINI_TIMEOUT_MS` | `60000` | Timeout gọi LLM (ms) — dùng cho cả 2 SDK |
 
-> Endpoint (URL, API key, SDK active, 4 model slot) lưu trong PostgreSQL và cấu hình qua `/endpoint` trong Discord — xem [`endpoint_and_models.md`](endpoint_and_models.md). Không còn `GEMINI_API_KEY_*`, `GEMINI_BASE_URL`, `ROUTER_AUTH_KEY`, `*_MODEL_ALIAS`.
+> Endpoint (URL, API key, SDK active, 3 model slot) lưu trong PostgreSQL và cấu hình qua `/endpoint` trong Discord — xem [`endpoint_and_models.md`](endpoint_and_models.md). Không còn `GEMINI_API_KEY_*`, `GEMINI_BASE_URL`, `ROUTER_AUTH_KEY`, `*_MODEL_ALIAS`.
 
 ### Search & Weather
 
@@ -67,9 +68,21 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `MAX_SEARCH_CALLS_PER_TURN` | 5 | 1-20 |
 | `MIN_FREE_SPACE_MB` | 100 | Ngưỡng dọn file upload cũ |
 
+### NLP gate (hằng số code trong `src/core/nlp_gate.py`, không env)
+
+| Hằng số | Giá trị | Ý nghĩa |
+|---------|---------|---------|
+| `EASY_THRESHOLD` | 0.50 | Ngưỡng cosine EASY/COMPLEX |
+| `MAX_WORDS_EASY` | 12 | Dài hơn → auto COMPLEX (ngôn ngữ có khoảng trắng) |
+| `MAX_CHARS_EASY_NORM` | 60 | Dài hơn → auto COMPLEX (chữ Hán/Nhật/Thái không khoảng trắng) |
+| `EASY_LEN_SLACK_CHARS` | 12 | Text dài hơn mẫu khớp nhất quá slack này → COMPLEX (chào + câu hỏi) |
+| `MAX_CHARS_EASY` | 300 | Guard trước khi gọi gate từ `message_handler` |
+| `EASY_MAX_OUTPUT_TOKENS` | 1024 | Trong `EASY_GENERATION_CONFIG` (temp 0.7, không tool) |
+| `EASY_TIMEOUT_SECONDS` | 60 | Timeout đường tắt → fail-open full pipeline |
+
 ## Cơ sở dữ liệu
 
-PostgreSQL 16, cổng 55432, database `azuris`.
+PostgreSQL 16, database `azuris` (trong Docker: service `postgres`, cổng nội bộ 5432; legacy local: cổng 55432).
 
 ### 17 bảng
 
@@ -120,11 +133,11 @@ PostgreSQL 16, cổng 55432, database `azuris`.
 | last_check_error | TEXT | Lỗi gần nhất |
 | last_checked_at | TIMESTAMPTZ | |
 
-**llm_model_slots** — 4 model slot theo SDK
+**llm_model_slots** — 3 model slot theo SDK
 | Cột | Kiểu | Mô tả |
 |-----|------|-------|
 | sdk | TEXT PK | `genai` / `openai` |
-| slot | TEXT PK | `reasoning` / `final` / `fallback` / `vision` |
+| slot | TEXT PK | `reasoning` / `final` / `fallback` (slot `vision` đã bỏ — DB CHECK chỉ còn 3) |
 | model_id | TEXT | NULL = dùng default rule |
 | updated_by | TEXT | |
 | updated_at | TIMESTAMPTZ | |

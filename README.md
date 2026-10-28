@@ -10,16 +10,17 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" />
   <img src="https://img.shields.io/badge/Discord.py-2.6.4-5865F2?logo=discord&logoColor=white" alt="discord.py" />
   <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16" />
   <img src="https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white" alt="Redis Streams" />
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose" />
   <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/ci.yml/badge.svg" alt="CI" />
   <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret-scan.yml/badge.svg" alt="Secret scan" />
 </p>
 
 <p><strong>A reliable, endpoint-first AI assistant for Discord.</strong><br />
-Multi-step reasoning, tool calling, long-term memory, multimodal input, voice-room utilities, and local infrastructure in one focused bot.</p>
+Multi-step reasoning, tool calling, long-term memory, multimodal input, voice-room utilities, and containerized infrastructure in one focused bot.</p>
 
 </div>
 
@@ -27,7 +28,7 @@ Multi-step reasoning, tool calling, long-term memory, multimodal input, voice-ro
 
 Azuris is an event-driven Discord AI assistant built around PostgreSQL, Redis Streams, and configurable LLM endpoints. It supports Google GenAI-compatible and OpenAI-compatible providers without hard-coding a provider-specific key pool into the application.
 
-The project is designed for self-hosted deployments on Windows or Linux. PostgreSQL and Redis can run from the repository local runtime, so Docker is optional.
+The standard runtime is **Docker Compose**: one single-replica bot, PostgreSQL 16, and Redis 7. All persistent data lives **outside** the image — bot files in relative host folders (`./data`, `./uploaded_files`, `./logs`), database content in the `./data/postgres` host folder plus a portable SQL seed (`./data/db_seed/azuris.sql`) — so cloning the repo to another machine (Windows or Linux) reproduces the same database instead of starting empty.
 
 ## Why Azuris
 
@@ -40,7 +41,7 @@ The project is designed for self-hosted deployments on Windows or Linux. Postgre
 | 🧾 Long-term memory | User-scoped notes, JSONB metadata, global-fact promotion, and file notes |
 | 🔊 Voice rooms | Lock rooms, manage allowlists, move members, and apply room policies |
 | 🛡️ Safety controls | Secret scanning, URL validation, user isolation, role checks, and sanitized errors |
-| ⚡ Reliable runtime | Redis-backed event flow, per-user serialization, concurrency limits, and LLM deadlines |
+| 🐳 Portable runtime | Single `docker compose up`, data in relative host paths, DB seed file for clones |
 
 ## Architecture
 
@@ -62,54 +63,61 @@ flowchart LR
 
 For the detailed module map and data flow, see [docs/architecture.md](docs/architecture.md).
 
-## Quick Start
+## Quick Start (Docker — standard)
 
 ### Requirements
 
-- Python 3.10 or newer
-- Windows 10/11 or Linux
+- Docker Desktop (Windows/macOS) or Docker Engine + Compose plugin (Linux)
 - A Discord bot token
-- PostgreSQL 16 and Redis, either local or externally managed
-- At least one configured LLM endpoint
+- At least one configured LLM endpoint (after first start, via `/endpoint config`)
 
-### Windows
+### Run
 
 ```powershell
-python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
-python -m pip install -r requirements.txt
-
-powershell -ExecutionPolicy Bypass -File .\\install_services.ps1
 Copy-Item .env.example .env
-# Edit .env and fill in the required secrets.
+# Edit .env: DISCORD_TOKEN, ADMIN_IDS, AZURIS_DB_PASSWORD (URL-safe [A-Za-z0-9_-]), DONATE_ENCRYPTION_KEY...
 
-powershell .\\run_bot.ps1 --preflight-only
-powershell .\\run_bot.ps1 --server
+docker compose up -d --build
+docker compose logs -f bot
 ```
 
-Stop the bot and local services with:
+Check health: `docker compose ps` — all three services should be `healthy`, and the bot log ends with `is online and ready!`.
+
+Stop: `docker compose down` (keeps data). Full reset (reseeds DB from file): stop the stack, empty `data/postgres`, then `up` again.
+
+### Where the data lives
+
+| Inside container | Actually stored at (host, relative paths) | Notes |
+| --- | --- | --- |
+| `/app/data`, `/app/uploaded_files`, `/app/logs` | `./data`, `./uploaded_files`, `./logs` | Bind mounts — visible on host, never inside the image |
+| `/app/assets/encrypted` | `./assets/encrypted` | Read-only bind mount (donate QR) |
+| PostgreSQL data dir | `./data/postgres` (bind) + `./data/db_seed/azuris.sql` | Seed file restores the full DB on first init of an empty folder |
+
+To refresh the seed from a running stack:
 
 ```powershell
-powershell .\\stop_bot.ps1
-powershell .\\stop_infra.ps1
+docker compose exec -T postgres pg_dump -U azuris -d azuris --no-owner --no-privileges --clean --if-exists -F p -f /tmp/seed.sql
+docker cp azuris-postgres-1:/tmp/seed.sql data/db_seed/azuris.sql
 ```
 
-### Linux
+### Container image (GHCR) & deploy elsewhere
+
+CI builds the bot image on every push to `main` and on `v*` tags, scans it with Trivy (blocks on fixable CRITICAL/HIGH), and pushes to `ghcr.io/<owner>/<repo>` (`:latest`, `:<short-sha>`, `:vX.Y.Z`). PRs build + scan without pushing. No Docker Hub needed — GHCR has no pull rate limits for your own images and reuses GitHub auth.
+
+Deploy on another machine (Linux/Windows):
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-
-chmod +x install_services.sh run_bot.sh stop_infra.sh
-./install_services.sh
-cp .env.example .env
-# Edit .env and fill in the required secrets.
-
-./run_bot.sh --preflight-only
-./run_bot.sh --pm2 --server
+cp .env.example .env   # fill DISCORD_TOKEN, ADMIN_IDS, AZURIS_DB_PASSWORD, ...
+# add: BOT_IMAGE=ghcr.io/<owner>/<repo>:latest
+docker compose pull
+docker compose up -d
 ```
+
+First start restores the full DB from `data/db_seed/azuris.sql`. If the package is private, `docker login ghcr.io` first (or set the package to public).
+
+### Legacy local run (no Docker)
+
+`run_bot.ps1` / `run_bot.sh` remain for development without Docker, using a pre-provisioned `src/.runtime` (PostgreSQL + Redis portable binaries). The provisioning scripts (`install_services.*`, `stop_infra.*`) were removed — see [docs/deprecated.md](docs/deprecated.md).
 
 ## Configuration
 
@@ -120,11 +128,14 @@ Minimum configuration:
 ```env
 DISCORD_TOKEN=your-discord-bot-token
 ADMIN_IDS=your-discord-user-id
-DATABASE_URL=postgresql://azuris@127.0.0.1:55432/azuris
-REDIS_URL=redis://127.0.0.1:6379/0
+AZURIS_DB_USER=azuris
+AZURIS_DB_PASSWORD=url-safe-password-for-docker-postgres
+AZURIS_DB_NAME=azuris
 DONATE_ENCRYPTION_KEY=your-fernet-key
 WEATHER_API_KEY=your-weatherapi-key
 ```
+
+Inside Compose, `DATABASE_URL`/`REDIS_URL` are overridden to point at the `postgres`/`redis` services — the values in `.env` only matter for legacy local runs.
 
 Generate a Fernet key with:
 
@@ -162,6 +173,8 @@ OpenAI-compatible: http://127.0.0.1:58100/v1
 
 Loopback is supported for local routers. Link-local, cloud-metadata, and unsafe private-network targets are blocked by default; see ALLOW_PRIVATE_ENDPOINT_HOSTS for an explicit trusted-LAN exception. Full details are in [docs/endpoint_and_models.md](docs/endpoint_and_models.md).
 
+**Linux note:** from inside the bot container, `127.0.0.1` is the container itself, not your host. Point the endpoint at the router's LAN address or add it to the Compose network.
+
 ## Discord Commands
 
 | Area | Commands |
@@ -179,7 +192,7 @@ python -m pytest -q
 python -m compileall -q src scripts tests
 ```
 
-The CI workflow runs compilation, PostgreSQL/Redis-backed tests, and the secret scan on every pull request. The repository current suite contains 171 passing tests.
+The CI workflow runs compilation, PostgreSQL/Redis-backed tests, and the secret scan on every pull request.
 
 ## Security Notes
 

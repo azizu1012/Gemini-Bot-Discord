@@ -9,9 +9,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
-APP_NAME="azuris-bot"
 LOG_DIR="$PROJECT_ROOT/logs"
-ECOSYSTEM_FILE="$PROJECT_ROOT/ecosystem.config.js"
 
 ENV_FILE="$PROJECT_ROOT/.env"
 LOCAL_RUNTIME_ROOT_VALUE="${LOCAL_RUNTIME_ROOT:-}"
@@ -32,8 +30,6 @@ export LOCAL_RUNTIME_ROOT="$LOCAL_RUNTIME_ROOT_VALUE"
 REDIS_DIR="$RUNTIME_ROOT/redis"
 POSTGRES_DIR="$RUNTIME_ROOT/postgres"
 POSTGRES_CREDENTIALS_FILE="$POSTGRES_DIR/credentials.env"
-INSTALL_SCRIPT="$PROJECT_ROOT/install_services.sh"
-STOP_INFRA_SCRIPT="$PROJECT_ROOT/stop_infra.sh"
 RUNTIME_CONFIG_DIR="$RUNTIME_ROOT/config"
 RUNTIME_LOGS_DIR="$RUNTIME_ROOT/logs"
 RUNTIME_RUN_DIR="$RUNTIME_ROOT/run"
@@ -49,19 +45,10 @@ export AZURIS_POSTGRES_START_MODE="$POSTGRES_START_MODE"
 POSTGRES_PORT="${POSTGRES_PORT:-}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 
-PM2_MODE=0
-PM2_FRESH=0
 PREFLIGHT_ONLY=0
 
 for arg in "$@"; do
   case "$arg" in
-    --pm2)
-      PM2_MODE=1
-      ;;
-    --pm2-fresh)
-      PM2_MODE=1
-      PM2_FRESH=1
-      ;;
     --preflight-only)
       PREFLIGHT_ONLY=1
       ;;
@@ -118,11 +105,8 @@ auto_bootstrap_runtime() {
     return
   fi
 
-  echo -e "${YELLOW}[INFO]${NC} Local runtime missing. Bootstrapping via install_services.sh"
-  if [ ! -x "$INSTALL_SCRIPT" ]; then
-    chmod +x "$INSTALL_SCRIPT"
-  fi
-  "$INSTALL_SCRIPT"
+  echo -e "${RED}[ERROR]${NC} Local portable runtime was removed. Run with Docker instead: docker compose up -d --build (see README.md)."
+  exit 1
 }
 
 refresh_runtime_ports_from_credentials() {
@@ -400,31 +384,15 @@ auto_reset_infra_if_needed() {
     return
   fi
 
-  echo -e "${YELLOW}[WARN]${NC} Existing local infra detected. Running stop_infra.sh before startup..."
+  echo -e "${YELLOW}[WARN]${NC} Existing local infra detected."
   while IFS= read -r reason; do
     [ -n "$reason" ] || continue
     echo "  - $reason"
   done <<< "$reasons"
 
-  if [ ! -f "$STOP_INFRA_SCRIPT" ]; then
-    echo -e "${RED}[ERROR]${NC} Missing stop script: $STOP_INFRA_SCRIPT"
-    exit 1
-  fi
-
-  if [ ! -x "$STOP_INFRA_SCRIPT" ]; then
-    chmod +x "$STOP_INFRA_SCRIPT"
-  fi
-
-  if ! "$STOP_INFRA_SCRIPT"; then
-    echo -e "${RED}[ERROR]${NC} stop_infra.sh failed"
-    exit 1
-  fi
-
-  if ! wait_for_port_closed "PostgreSQL" "127.0.0.1" "$POSTGRES_PORT" 25; then
-    exit 1
-  fi
-
-  echo -e "${GREEN}[OK]${NC} Existing local infra was stopped successfully"
+  echo -e "${RED}[ERROR]${NC} Existing local infra detected, but the portable-runtime stop script was removed."
+  echo -e "${RED}[ERROR]${NC} Stop it manually, then use Docker: docker compose up -d --build."
+  exit 1
 }
 
 ensure_redis_running() {
@@ -492,27 +460,5 @@ if ! grep -Eq '^DISCORD_TOKEN=.+$' "$PROJECT_ROOT/.env"; then
 fi
 
 mkdir -p "$LOG_DIR"
-
-if [ "$PM2_MODE" -eq 1 ]; then
-  if ! command -v pm2 >/dev/null 2>&1; then
-    echo -e "${RED}[ERROR]${NC} pm2 not found. Install with: npm i -g pm2"
-    exit 1
-  fi
-
-  if [ ! -f "$ECOSYSTEM_FILE" ]; then
-    echo -e "${RED}[ERROR]${NC} Missing $ECOSYSTEM_FILE"
-    exit 1
-  fi
-
-  if [ "$PM2_FRESH" -eq 1 ]; then
-    pm2 update || true
-    pm2 delete "$APP_NAME" || true
-  fi
-
-  pm2 start "$ECOSYSTEM_FILE" --only "$APP_NAME" --update-env
-  pm2 save
-  echo -e "${GREEN}[OK]${NC} PM2 app started"
-  exit 0
-fi
 
 exec "$VENV_PY" "$PROJECT_ROOT/run_bot.py"

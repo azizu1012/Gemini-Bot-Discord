@@ -1,0 +1,119 @@
+# Azuris — single-bot Compose.
+#
+# Kiến trúc: 3 service đúng 3 mảnh của zero-docker local, chỉ là thay
+# binary portable (src/.runtime) bằng image chính thức:
+#   bot      -> Dockerfile (python:3.12-slim, non-root, replicas = 1)
+#   postgres -> postgres:16  (thay src/.runtime/postgres)
+#   redis    -> redis:7-alpine (thay src/.runtime/redis, giữ semantic ephemeral)
+#
+# Data KHÔNG nằm trong image (toàn bộ là đường dẫn tương đối — Win/Linux đều chạy):
+#   - File bot (notes, chunks, uploads, logs, QR donate): bind-mount ra
+#     thư mục host hiện có (./data, ./uploaded_files, ./logs, ./assets/encrypted).
+#   - Dữ liệu Postgres: bind ./data/postgres (folder thật trên host).
+#
+# Lần đầu chạy (Linux/macOS):
+#   mkdir -p data uploaded_files logs assets/encrypted
+#   # nếu host UID khác 1000: sudo chown -R 1000:1000 data uploaded_files logs
+#   # đặt mật khẩu DB trong .env: AZURIS_DB_PASSWORD=<chuỗi URL-safe [A-Za-z0-9_-]>
+#   docker compose up -d --build
+# Trên Docker Desktop (Windows/macOS): bind-mount mặc định đã ghi được,
+# bỏ qua bước chown.
+
+name: azuris
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    # Bot thuần + infra cũ ăn <300MB; giới hạn để Docker Desktop (cap 4GB) không bị phình.
+    mem_limit: 768m
+    environment:
+      POSTGRES_USER: ${AZURIS_DB_USER:-azuris}
+      POSTGRES_PASSWORD: ${AZURIS_DB_PASSWORD:?Chua dat AZURIS_DB_PASSWORD trong .env}
+      POSTGRES_DB: ${AZURIS_DB_NAME:-azuris}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      # Data Postgres nằm NGOÀI image, trong subfolder ./data/postgres
+      # (relative — Win/Linux đều chạy; tách riêng khỏi file app của bot).
+      - ./data/postgres:/var/lib/postgresql/data
+      # Seed portable: file dump DB nằm NGOÀI container (./data/db_seed),
+      # máy mới clone về chỉ cần `up` là có data cũ — không bao giờ new-database.
+      # Chỉ chạy đúng 1 lần khi thư mục data còn trống.
+      - ./data/db_seed:/docker-entrypoint-initdb.d:ro
+    # KHÔNG publish port ra host (bot nói chuyện qua mạng nội bộ Compose).
+    # Cần debug bằng psql từ host thì mở comment dòng dưới:
+    # ports: ["55432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    mem_limit: 256m
+    # Giữ đúng semantic local hiện tại: queue thuần, không persist.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--bind", "0.0.0.0"]
+    # Image redis khai báo VOLUME /data; tmpfs để Compose không đẻ volume mồ côi
+    # (tên hash) mỗi lần recreate — đúng nghĩa ephemeral.
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  bot:
+    # Deploy kiểu pull từ registry: BOT_IMAGE=ghcr.io/<owner>/<repo>:<tag>
+    # (xem .github/workflows/docker.yml). Mặc định build local, tag nội bộ.
+    image: ${BOT_IMAGE:-azuris-bot:local}
+    build:
+      context: .
+      # Host dùng UID khác 1000 thì build với:
+      #   docker compose build --build-arg APP_UID=$(id -u)
+    restart: unless-stopped
+    # Python bot nhẹ (~vài trăm MB); 1g là trần an toàn, đủ spike search/vision.
+    mem_limit: 1g
+    # Đơn instance: RAM KV cache của worker không share giữa replica.
+    deploy:
+      replicas: 1
+    # Endpoint trỏ ra router trên HOST (host.docker.internal) thay vì 127.0.0.1
+    # (trong container đó là chính nó). host-gateway để Linux cũng phân giải được.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Secret/token/API key lấy từ file .env hiện có của repo.
+    env_file:
+      - .env
+    environment:
+      # Ghi đè URL local (127.0.0.1) trong .env -> trỏ sang service nội bộ.
+      # environment thắng env_file theo thứ tự ưu tiên của Compose.
+      # Mật khẩu DB chỉ dùng ký tự URL-safe [A-Za-z0-9_-].
+      DATABASE_URL: postgresql://${AZURIS_DB_USER:-azuris}:${AZURIS_DB_PASSWORD}@postgres:5432/${AZURIS_DB_NAME:-azuris}?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      # Đẩy bot.log ra thư mục logs được bind-mount (mặc định config.py
+      # ghi bot.log ở project root = writable layer của container).
+      BOT_LOG_PATH: /app/logs/bot.log
+    volumes:
+      - ./data:/app/data
+      - ./uploaded_files:/app/uploaded_files
+      - ./logs:/app/logs
+      - ./assets/encrypted:/app/assets/encrypted:ro
+    # Bot không listen port nào (chỉ dial-out Discord/LLM/search) nên
+    # không khai báo ports.
+    healthcheck:
+      # --preflight của run_bot.py: check DB + deps + đường ghi, không cần token.
+      test: ["CMD", "python", "run_bot.py", "--preflight"]
+      interval: 60s
+      timeout: 30s
+      start_period: 90s
+      retries: 3
+
+# (Không còn named volume: Postgres dùng bind ./data/postgres,
+# Redis dùng tmpfs — mọi data đều nằm ngoài image, thấy được trên host.)

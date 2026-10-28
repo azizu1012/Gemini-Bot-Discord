@@ -24,7 +24,7 @@
 | `GEMINI_BASE_URL`, `ROUTER_AUTH_KEY` | URL/key lưu trong `llm_endpoints` |
 | `MODEL_NAME` | Không còn dùng |
 | `OPENAI_API_KEY`, `OPENAI_CUSTOM_ENDPOINT` | Không còn dùng |
-| `REASONING_MODEL_ALIAS`, `FINAL_MODEL_ALIAS`, `FALLBACK_MODEL_ALIAS` | Thay bằng 4 slot trong DB |
+| `REASONING_MODEL_ALIAS`, `FINAL_MODEL_ALIAS`, `FALLBACK_MODEL_ALIAS` | Thay bằng 3 slot trong DB (`reasoning`/`final`/`fallback`; slot `vision` đã bỏ sau đó ở PR #27) |
 | `GEMINI_CIRCUIT_*` | Circuit breaker đã gỡ |
 | `HABE_USER_ID`, `MIRA_USER_ID`, `ADO_FAT_USER_ID`, `MUC_RIM_USER_ID`, `SUC_VIEN_USER_ID`, `CHUI_USER_ID` | Chưa từng được code sử dụng; đã xóa khỏi `Config` và `.env` |
 | `ADMIN_USER_IDS` (dạng biến môi trường) | Không đọc trực tiếp; dùng `ADMIN_IDS` (chuỗi phân tách bằng dấu phẩy) |
@@ -34,7 +34,7 @@
 | Cũ | Mới |
 |----|-----|
 | `/endpoint <url> <auth_key>` | Nhóm `/endpoint config|view|switch|models|test` |
-| `/health_check` quét API key | `/health_check` kiểm tra endpoint active + latency + 4 slot + PostgreSQL |
+| `/health_check` quét API key | `/health_check` kiểm tra endpoint active + latency + 3 slot + PostgreSQL |
 | Bot fail-fast lúc khởi động nếu thiếu key | Bot vẫn chạy; chat trả "chưa cấu hình" |
 | Tự chuyển provider khi lỗi | Không tự chuyển; `/endpoint switch` thủ công |
 
@@ -48,6 +48,20 @@
 
 1. Xóa/để nguyên các biến cũ trong `.env` — bot bỏ qua, không lỗi. Bảng key-rotation cũ
    (`api_key_pool`, ...) sẽ bị `init_db()` xóa vĩnh viễn bằng `DROP ... CASCADE`.
-2. Chạy bot, dùng `/endpoint config` cấu hình lại endpoint + 4 model slot — hoặc ghi
+2. Chạy bot, dùng `/endpoint config` cấu hình lại endpoint + 3 model slot — hoặc ghi
    trực tiếp bằng `python scripts/configure_endpoint.py ...` khi không vào được Discord.
 3. `/endpoint test` để xác minh, sau đó chat thử.
+
+## 6. Hạ tầng portable local (gỡ khi Docker hóa — Session 19)
+
+| Thành phần | Tình trạng | Thay thế |
+|------------|-----------|----------|
+| `install_services.ps1` / `install_services.sh` | Đã xóa | `docker compose up -d --build` (image `postgres:16` + `redis:7-alpine`) |
+| `stop_infra.ps1` / `stop_infra.sh` | Đã xóa | `docker compose down` |
+| `stop_bot.ps1` | Đã xóa | `docker compose down` / `docker compose stop bot` |
+| `ecosystem.config.js` (PM2) | Đã xóa | `restart: unless-stopped` trong Compose |
+| `run_bot.ps1 --pm2*` / `run_bot.sh --pm2*` | Đã gỡ nhánh PM2 | Không thay thế (single replica, không cần process manager ngoài) |
+| `src/.runtime/` (binary portable) | Bỏ không dùng (gitignored) | Image chính thức trên Docker Hub |
+| Port host 55432/6379 | Chỉ còn ý nghĩa legacy local | Trong Compose dùng 5432/6379 nội bộ, không publish |
+
+`run_bot.ps1` / `run_bot.sh` giữ lại cho dev không Docker (yêu cầu `src/.runtime` có sẵn); đường thiếu runtime giờ báo lỗi trỏ sang Docker thay vì tự bootstrap.

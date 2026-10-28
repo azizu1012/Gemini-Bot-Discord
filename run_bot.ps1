@@ -1,9 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppName = 'azuris-bot'
 $LogDir = Join-Path $ProjectRoot 'logs'
-$EcosystemFile = Join-Path $ProjectRoot 'ecosystem.config.js'
 
 function Get-EnvFileValue {
     param(
@@ -45,8 +43,6 @@ $env:LOCAL_RUNTIME_ROOT = $RuntimeRootEnvValue
 
 $PostgresDir = Join-Path $RuntimeRoot 'postgres'
 $PostgresCredentialsFile = Join-Path $PostgresDir 'credentials.env'
-$InstallScript = Join-Path $ProjectRoot 'install_services.ps1'
-$StopInfraScript = Join-Path $ProjectRoot 'stop_infra.ps1'
 
 $PostgresStartMode = "$($env:AZURIS_POSTGRES_START_MODE)".Trim().ToLower()
 if (-not $PostgresStartMode) {
@@ -76,14 +72,10 @@ else {
 $RedisDir = Join-Path $RuntimeRoot 'redis'
 $RedisPort = if ($env:REDIS_PORT) { $env:REDIS_PORT } else { '6379' }
 
-$Pm2Mode = $false
-$Pm2Fresh = $false
 $PreflightOnly = $false
 
 foreach ($arg in $args) {
     switch ($arg) {
-        '--pm2' { $Pm2Mode = $true }
-        '--pm2-fresh' { $Pm2Mode = $true; $Pm2Fresh = $true }
         '--preflight-only' { $PreflightOnly = $true }
     }
 }
@@ -127,8 +119,7 @@ function Initialize-Runtime {
         return
     }
 
-    Write-Host '[INFO] Local runtime missing. Bootstrapping via install_services.ps1'
-    & powershell -ExecutionPolicy Bypass -File $InstallScript
+    throw 'Local portable runtime was removed. Run with Docker instead: docker compose up -d --build (see README.md).'
 }
 
 function Update-RuntimePortsFromCredentials {
@@ -695,28 +686,14 @@ function Invoke-InfraResetIfNeeded {
         return
     }
 
-    Write-Host '[WARN] Existing local infra detected. Running stop_infra.ps1 before startup...'
+    Write-Host '[WARN] Existing local infra detected.'
     foreach ($reason in $reasons) {
         Write-Host "  - $reason"
     }
 
-    if (-not (Test-Path $StopInfraScript)) {
-        throw "Missing stop script: $StopInfraScript"
-    }
-
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $StopInfraScript
-    if ($LASTEXITCODE -ne 0) {
-        throw "stop_infra.ps1 failed with exit code $LASTEXITCODE"
-    }
-
-    if (-not (Wait-TcpPortClosed -Name 'PostgreSQL' -TargetHost '127.0.0.1' -TargetPort ([int]$PostgresPort) -MaxSeconds 25)) {
-        throw "PostgreSQL port $PostgresPort is still open after stop_infra"
-    }
-    if (-not (Wait-TcpPortClosed -Name 'Redis' -TargetHost '127.0.0.1' -TargetPort ([int]$RedisPort) -MaxSeconds 25)) {
-        throw "Redis port $RedisPort is still open after stop_infra"
-    }
-
-    Write-Host '[OK] Existing local infra was stopped successfully'
+    throw ('Existing local infra detected, but the portable-runtime stop script was removed. ' +
+        'Stop it manually, then use Docker: docker compose up -d --build. Reasons: ' +
+        ($reasons -join '; '))
 }
 
 function Start-RedisIfNeeded {
@@ -802,26 +779,5 @@ if (-not $tokenConfigured) {
 }
 
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-
-if ($Pm2Mode) {
-    $pm2Cmd = Get-Command pm2 -ErrorAction SilentlyContinue
-    if ($null -eq $pm2Cmd) {
-        throw 'pm2 not found. Install with: npm i -g pm2'
-    }
-
-    if (-not (Test-Path $EcosystemFile)) {
-        throw "Missing $EcosystemFile"
-    }
-
-    if ($Pm2Fresh) {
-        pm2 update
-        pm2 delete $AppName
-    }
-
-    pm2 start $EcosystemFile --only $AppName --update-env
-    pm2 save
-    Write-Host '[OK] PM2 app started'
-    exit 0
-}
 
 & $venvPy (Join-Path $ProjectRoot 'run_bot.py')

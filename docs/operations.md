@@ -1,11 +1,19 @@
 # Vận hành & Tham khảo Azuris
 
-## Hạ tầng cục bộ (Zero-Docker)
+## Hạ tầng Docker (chuẩn)
 
-Toàn bộ hạ tầng chạy trong `src/.runtime/`:
+`docker compose up -d --build` dựng đúng 3 service, thay thế binary portable cũ trong `src/.runtime/`:
+
+| Service | Image | Vai trò | Data |
+|---------|-------|---------|------|
+| `bot` | build từ `Dockerfile` (py3.12-slim, non-root, 1 replica) | `python run_bot.py` | bind `./data`, `./uploaded_files`, `./logs`, `./assets/encrypted:ro` |
+| `postgres` | `postgres:16` | Thay `src/.runtime/postgres` | bind `./data/postgres` + seed `./data/db_seed/azuris.sql` |
+| `redis` | `redis:7-alpine` (`--save "" --appendonly no`) | Thay `src/.runtime/redis`, giữ semantic queue thuần | ephemeral |
+
+Không publish port nào ra host: bot chỉ dial-out (Discord WS, LLM endpoint, search APIs); DB/Redis nói chuyện qua mạng nội bộ Compose. Cấu trúc `src/.runtime/` cũ xem [`deprecated.md`](deprecated.md):
 
 ```
-.runtime/
+.runtime/            # legacy, không dùng nữa
 ├── redis/            # Redis binaries & data
 ├── postgres/         # PostgreSQL engine & data cluster
 ├── config/           # postgresql.conf, pg_hba.conf
@@ -15,48 +23,36 @@ Toàn bộ hạ tầng chạy trong `src/.runtime/`:
 ```
 
 ### Vòng đời
-1. **Bootstrap**: `install_services.ps1` / `.sh` → tải Redis (tporadowski 5.0.14.1), PostgreSQL 16, init cluster
-2. **Khởi chạy**: `run_bot.ps1 --server` → dọn tiến trình cũ → Redis → PostgreSQL
-3. **Tắt**: `stop_infra.ps1` → graceful stop → force kill nếu timeout
-4. **Tắt bot**: `stop_bot.ps1` → quét `.venv` Python processes
-
-### Khởi động lần đầu
-
 ```powershell
-# Windows
-pip install -r requirements.txt
-powershell -ExecutionPolicy Bypass -File .\install_services.ps1
-# Sau đó điền .env
-powershell .\run_bot.ps1 --preflight-only
-powershell .\run_bot.ps1 --server
+docker compose up -d --build   # build + start (lần đầu bung seed vào postgres)
+docker compose ps              # cả 3 service phải healthy
+docker compose logs -f bot     # kết thúc bằng "is online and ready!"
+docker compose down            # dừng, giữ data
+# reset toàn bộ: tắt stack, xóa nội dung data/postgres, up lại -> seed bung từ file
 ```
 
-```bash
-# Linux
-chmod +x install_services.sh run_bot.sh stop_infra.sh
-./install_services.sh
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-./run_bot.sh --preflight-only
-./run_bot.sh --pm2 --server
-```
-
-### Dừng
+### Data & seed portable (đường dẫn tương đối — Windows/Linux đều chạy)
+- Mọi mount đều là **relative** (`./data` gồm cả `./data/postgres` DB engine + `./data/db_seed` seed file, `./uploaded_files`, `./logs`): clone sang máy khác không sửa gì, seed tự bung full DB (endpoint config, history, notes) khi folder `data/postgres` còn trống — không bao giờ new-database.
+- Refresh seed từ stack đang chạy:
 ```powershell
-# Windows
-powershell .\stop_infra.ps1    # Tắt Redis + PostgreSQL
-powershell .\stop_bot.ps1      # Tắt tiến trình Python
+docker compose exec -T postgres pg_dump -U azuris -d azuris --no-owner --no-privileges --clean --if-exists -F p -f /tmp/seed.sql
+docker cp azuris-postgres-1:/tmp/seed.sql data/db_seed/azuris.sql
 ```
-```bash
-# Linux
-./stop_infra.sh
-pm2 stop azuris-bot
-```
+- Backup DB đúng nghĩa: `docker compose exec postgres pg_dump -U azuris azuris > backup.sql`.
 
-### Logs
-- File chính: `bot.log` (RotatingFileHandler)
-- Runtime logs: `src/.runtime/logs/`
-- PM2 (Linux): `pm2 logs azuris-bot --lines 100`
+### Legacy local (không Docker)
+`run_bot.ps1` / `run_bot.sh` giữ lại cho dev, dùng `src/.runtime` **đã có sẵn**. Các script cấp phát/dừng hạ tầng (`install_services.*`, `stop_infra.*`, `stop_bot.ps1`, `ecosystem.config.js` PM2) đã gỡ — xem [`deprecated.md`](deprecated.md).
+
+### Logs (Docker)
+- `docker compose logs -f bot` — log bot (ghi ra `./logs/bot.log` qua `BOT_LOG_PATH`)
+- `docker compose logs postgres | redis` — log hạ tầng
+
+### CI/CD (GitHub Actions → GHCR)
+- `ci.yml`: compile + pytest (Postgres/Redis service containers) trên `main` và PR.
+- `secret_scan.yml`: chặn credential mới trong diff; liệt kê finding cũ.
+- `docker.yml`: validate Compose → build image → Trivy scan (fail khi có CRITICAL/HIGH sửa được) → push `ghcr.io/<owner>/<repo>` (`:latest` cho main, `:<short-sha>`, `:vX.Y.Z` cho tag). PR build + scan, không push. Cache layer bằng GHA.
+- CD = pull-based, không SSH: trên máy deploy đặt `BOT_IMAGE=ghcr.io/<owner>/<repo>:<tag>` vào `.env` rồi `docker compose pull && docker compose up -d`. Không cần Docker Hub.
+- Muốn merge an toàn: bật branch protection yêu cầu 3 check (CI, Secret Scan, Docker) pass.
 
 ### Chi tiết lỗi & chẩn đoán
 Xem [`docs/incidents.md`](incidents.md) để biết các sự cố đã gặp (CPU 100%, re-read vô hạn, RESP3), nguyên nhân và cách khắc phục.
@@ -74,7 +70,7 @@ WHERE is_busy = true AND last_updated < NOW() - INTERVAL '5 minutes';
 
 ```powershell
 # Discord (ADMIN)
-/endpoint config      # chọn SDK → URL/key → 4 slot model
+/endpoint config      # chọn SDK → URL/key → 3 slot model
 /endpoint view
 /endpoint switch      # đổi SDK active thủ công
 /endpoint models      # fetch lại danh sách model
@@ -88,11 +84,11 @@ Chi tiết: [`endpoint_and_models.md`](endpoint_and_models.md).
 ### Kiến trúc Pipeline
 
 ```
-GeminiPipeline.execute()
-    ├── 1. Reasoning Loop (gemini-flash)
+GeminiPipeline.execute()  [COMPLEX — sau NLP gate]
+    ├── 1. Reasoning Loop (gemini-flash-lite, temp 0.35, max 2600 tokens)
     │   System prompt + chat history + tools
     │   Model → functionCall hoặc text
-    │   Nếu functionCall → execute tool → append result → loop
+    │   Nếu functionCall → execute tool 1 round → defer về synthesis
     │   Max REASONING_MAX_LOOPS (mặc định 3)
     └── 2. Final Synthesis (gemini-flash, streaming)
         Reasoning transcript → tổng hợp câu trả lời
@@ -101,14 +97,18 @@ GeminiPipeline.execute()
         Continuation nếu finish_reason = MAX_TOKENS
 ```
 
-### Model Slots
+Đường tắt EASY (trước pipeline — `src/core/nlp_gate.py`, ~1ms, offline):
+chào hỏi/xã giao, không attachment, không RAG context → 1 call lite
+(model slot `reasoning`, sandwich rút gọn, không tool), fail-open về full
+pipeline khi gate COMPLEX hoặc EASY lỗi/timeout (60s).
+
+### Model Slots (3 slot — slot `vision` đã bỏ ở PR #27, resolve về `final`)
 
 | Slot | Vai trò | Default khi bỏ trống |
 |------|---------|----------------------|
 | `reasoning` | Reasoning loop + tools | `final` |
 | `final` | Tổng hợp câu trả lời | Model đầu tiên trong danh sách |
 | `fallback` | Retry khi model chính lỗi | `reasoning` → `final` |
-| `vision` | Phân tích ảnh | `final` |
 
 ### Fallback
 - Lỗi model chính → retry cùng model theo `*_MAX_API_RETRIES` → thử `fallback` đúng 1 lần.
@@ -121,7 +121,7 @@ GeminiPipeline.execute()
 | Lệnh | Mô tả |
 |------|-------|
 | `/endpoint` | Cấu hình endpoint: config / view / switch / models / test |
-| `/health_check` | Endpoint active + latency + 4 model slot + PostgreSQL |
+| `/health_check` | Endpoint active + latency + 3 model slot + PostgreSQL |
 | `/moderator` | Thăng/hạ Moderator động |
 | `/premium` | Thêm/xóa Premium |
 | `/rolerank` | Kéo thứ tự role trong server bằng menu tương tác |
@@ -134,7 +134,7 @@ GeminiPipeline.execute()
 ### Moderator
 | Lệnh | Mô tả |
 |------|-------|
-| `/health_check` | Endpoint active + latency + 4 model slot + PostgreSQL |
+| `/health_check` | Endpoint active + latency + 3 model slot + PostgreSQL |
 | `/global-notes` | Xem ghi chú global |
 | `/message_to` | Nhắn nội bộ guild |
 | `/imagine` | Tạo ảnh (giới hạn) |
@@ -230,5 +230,20 @@ Bypass Router 30s khi ConnectError. Timeout 15000ms (int).
 - Gỡ key rotation: `gemini_api_manager.py`, `api_router.py`, `api_config.py`, `gemini_rate_limiter.py`
 - Thêm `src/core/llm/` (2 SDK: genai/openai), bảng `llm_endpoints` + `llm_model_slots`
 - Nhóm lệnh `/endpoint` + `/health_check` mới; gate "chưa cấu hình"
-- 4 model slot + fallback 1 lần cùng provider; key mã hóa Fernet
+- 3 model slot + fallback 1 lần cùng provider; key mã hóa Fernet
+  (lúc ship là 4 slot; slot `vision` bỏ ở PR #27, resolve về `final`)
 - Test mới trong `tests/`; CI + security scan ở Phase 2, tách god-file ở Phase 3
+
+### Session 18 — NLP gate + google-genai 2.33.0 + đánh giá ADK
+- **Đường tắt EASY**: `src/core/nlp_gate.py` (pure stdlib, ~1ms, offline — bỏ dấu/teencode + char 3-gram cosine, ngưỡng 0.50, precision 1.00 trên golden set `tests/test_nlp_gate.py`). Chào hỏi/xã giao → 1 call lite + sandwich rút gọn, không tool; fail-open COMPLEX.
+- **Wire vào `message_handler.process_message`**: `_call_easy_with_deadline` (timeout 60s), phân loại trên raw text trước intent cues, loại trừ attachment/RAG context.
+- **Upgrade google-genai**: `2.8.0` → `2.33.0` (`requirements.txt`); batch test xanh (llm base/genai/openai/gateway, nlp_gate, layering, handler timeout+concurrency — 16 passed).
+- **Đánh giá Google ADK 2.13.0 rồi KHÔNG chọn**: spike đối đầu (`LlmAgent`+`Runner`+`FunctionTool` vs pipeline thật, chung sandwich final thật) cho transcript tương đương nhưng không thêm capability; 1-model multi-pass lộ lỗi trả lời nhầm meta-prompt; debug xuyên abstraction đắt; framework còn xoay. Chi tiết: `docs/architecture.md` (§Quyết định kiến trúc).
+
+### Session 19 — Docker hóa + DB seed portable + dọn script infra cũ
+- **Chuẩn runtime mới**: `Dockerfile` (py3.12-slim, non-root UID 1000, không bake secret) + `docker-compose.yml` (bot 1 replica + `postgres:16` + `redis:7-alpine` ephemeral, không publish port) + `.dockerignore` (chặn `.env`, `.venv/`, `src/.runtime/`).
+- **DB ngoài image**: seed `data/db_seed/azuris.sql` qua `/docker-entrypoint-initdb.d`; data live trong bind `./data/postgres` (subfolder của `/data`, tách riêng khỏi file app của bot). Verify: 208 messages / 2 endpoints / 6 slots / 1 note khớp DB cũ. Lệnh 1-phát: `bot.ps1` / `bot.sh` (`up|down|rebuild|logs|ps|seed|backup|update`).
+- **Giới hạn RAM** (Docker Desktop cap 4GB): postgres 768m, redis 256m (+`tmpfs /data` chặn volume mồ côi), bot 1g.
+- **Compose override URL**: `DATABASE_URL`/`REDIS_URL` trong `environment` thắng `.env` (trỏ sang service nội bộ); `BOT_LOG_PATH=/app/logs/bot.log` tránh ghi writable layer; healthcheck bot = `run_bot.py --preflight`.
+- **Dọn code**: xóa `install_services.*`, `stop_infra.*`, `stop_bot.ps1`, `ecosystem.config.js`; `run_bot.ps1/.sh` giữ lại cho dev local (đường thiếu runtime/pm2 giờ báo lỗi trỏ sang Docker); `.env.example` thêm `AZURIS_DB_USER/PASSWORD/NAME`.
+- **Verify**: 3 service healthy, bot `is online and ready!`, slash sync đủ 26.

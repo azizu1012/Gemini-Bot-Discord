@@ -1,0 +1,49 @@
+# Giữ build context gọn + không lọt secret/binary nặng vào image.
+
+# Secret — truyền lúc chạy qua env_file, KHÔNG bake vào image
+.env
+.env.*
+
+# Môi trường local (Windows) — trong container thay bằng image chính thức
+.venv/
+venv/
+env/
+src/.runtime/
+
+# Data host — lúc chạy bind-mount vào, không copy vào image
+data/
+uploaded_files/
+logs/
+*.log
+*.db
+*.sqlite*
+
+# Python / OS / IDE
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Git + meta repo
+.git/
+.gitignore
+.codegraph/
+graphify-out/
+
+# Tài liệu nội bộ (repo này gitignore docs/)
+docs/
+Donet-qr/
+progress_report.md
+test_find_bot.ps1
+
+# Legacy local launcher (giữ lại cho dev không Docker; không cần trong image)
+run_bot.ps1
+run_bot.sh
+
+# Tự thân file Docker (không cần trong image)
+Dockerfile
+docker-compose.yml
+.dockerignore

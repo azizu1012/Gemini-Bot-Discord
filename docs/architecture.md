@@ -8,7 +8,7 @@
 - Contextual Chat: Hội thoại theo ngữ cảnh, lưu lịch sử ngắn & dài hạn
 - Real-time Tool-calling: Web search, thời tiết, ghi chú, nhận diện ảnh
 - Multi-user Isolation: Cô lập dữ liệu cá nhân tuyệt đối
-- Zero-Docker Local Runtime: Tự cấp phát PostgreSQL & Redis cục bộ
+- Containerized Runtime: Docker Compose — 1 bot + PostgreSQL 16 + Redis 7, data ngoài image
 - Hybrid Role System: 4 nhóm quyền Admin, Moderator, Premium, Free
 
 ## Sơ đồ kiến trúc
@@ -42,16 +42,18 @@
 | UI Helpers | `src/handlers/discord/ui.py` | UI components, embeds |
 | Worker | `src/handlers/message_handler.py` | Xử lý tin nhắn nền, gọi pipeline |
 | Pipeline | `src/core/gemini_pipeline.py` | Reasoning loop, synthesis |
-| LLM Adapter | `src/core/llm/{base,genai_client,openai_client,gateway,resolver}.py` | 2 SDK (genai/openai), 4 model slot, fallback cùng provider |
+| LLM Adapter | `src/core/llm/{base,genai_client,openai_client,gateway,resolver}.py` | 2 SDK (genai/openai), 3 model slot, fallback cùng provider |
 | Repository | `src/database/repository.py` | 17 bảng PostgreSQL, asyncpg |
 
-### Cổng dịch vụ
+### Cổng dịch vụ (nội bộ mạng Compose — không publish ra host)
 
-| Dịch vụ | Cổng |
-|---------|------|
-| PostgreSQL | 55432 |
-| Redis | 6379 |
-| Router API (tùy chọn) | 58100 |
+| Dịch vụ | Cổng nội bộ | Ghi chú |
+|---------|-------------|---------|
+| PostgreSQL | 5432 | Service `postgres`; bind `./data/postgres` + seed `data/db_seed/azuris.sql` |
+| Redis | 6379 | Service `redis`, ephemeral (`--save "" --appendonly no`) |
+| Router API (tùy chọn, ngoài repo) | 58100 | Bot dial-out tới; từ container `127.0.0.1` là chính nó |
+
+Port 55432/6379 trên host chỉ còn ý nghĩa với legacy local runtime (`src/.runtime`, xem `docs/deprecated.md`). Bot không listen port nào.
 
 ## Cấu trúc thư mục
 
@@ -176,12 +178,15 @@ Redis Stream: discord-incoming
         → Load chat history (CacheManager RAM / PostgreSQL fallback)
         → Parse file/ảnh đính kèm (asyncio.gather + Semaphore 3)
         → Build identity instruction (thay bot_name động)
-        → GeminiPipeline.execute()
-            ├── Reasoning Loop (max REASONING_MAX_LOOPS)
-            │   → Gọi Gemini (gemini-flash)
-            │   → Phân tích function_call → thực thi tool → lặp
-            └── Final Synthesis (stream real)
-                → Gom chunks, continuation nếu MAX_TOKENS
+        → NLP gate (~1ms, offline — `src/core/nlp_gate.py`)
+            ├── EASY (chào hỏi/xã giao, không attachment/RAG): đường tắt
+            │   1 call lite + sandwich rút gọn (không reasoning, không tool)
+            └── COMPLEX (mọi thứ còn lại): GeminiPipeline.execute()
+                ├── Reasoning Loop (max REASONING_MAX_LOOPS)
+                │   → Gọi Gemini (gemini-flash-lite)
+                │   → Phân tích function_call → thực thi tool → defer synthesis
+                └── Final Synthesis (gemini-flash, stream real)
+                    → Gom chunks, continuation nếu MAX_TOKENS
         → Lưu message vào DB + update RAM cache
         → Push vào Redis Stream: discord-outgoing
 ```
@@ -210,7 +215,14 @@ Redis Stream: discord-outgoing
 - `_download_file_with_sem`: Tải ảnh song song Semaphore(3)
 - `_build_identity_instruction`: Thay tên bot động vào prompt
 - `process_message`: Entry point xử lý tin nhắn từ Redis
+- `_call_easy_with_deadline`: Đường tắt EASY (NLP gate → 1 call lite, fail-open về pipeline)
 - `_process_imagine_command`: Xử lý /imagine
+
+### NLP Gate — `src/core/nlp_gate.py`
+- Pure stdlib, không AI model, không gọi mạng: chuẩn hóa tiếng Việt (bỏ dấu, teencode theo ranh giới từ) + char 3-gram cosine so với ~110 câu chào mẫu (16 ngôn ngữ: Việt, Anh, Nhật, Hàn, Trung, Tây Ban Nha, Pháp, Đức, Bồ Đào Nha, Nga, Thái, Indonesia, Hindi, Ý, Ả Rập, Thổ Nhĩ Kỳ)
+- `classify()` → `EASY`/`COMPLEX`: ngưỡng cosine 0.50 + text dài hơn mẫu khớp nhất không quá 12 ký tự (chào + câu hỏi → COMPLEX); mơ hồ → COMPLEX
+- `classify()` → `EASY`/`COMPLEX` (ngưỡng 0.50, precision 1.00 trên golden set `tests/test_nlp_gate.py`); mơ hồ → COMPLEX
+- `build_easy_system_instruction()`: sandwich rút gọn (identity + persona + user block, slot reasoning để trống với marker, tools = `(No tools were called)`)
 
 ### Gemini Pipeline — `src/core/gemini_pipeline.py`
 - `_call_gemini_reasoning_loop`: Vòng lặp suy nghĩ + gọi tools
@@ -218,7 +230,7 @@ Redis Stream: discord-outgoing
 - `_continue_final_output`: Viết tiếp nếu output bị cắt (MAX_TOKENS)
 
 ### LLM Adapter — `src/core/llm/`
-- `resolver.py`: đọc endpoint + 4 model slot từ PostgreSQL, giải mã key (Fernet), cache in-memory + `invalidate()`
+- `resolver.py`: đọc endpoint + 3 model slot từ PostgreSQL, giải mã key (Fernet), cache in-memory + `invalidate()`
 - `genai_client.py`: adapter Google GenAI native (`generate_content`, tools, vision)
 - `openai_client.py`: adapter LLM tương thích OpenAI (`/v1/chat/completions`, tools, vision; không grounding)
 - `gateway.py`: façade duy nhất cho pipeline — `generate`, `generate_text`, `generate_vision`, `list_models_for`, retry + 1 fallback cùng provider
@@ -233,8 +245,22 @@ Redis Stream: discord-outgoing
 - `manage_user_role`: Quản lý role (chỉ visible cho Admin)
 
 ### Model AI
-- Reasoning & Final Synthesis: `gemini-flash` (alias → `gemini-2.0-flash`)
-- Fallback: `gemini-flash-lite-latest`
-- Vision: `gemini-flash` (cố định)
+- Reasoning: `gemini-flash-lite` (slot `reasoning`, temp 0.35, 1 round tool rồi defer synthesis)
+- Final Synthesis: `gemini-flash` (slot `final`, sandwich 3-block, stream real)
+- Fallback: `gemini-flash-lite` (slot `fallback`, thử đúng 1 lần cùng provider)
+- Vision: resolve về `final` (slot `vision` đã bỏ ở PR #27)
+- Đường tắt EASY: model slot `reasoning` (lite), sandwich rút gọn, không tool
 - Image Generation: Gemini Imagen 3
-- SDK: Google GenAI SDK (`google-genai`) — chỉ hỗ trợ Gemini
+- SDK: Google GenAI SDK `google-genai==2.33.0` (+ adapter OpenAI-compatible `/v1/chat/completions`)
+
+## Quyết định kiến trúc: vì sao chưa dùng Google ADK (2026-10-28)
+
+Đã spike đối đầu ADK 2.13.0 (`LlmAgent` + `Runner` + `FunctionTool`) với pipeline hiện tại trên model/router thật, cùng sandwich final thật cho cả hai. Kết quả: transcript tương đương byte-for-byte về hình thức (`("Reasoning completed", "[calculate] {...}")`), final cùng đúng.
+
+Không migrate vì:
+1. **Port = dịch tên, không thêm capability.** Mọi rule domain (evidence threshold, partial/strict-uncertainty, continuation MAX_TOKENS, thought signature, identity build động, retry giữ state theo loại lỗi, text-fallback parse `<tool_code>`) ADK không có — phải viết lại thành callback/node, code không biến mất mà chỉ chuyển chỗ.
+2. **Debug xuyên abstraction đắt.** Lỗi thật (router 429/throttle) bị chôn dưới 10 tầng `DynamicNodeFailError` → tenacity → `aiohttp`; loop tự viết thì lỗi ở đâu hiện ở đó.
+3. **Framework còn xoay.** Dòng 2.x release dồn dập (deprecate `Sequential/LoopAgent`, đổi default model, GenAI SDK v2) — theo ADK nghĩa là theo nhịp breaking change của Google trong khi code hiện tại đứng yên vẫn chạy.
+4. **Rủi ro đã đo, lợi ích chưa thấy.** Biến thể 1-model multi-pass của ADK còn lộ lỗi cấu trúc (pass cuối trả lời nhầm meta-prompt thay vì câu user); 2-tier hiện tại neo đáp án tốt hơn.
+
+Giữ pipeline hiện tại; đầu tư vào đường tắt EASY (NLP gate) thay vì thay core loop. Chi tiết so sánh xem `docs/operations.md` (Session 18) và `tests/test_nlp_gate.py`.

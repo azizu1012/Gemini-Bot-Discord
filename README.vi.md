@@ -10,10 +10,11 @@
 </p>
 
 <p>
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+" />
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white" alt="Python 3.12" />
   <img src="https://img.shields.io/badge/Discord.py-2.6.4-5865F2?logo=discord&logoColor=white" alt="discord.py" />
   <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL 16" />
   <img src="https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white" alt="Redis Streams" />
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose" />
   <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/ci.yml/badge.svg" alt="CI" />
   <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret-scan.yml/badge.svg" alt="Secret scan" />
 </p>
@@ -27,7 +28,7 @@ Reasoning đa bước, tool calling, memory dài hạn, xử lý ảnh, tiện �
 
 Azuris là trợ lý AI cho Discord được xây dựng theo kiến trúc hướng sự kiện, kết hợp PostgreSQL, Redis Streams và các LLM endpoint có thể cấu hình. Bot hỗ trợ provider tương thích Google GenAI và OpenAI mà không hard-code pool API key vào ứng dụng.
 
-Dự án hướng tới self-host trên Windows hoặc Linux. PostgreSQL và Redis có thể chạy trong local runtime của repository nên không bắt buộc phải cài Docker.
+Dự án chạy chuẩn bằng **Docker Compose**: một bot duy nhất, PostgreSQL 16 và Redis 7. Mọi dữ liệu persistent đều nằm **ngoài** image — file bot trong thư mục host tương đối (`./data`, `./uploaded_files`, `./logs`), nội dung database trong folder host `./data/postgres` kèm file seed portable (`./data/db_seed/azuris.sql`) — nên clone repo sang máy khác (Windows hay Linux) vẫn ra đúng database cũ thay vì database trống.
 
 ## Điểm nổi bật
 
@@ -64,54 +65,61 @@ flowchart LR
 
 Xem bản đồ module và data flow đầy đủ tại [docs/architecture.md](docs/architecture.md).
 
-## Cài đặt nhanh
+## Cài đặt nhanh (Docker — chuẩn)
 
 ### Yêu cầu
 
-- Python 3.10 trở lên
-- Windows 10/11 hoặc Linux
+- Docker Desktop (Windows/macOS) hoặc Docker Engine + Compose plugin (Linux)
 - Discord bot token
-- PostgreSQL 16 và Redis, chạy local hoặc bên ngoài
-- Ít nhất một LLM endpoint đã cấu hình
+- Ít nhất một LLM endpoint (cấu hình sau lần start đầu bằng `/endpoint config`)
 
-### Windows
+### Chạy
 
 ```powershell
-python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1
-python -m pip install -r requirements.txt
-
-powershell -ExecutionPolicy Bypass -File .\\install_services.ps1
 Copy-Item .env.example .env
-# Mở .env và điền các secret cần thiết.
+# Mở .env: điền DISCORD_TOKEN, ADMIN_IDS, AZURIS_DB_PASSWORD (ký tự URL-safe [A-Za-z0-9_-]), DONATE_ENCRYPTION_KEY...
 
-powershell .\\run_bot.ps1 --preflight-only
-powershell .\\run_bot.ps1 --server
+docker compose up -d --build
+docker compose logs -f bot
 ```
 
-Dừng bot và hạ tầng local:
+Kiểm tra: `docker compose ps` — cả ba service phải `healthy`, log bot kết thúc bằng `is online and ready!`.
+
+Dừng: `docker compose down` (giữ data). Reset toàn bộ (seed lại DB từ file): tắt stack, xóa nội dung `data/postgres`, rồi `up` lại.
+
+### Data nằm ở đâu
+
+| Trong container | Thực tế (host, đường dẫn tương đối) | Ghi chú |
+| --- | --- | --- |
+| `/app/data`, `/app/uploaded_files`, `/app/logs` | `./data`, `./uploaded_files`, `./logs` | Bind mount — nhìn thấy trên host, không vào image |
+| `/app/assets/encrypted` | `./assets/encrypted` | Mount read-only (QR donate) |
+| Thư mục data PostgreSQL | `./data/postgres` (bind) + `./data/db_seed/azuris.sql` | File seed bung full DB khi folder data còn trống |
+
+Refresh file seed từ stack đang chạy:
 
 ```powershell
-powershell .\\stop_bot.ps1
-powershell .\\stop_infra.ps1
+docker compose exec -T postgres pg_dump -U azuris -d azuris --no-owner --no-privileges --clean --if-exists -F p -f /tmp/seed.sql
+docker cp azuris-postgres-1:/tmp/seed.sql data/db_seed/azuris.sql
 ```
 
-### Linux
+### Image container (GHCR) & deploy máy khác
+
+CI build image bot mỗi push lên `main` và tag `v*`, quét Trivy (chặn CRITICAL/HIGH sửa được), rồi push lên `ghcr.io/<owner>/<repo>` (`:latest`, `:<short-sha>`, `:vX.Y.Z`). PR chỉ build + scan, không push. Không cần Docker Hub — GHCR không giới hạn pull image của chính bạn, dùng luôn auth GitHub.
+
+Deploy máy khác (Linux/Windows):
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-
-chmod +x install_services.sh run_bot.sh stop_infra.sh
-./install_services.sh
-cp .env.example .env
-# Mở .env và điền các secret cần thiết.
-
-./run_bot.sh --preflight-only
-./run_bot.sh --pm2 --server
+cp .env.example .env   # điền DISCORD_TOKEN, ADMIN_IDS, AZURIS_DB_PASSWORD, ...
+# thêm: BOT_IMAGE=ghcr.io/<owner>/<repo>:latest
+docker compose pull
+docker compose up -d
 ```
+
+Lần start đầu DB bung từ `data/db_seed/azuris.sql`. Package private thì `docker login ghcr.io` trước (hoặc set public).
+
+### Chạy local không Docker (legacy)
+
+`run_bot.ps1` / `run_bot.sh` giữ lại cho dev không Docker, dùng `src/.runtime` đã có sẵn (binary portable PostgreSQL + Redis). Các script cấp phát hạ tầng (`install_services.*`, `stop_infra.*`) đã gỡ — xem [docs/deprecated.md](docs/deprecated.md).
 
 ## Cấu hình
 
@@ -122,11 +130,14 @@ Cấu hình tối thiểu:
 ```env
 DISCORD_TOKEN=your-discord-bot-token
 ADMIN_IDS=your-discord-user-id
-DATABASE_URL=postgresql://azuris@127.0.0.1:55432/azuris
-REDIS_URL=redis://127.0.0.1:6379/0
+AZURIS_DB_USER=azuris
+AZURIS_DB_PASSWORD=url-safe-password-cho-postgres-docker
+AZURIS_DB_NAME=azuris
 DONATE_ENCRYPTION_KEY=your-fernet-key
 WEATHER_API_KEY=your-weatherapi-key
 ```
+
+Trong Compose, `DATABASE_URL`/`REDIS_URL` bị override để trỏ sang service `postgres`/`redis` — giá trị trong `.env` chỉ dùng cho chạy local legacy.
 
 Tạo Fernet key:
 
@@ -164,6 +175,8 @@ OpenAI-compatible: http://127.0.0.1:58100/v1
 
 Loopback được cho phép để dùng router local. Link-local, cloud metadata và các đích private-network không an toàn bị chặn mặc định; xem ALLOW_PRIVATE_ENDPOINT_HOSTS nếu cần cho phép LAN tin cậy. Chi tiết tại [docs/endpoint_and_models.md](docs/endpoint_and_models.md).
 
+**Lưu ý Linux:** từ trong container bot, `127.0.0.1` là chính container đó, không phải host. Trỏ endpoint sang địa chỉ LAN của router hoặc đưa router vào chung mạng Compose.
+
 ## Các lệnh Discord
 
 | Nhóm | Lệnh |
@@ -181,7 +194,7 @@ python -m pytest -q
 python -m compileall -q src scripts tests
 ```
 
-CI chạy compile, test với PostgreSQL/Redis và secret scan cho mỗi pull request. Bộ test hiện tại có 171 test pass.
+CI chạy compile, test với PostgreSQL/Redis và secret scan cho mỗi pull request.
 
 ## Lưu ý bảo mật
 
