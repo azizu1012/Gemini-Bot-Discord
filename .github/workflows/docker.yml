@@ -100,6 +100,9 @@ jobs:
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # pip ship SBOM của deps vendored (chỉ dùng lúc build, bot không
+          # chạy pip ở runtime): bỏ qua file này, vẫn quét dist-info thật.
+          skip-files: usr/local/lib/python3.12/site-packages/pip/_vendor/bom.cdx.json
           exit-code: '1'
 
       - name: Trivy scan pushed image (fail on fixable CRITICAL/HIGH)
@@ -110,4 +113,6 @@ jobs:
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          # Xem chú thích skip-files ở bước PR.
+          skip-files: usr/local/lib/python3.12/site-packages/pip/_vendor/bom.cdx.json
           exit-code: '1'
