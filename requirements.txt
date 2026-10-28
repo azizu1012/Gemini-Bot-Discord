@@ -7,6 +7,7 @@ ddgs==9.14.4
 discord.py==2.6.4
 exa-py==2.13.0
 google-genai==2.33.0
+jaraco.context==6.1.0
 lxml==6.1.1
 msgpack==1.2.3
 openai==2.38.0
@@ -19,3 +20,4 @@ setuptools==78.1.1
 sympy==1.14.0
 tavily-python==0.7.24
 urllib3==2.8.0
+wheel==0.46.2
