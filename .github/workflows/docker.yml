@@ -75,8 +75,10 @@ jobs:
           context: .
           load: true
           tags: azuris-bot:pr-scan
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Không dùng GHA cache: từng ghi nhận cache phục vụ layer pip cũ
+          # (image chứa msgpack/urllib3/setuptools cũ dù requirements đã mới).
+          # Build tươi ~3-5 phút, đổi lấy tính đúng đắn tuyệt đối.
+          no-cache: true
 
       - name: Build and push
         id: build
@@ -87,8 +89,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Xem chú thích no-cache ở bước PR: tính đúng đắn > tốc độ.
+          no-cache: true
 
       - name: Trivy scan (fail on fixable CRITICAL/HIGH)
         if: github.event_name == 'pull_request'
