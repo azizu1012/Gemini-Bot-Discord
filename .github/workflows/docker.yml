@@ -85,7 +85,7 @@ jobs:
 
       - name: Trivy scan (fail on fixable CRITICAL/HIGH)
         if: github.event_name == 'pull_request'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: azuris-bot:pr-scan
           format: table
@@ -95,7 +95,7 @@ jobs:
 
       - name: Trivy scan pushed image (fail on fixable CRITICAL/HIGH)
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
           format: table
