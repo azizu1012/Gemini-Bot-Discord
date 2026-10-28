@@ -47,12 +47,16 @@ fi
 case "$cmd" in
   up)
     docker compose up -d --build
+    docker image prune -f >/dev/null
     docker compose ps
     ;;
   down) docker compose down ;;
   stop-bot) docker compose stop bot ;;
   stop-infra) docker compose stop postgres redis ;;
-  rebuild) docker compose up -d --build --force-recreate ;;
+  rebuild)
+    docker compose up -d --build --force-recreate
+    docker image prune -f >/dev/null
+    ;;
   restart)
     if [ "${#rest[@]}" -eq 0 ]; then docker compose restart bot
     else docker compose restart "${rest[@]}"; fi
@@ -81,6 +85,7 @@ case "$cmd" in
   update)
     docker compose pull
     docker compose up -d --build
+    docker image prune -f >/dev/null
     docker compose ps
     ;;
   *) echo 'Usage: ./run_bot.sh [up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update]'; exit 1 ;;

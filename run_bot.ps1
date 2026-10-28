@@ -65,12 +65,13 @@ if ($args.Count -ge 1) {
 switch ($cmd) {
     'up' {
         docker compose up -d --build
+        docker image prune -f | Out-Null
         docker compose ps
     }
     'down' { docker compose down }
     'stop-bot' { docker compose stop bot }
     'stop-infra' { docker compose stop postgres redis }
-    'rebuild' { docker compose up -d --build --force-recreate }
+    'rebuild' { docker compose up -d --build --force-recreate; docker image prune -f | Out-Null }
     'restart' {
         if ($rest.Count -eq 0) { docker compose restart bot }
         else { docker compose restart $rest }
@@ -101,6 +102,7 @@ switch ($cmd) {
     'update' {
         docker compose pull
         docker compose up -d --build
+        docker image prune -f | Out-Null
         docker compose ps
     }
     default { Show-Help }
