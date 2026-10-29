@@ -251,12 +251,32 @@ class MessageHandler:
         chunks = []
         current_text = text.strip()
 
+        def _in_code_fence(s: str, pos: int) -> bool:
+            # Le so fence ``` truoc pos => dang nam trong code block.
+            return s.count("```", 0, pos) % 2 == 1
+
         while len(current_text) > limit:
             split_idx = current_text.rfind('\n', 0, limit)
             if split_idx == -1:
                 split_idx = current_text.rfind(' ', 0, limit)
             if split_idx == -1 or split_idx <= 0:
                 split_idx = limit
+
+            # Khong cat giua code block (bang ASCII/table sau normalize).
+            # Neu diem cat nam trong fence, lui ve newline truoc fence mo.
+            if _in_code_fence(current_text, split_idx):
+                fence_start = current_text.rfind("```", 0, split_idx)
+                safe = current_text.rfind('\n', 0, fence_start)
+                if safe > 0:
+                    split_idx = safe
+                else:
+                    # Bang qua dai > limit: buoc phai cat, dong fence tam
+                    # de chunk hien tai van render dung tren client.
+                    chunk = current_text[:split_idx].strip() + "\n```"
+                    chunks.append(chunk)
+                    rest = current_text[split_idx:].strip()
+                    current_text = ("```\n" + rest) if rest else rest
+                    continue
 
             chunk = current_text[:split_idx].strip()
             if chunk:

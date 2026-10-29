@@ -127,7 +127,9 @@ First start restores the full DB from `data/db_seed/azuris.sql`. If the package 
 .\run_bot.ps1 ps           # status + RAM usage per service
 ```
 
-Full command list: `up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update`. `down` stops everything but keeps data; emptying `data/postgres` + `up` reseeds the DB from file.
+Full command list: `up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update|clean`. `down` stops everything but keeps data; emptying `data/postgres` + `up` reseeds the DB from file. After editing code (`src/`, `run_bot.py`, `main.py`), run `rebuild` — plain `up` reuses the existing image and will NOT pick up code changes.
+- `rebuild` (menu 8): rebuilds the bot image from current code and recreates containers. Data is kept. Afterwards only the superseded untagged bot image is pruned — nothing else is deleted.
+- `update` (menu 11): pulls the latest `postgres`/`redis` images, then rebuilds the bot and recreates everything. Data is kept. Afterwards only dangling images are pruned.
 
 ### Legacy local run (removed)
 
@@ -202,6 +204,7 @@ Permissions are enforced through static admin/moderator configuration and databa
 ## Testing
 
 ```bash
+pip install -r requirements-test.txt
 python -m pytest -q
 python -m compileall -q src scripts tests
 ```

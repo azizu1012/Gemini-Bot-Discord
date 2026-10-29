@@ -129,7 +129,9 @@ Lần start đầu DB bung từ `data/db_seed/azuris.sql`. Package private thì 
 .\run_bot.ps1 ps           # trạng thái + RAM từng service
 ```
 
-Đủ lệnh: `up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update`. `down` tắt hết nhưng giữ data; xóa `data/postgres` + `up` sẽ seed lại DB từ file.
+Đủ lệnh: `up|down|stop-bot|stop-infra|rebuild|restart|logs [svc]|ps|seed|backup|update|clean`. `down` tắt hết nhưng giữ data; xóa `data/postgres` + `up` sẽ seed lại DB từ file. Sau khi sửa code (`src/`, `run_bot.py`, `main.py`) phải chạy `rebuild` — `up` thường tái dùng image cũ nên code mới KHÔNG có hiệu lực.
+- `rebuild` (menu 8): build lại image bot từ code hiện tại rồi recreate container. Data giữ nguyên. Xong chỉ xóa đúng bản image bot cũ bị rớt tag (dangling), không xóa gì khác.
+- `update` (menu 11): pull image `postgres`/`redis` mới nhất, rồi build lại bot và recreate toàn bộ. Data giữ nguyên. Xong chỉ xóa image mồ côi (dangling).
 
 ### Chạy local không Docker (đã gỡ)
 
@@ -204,6 +206,7 @@ Quyền được kiểm soát bằng cấu hình admin/moderator tĩnh kết h�
 ## Kiểm thử
 
 ```bash
+pip install -r requirements-test.txt
 python -m pytest -q
 python -m compileall -q src scripts tests
 ```

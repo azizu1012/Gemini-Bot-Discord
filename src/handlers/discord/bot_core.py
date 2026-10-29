@@ -17,7 +17,7 @@ from src.database.repository import DatabaseRepository
 from src.managers.cleanup_manager import CleanupManager
 from src.services.health_checker import get_health_checker
 from src.services.redis_service import RedisStreamService, RedisStreamConsumer
-from src.services.formatting.latex_normalizer import normalize_latex_for_unsupported_client
+from src.services.formatting import normalize_for_plain_client
 from src.voice import VoiceLockManager, RoomLockService, RoomToolsService
 
 # Import Slash Commands Registration
@@ -486,7 +486,7 @@ class BotCore:
                 if interaction:
                     self.logger.info(f"Delivering slash_reply for interaction {interaction_id} to user {interaction.user.id}")
                     if content:
-                        content = normalize_latex_for_unsupported_client(content)
+                        content = normalize_for_plain_client(content)
                     content = await self._sanitize_mentions(content or "", interaction.channel, payload.get("allow_user_mentions") or [])  # type: ignore[arg-type]
                     if files:
                         await interaction.followup.send(content=content, embed=embed, files=files, ephemeral=ephemeral)  # type: ignore[arg-type]
@@ -576,7 +576,7 @@ class BotCore:
 
         content = payload.get("content")
         if content:
-            content = normalize_latex_for_unsupported_client(content)
+            content = normalize_for_plain_client(content)
         allow_user_mentions = payload.get("allow_user_mentions") or []
         content = await self._sanitize_mentions(content, channel, allow_user_mentions)  # type: ignore[arg-type]
         ref_id_str = payload.get("reference_message_id")
@@ -661,7 +661,7 @@ class BotCore:
                 continue
             content = item.get("content")
             if content:
-                content = normalize_latex_for_unsupported_client(content)
+                content = normalize_for_plain_client(content)
             content = await self._sanitize_mentions(content, channel, allow_user_mentions)  # type: ignore[arg-type]
             sent_ok = False
             if idx == 0 and chunk_total == 1 and mode_hint == "edit_then_batch":

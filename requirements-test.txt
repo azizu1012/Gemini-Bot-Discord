@@ -1,0 +1,5 @@
+# Test-only deps — KHONG dua vao image prod (Dockerfile chi cai requirements.txt).
+# Cai khi chay test local:  pip install -r requirements-test.txt
+-r requirements.txt
+pytest==9.0.3
+pytest-asyncio==1.4.1
