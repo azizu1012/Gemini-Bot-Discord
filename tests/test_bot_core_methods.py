@@ -1,0 +1,207 @@
+"""Offline tests for BotCore permission/autocomplete/mention/queue helpers."""
+import sys
+from unittest.mock import AsyncMock, MagicMock
+
+import discord
+import pytest
+
+sys.path.insert(0, ".")
+
+from src.handlers.discord.bot_core import BotCore
+
+
+class NullLogger:
+    def info(self, *a, **k):
+        pass
+
+    def warning(self, *a, **k):
+        pass
+
+    def error(self, *a, **k):
+        pass
+
+
+def make_bc():
+    bc = object.__new__(BotCore)
+    bc.config = MagicMock()
+    bc.config.ADMIN_USER_IDS = ["1000"]
+    bc.config.MODERATOR_USER_IDS = ["2000"]
+    bc.logger = NullLogger()
+    bc.db_repo = MagicMock()
+    bc.bot = MagicMock()
+    bc._outgoing_queues = {}
+    bc._outgoing_senders = {}
+    bc.active_typing_tasks = {}
+    bc._active_user_locks = {}
+    bc._redis_client = None
+    bc.voice_lock_manager = MagicMock()
+    bc.voice_lock_manager.locked_channels = set()
+    return bc
+
+
+# ---------------- permission helpers ----------------
+@pytest.mark.asyncio
+async def test_is_admin_user_static():
+    bc = make_bc()
+    assert await bc._is_admin_user("1000") is True
+    bc.db_repo.is_admin_user.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_is_admin_user_db_fallback():
+    bc = make_bc()
+    bc.db_repo.is_admin_user = AsyncMock(return_value=True)
+    assert await bc._is_admin_user("9999") is True
+    bc.db_repo.is_admin_user.assert_awaited_once_with("9999")
+
+
+@pytest.mark.asyncio
+async def test_is_moderator_user_static():
+    bc = make_bc()
+    assert await bc._is_moderator_user("2000") is True
+    bc.db_repo.is_moderator_user.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_is_moderator_user_db_fallback():
+    bc = make_bc()
+    bc.db_repo.is_moderator_user = AsyncMock(return_value=False)
+    assert await bc._is_moderator_user("8888") is False
+    bc.db_repo.is_moderator_user.assert_awaited_once_with("8888")
+
+
+# ---------------- autocomplete ----------------
+@pytest.mark.asyncio
+async def test_voice_channel_autocomplete_filters():
+    bc = make_bc()
+    interaction = MagicMock()
+    guild = MagicMock()
+    vc = MagicMock(spec=discord.VoiceChannel)
+    vc.id = 1
+    vc.name = "Gaming"
+    sc = MagicMock(spec=discord.StageChannel)
+    sc.id = 2
+    sc.name = "Stage"
+    tc = MagicMock(spec=discord.TextChannel)
+    tc.id = 3
+    tc.name = "Text"
+    guild.channels = [vc, sc, tc]
+    interaction.guild = guild
+    result = await bc._voice_channel_autocomplete(interaction, "gam")
+    assert len(result) == 1
+    assert result[0].value == "1"
+
+
+@pytest.mark.asyncio
+async def test_member_autocomplete_skips_bots():
+    bc = make_bc()
+    interaction = MagicMock()
+    guild = MagicMock()
+    m1 = MagicMock()
+    m1.bot = False
+    m1.display_name = "Alice"
+    m1.id = 10
+    m2 = MagicMock()
+    m2.bot = True
+    m2.display_name = "Botty"
+    guild.members = [m1, m2]
+    interaction.guild = guild
+    result = await bc._member_autocomplete(interaction, "ali")
+    assert len(result) == 1
+    assert result[0].value == "10"
+
+
+# ---------------- display name ----------------
+@pytest.mark.asyncio
+async def test_resolve_user_display_name_from_guild_member():
+    bc = make_bc()
+    channel = MagicMock()
+    guild = MagicMock()
+    member = MagicMock()
+    member.display_name = "Bob"
+    guild.get_member = MagicMock(return_value=member)
+    channel.guild = guild
+    assert await bc._resolve_user_display_name(5, channel) == "Bob"
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_display_name_fallback_user():
+    bc = make_bc()
+    user = MagicMock()
+    user.display_name = "Carol"
+    bc.bot.get_user = MagicMock(return_value=user)
+    assert await bc._resolve_user_display_name(7, None) == "Carol"
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_display_name_no_user():
+    bc = make_bc()
+    bc.bot.get_user = MagicMock(return_value=None)
+    bc.bot.fetch_user = AsyncMock(return_value=None)
+    assert await bc._resolve_user_display_name(9, None) == "User 9"
+
+
+# ---------------- sanitize mentions ----------------
+@pytest.mark.asyncio
+async def test_sanitize_mentions_replaces_everyone_and_roles():
+    bc = make_bc()
+    bc._resolve_user_display_name = AsyncMock(return_value="Bob")
+    guild = MagicMock()
+    role = MagicMock()
+    role.name = "Moderators"
+    guild.get_role = MagicMock(return_value=role)
+    channel = MagicMock()
+    channel.guild = guild
+    content = "hello @everyone <@&123> <@999>"
+    result = await bc._sanitize_mentions(content, channel, allow_user_mentions=["999"])
+    assert "everyone" in result
+    assert "Moderators" in result
+    assert "<@999>" in result  # allowed mention kept as-is
+
+
+@pytest.mark.asyncio
+async def test_sanitize_mentions_empty_returns_none():
+    bc = make_bc()
+    assert await bc._sanitize_mentions(None, None) is None
+    assert await bc._sanitize_mentions("", None) == ""
+
+
+# ---------------- queues ----------------
+def test_get_outgoing_queue_creates_and_caches():
+    bc = make_bc()
+    q1 = bc._get_outgoing_queue("u1")
+    q2 = bc._get_outgoing_queue("u1")
+    assert q1 is q2
+    assert q1.empty()  # freshly created
+
+
+@pytest.mark.asyncio
+async def test_ensure_sender_task_creates():
+    bc = make_bc()
+    bc._outgoing_sender_loop = AsyncMock()
+    bc._ensure_sender_task("u1")
+    assert "u1" in bc._outgoing_senders
+
+
+def test_ensure_sender_task_skips_existing_active():
+    bc = make_bc()
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    bc._outgoing_senders["u1"] = task
+    bc._ensure_sender_task("u1")
+    assert bc._outgoing_senders["u1"] is task
+
+
+def test_cancel_typing_task_cancels():
+    bc = make_bc()
+    task = MagicMock()
+    bc.active_typing_tasks["u1"] = task
+    bc._cancel_typing_task("u1")
+    task.cancel.assert_called_once()
+    assert "u1" not in bc.active_typing_tasks
+
+
+def test_cancel_typing_task_no_task():
+    bc = make_bc()
+    bc._cancel_typing_task("u1")
+    # no exception

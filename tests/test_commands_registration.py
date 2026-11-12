@@ -9,6 +9,7 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from discord import app_commands
 
 sys.path.insert(0, ".")
@@ -173,3 +174,92 @@ def test_on_app_command_error_generic_done(monkeypatch):
     asyncio.run(run())
     interaction.followup.send.assert_awaited_once()
     assert "boom" in interaction.followup.send.call_args[0][0]
+
+
+def _find_registered(tree, name):
+    for func in tree._cmd.registered:
+        if getattr(func, "__name__", "") == name:
+            return func
+    return None
+
+
+@pytest.mark.asyncio
+async def test_allow_member_handler_adds_to_whitelist(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    # set up room_lock_service
+    room_lock_service = MagicMock()
+    room_lock_service.whitelist = MagicMock()
+    room_lock_service.grant_access = AsyncMock(return_value=2)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+
+    handler = _find_registered(tree, "allow_member")
+    assert handler is not None
+
+    interaction = MagicMock()
+    interaction.user.id = 1000
+    interaction.response.send_message = AsyncMock()
+    member = MagicMock()
+    member.id = 5000
+    member.mention = "<@5000>"
+    member.display_name = "Alice"
+
+    await handler(interaction, member)
+    room_lock_service.whitelist.add.assert_called_once_with(5000, "Alice")
+    room_lock_service.grant_access.assert_awaited_once_with(member)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_remove_member_handler_removes_from_whitelist(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.whitelist = MagicMock()
+    room_lock_service.whitelist.contains = MagicMock(return_value=True)
+    room_lock_service.revoke_access = AsyncMock(return_value=1)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+
+    handler = _find_registered(tree, "allow_remove_member")
+    assert handler is not None
+
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    member = MagicMock()
+    member.id = 5000
+    member.mention = "<@5000>"
+
+    await handler(interaction, member)
+    room_lock_service.whitelist.remove.assert_called_once_with(5000)
+    room_lock_service.revoke_access.assert_awaited_once_with(member)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_allow_member_handler_self_returns(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.whitelist = MagicMock()
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+
+    handler = _find_registered(tree, "allow_member")
+    assert handler is not None
+
+    interaction = MagicMock()
+    interaction.user.id = 5000
+    interaction.response.send_message = AsyncMock()
+    member = MagicMock()
+    member.id = 5000  # same as user -> early return
+
+    await handler(interaction, member)
+    room_lock_service.whitelist.add.assert_not_called()
