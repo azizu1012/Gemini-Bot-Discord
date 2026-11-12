@@ -765,3 +765,22 @@ async def test_reset_all_slash(monkeypatch):
     interaction = _interaction()
     await handler(interaction)
     interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_check_non_premium(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_premium_user = AsyncMock(return_value=False)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "premium_slash")
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "check"
+    user = MagicMock()
+    user.id = 6000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    assert "chưa có Premium" in interaction.followup.send.call_args[0][0]
