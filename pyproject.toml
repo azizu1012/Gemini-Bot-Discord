@@ -3,6 +3,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+# Use a repo-local tmp base so `tmp_path` doesn't depend on the OS temp dir
+# (and to avoid permission issues with locked system temp directories).
+addopts = "--basetemp=.pytest_tmp"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

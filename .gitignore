@@ -47,6 +47,10 @@ uploaded_files/
 # Cache
 .cache/
 *.cache
+.pytest_tmp/
+.coverage
+htmlcov/
+coverage.xml
 
 # PID files
 *.pid
