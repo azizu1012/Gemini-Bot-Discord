@@ -886,3 +886,23 @@ async def test_endpoint_models_not_configured(monkeypatch):
     interaction = _interaction()
     await handler(interaction)
     interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_check_dynamic_mod(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    bot_core.db_repo.is_admin_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_moderator_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "check"
+    user = MagicMock()
+    user.id = 7000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    assert "Moderator" in interaction.followup.send.call_args[0][0]
