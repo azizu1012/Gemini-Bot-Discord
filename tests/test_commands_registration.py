@@ -784,3 +784,29 @@ async def test_premium_slash_check_non_premium(monkeypatch):
     user.display_name = "Bob"
     await handler(interaction, action, user)
     assert "chưa có Premium" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_by_hash(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.demote_global_note_by_id_db = AsyncMock(return_value=False)
+    bot_core.db_repo.demote_global_fact_hash_db = AsyncMock(return_value=2)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "global_note_demote_slash")
+    interaction = _interaction()
+    await handler(interaction, "abc123")
+    assert "Demoted 2" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_no_match(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.demote_global_note_by_id_db = AsyncMock(return_value=False)
+    bot_core.db_repo.demote_global_fact_hash_db = AsyncMock(return_value=0)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "global_note_demote_slash")
+    interaction = _interaction()
+    await handler(interaction, "xyz")
+    assert "Không tìm thấy" in interaction.followup.send.call_args[0][0]
