@@ -7,11 +7,12 @@ import pytest
 
 sys.path.insert(0, ".")
 
+from src.handlers.discord.bot_core import BotCore
+
+
 async def _async_iter(items):
     for it in items:
         yield it
-
-from src.handlers.discord.bot_core import BotCore
 
 
 class NullLogger:
