@@ -47,6 +47,29 @@ class Config:
             value = min(max_value, value)
         return value
 
+    @staticmethod
+    def _get_float(
+        name: str,
+        default: float,
+        min_value: Optional[float] = None,
+        max_value: Optional[float] = None,
+    ) -> float:
+        raw = (os.getenv(name) or "").strip()
+        try:
+            value = float(raw) if raw else default
+        except ValueError:
+            value = default
+        if min_value is not None:
+            value = max(min_value, value)
+        if max_value is not None:
+            value = min(max_value, value)
+        return value
+
+    @staticmethod
+    def _get_str(name: str, default: str = "") -> str:
+        raw = (os.getenv(name) or "").strip()
+        return raw if raw else default
+
     def __init__(self):
         self.PROJECT_ROOT = _detect_project_root()
         _load_runtime_env(self.PROJECT_ROOT)
@@ -60,7 +83,7 @@ class Config:
         self.WEATHER_CACHE_PATH = self._resolve_runtime_path("WEATHER_CACHE_PATH", "data/weather_cache.json")
         self.FILE_STORAGE_PATH = self._resolve_runtime_path("FILE_STORAGE_PATH", "uploaded_files")
         self.FILE_CHUNK_DIR = self._resolve_runtime_path("FILE_CHUNK_DIR", "data/file_chunks")
-        self.LOG_PATH = self._resolve_runtime_path("BOT_LOG_PATH", "bot.log")
+        self.LOG_PATH = self._resolve_runtime_path("BOT_LOG_PATH", "logs/bot.log")
 
         # --- VOICE ROOM OWNER LOCK ---
         self.VOICE_LOCK_BASE_DIR = self._resolve_runtime_path("VOICE_LOCK_BASE_DIR", "data/voice_lock")
@@ -82,6 +105,7 @@ class Config:
         # --- DONATE ENCRYPTION ---
         self.DONATE_ENCRYPTION_KEY = os.getenv("DONATE_ENCRYPTION_KEY", "")
         self.ALLOW_PLAINTEXT_ENDPOINT_KEYS = self._get_bool("ALLOW_PLAINTEXT_ENDPOINT_KEYS", False)
+        self.ALLOW_PRIVATE_ENDPOINT_HOSTS = self._get_bool("ALLOW_PRIVATE_ENDPOINT_HOSTS", False)
 
         # --- GEMINI TIMEOUT (endpoint/key cấu hình qua /endpoint, lưu PostgreSQL) ---
         self.GEMINI_TIMEOUT_MS = self._get_int("GEMINI_TIMEOUT_MS", 60000, min_value=5000)
@@ -138,6 +162,31 @@ class Config:
 
         # --- SEARCH TUNING ---
         self.MAX_SEARCH_CALLS_PER_TURN = self._get_int("MAX_SEARCH_CALLS_PER_TURN", 5, min_value=1, max_value=20)
+        self.SEARCH_PARALLEL_STREAMS = self._get_int("SEARCH_PARALLEL_STREAMS", 1, min_value=1, max_value=2)
+        self.SEARCH_FALLBACK_PROVIDER_LIMIT = self._get_int("SEARCH_FALLBACK_PROVIDER_LIMIT", 2, min_value=1, max_value=4)
+        self.SEARCH_INTENT_BATCH_SIZE = self._get_int("SEARCH_INTENT_BATCH_SIZE", 3, min_value=1, max_value=5)
+        self.SEARCH_WEB_MODE = self._get_str("SEARCH_WEB_MODE", "grounded").lower()
+        self.SEARCH_GROUNDED_TOP_LINKS = self._get_int("SEARCH_GROUNDED_TOP_LINKS", 3, min_value=1, max_value=8)
+        self.SEARCH_TOP_RESULTS_LIMIT = self._get_int("SEARCH_TOP_RESULTS_LIMIT", 5, min_value=1, max_value=10)
+        self.SEARCH_MIN_QUALITY_SOURCES = self._get_int("SEARCH_MIN_QUALITY_SOURCES", 1, min_value=1, max_value=5)
+        self.SEARCH_TIME_SENSITIVE_MIN_QUALITY_SOURCES = self._get_int(
+            "SEARCH_TIME_SENSITIVE_MIN_QUALITY_SOURCES", 2, min_value=1, max_value=6
+        )
+        self.SEARCH_SUBTASKS_ENABLED = self._get_bool("SEARCH_SUBTASKS_ENABLED", False)
+        self.SEARCH_SUBTASK_TIMEOUT_SEC = self._get_int("SEARCH_SUBTASK_TIMEOUT_SEC", 15, min_value=3, max_value=60)
+        self.SEARCH_DEEP_READ_TOP_LINKS = self._get_int("SEARCH_DEEP_READ_TOP_LINKS", 2, min_value=0, max_value=5)
+        self.SEARCH_DEEP_READ_MAX_CHARS = self._get_int("SEARCH_DEEP_READ_MAX_CHARS", 1800, min_value=400, max_value=8000)
+        self.SEARCH_EXA_AUTOPROMPT = self._get_bool("SEARCH_EXA_AUTOPROMPT", False)
+        self.SEARCH_SEMANTIC_CACHE_ENABLED = self._get_bool("SEARCH_SEMANTIC_CACHE_ENABLED", True)
+        self.SEARCH_GENERAL_CACHE_TTL_SEC = self._get_int("SEARCH_GENERAL_CACHE_TTL_SEC", 21600, min_value=60, max_value=86400 * 7)
+        self.SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC = self._get_int("SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC", 1800, min_value=30, max_value=86400)
+        self.SEARCH_FAILED_QUERY_COOLDOWN_SEC = self._get_int("SEARCH_FAILED_QUERY_COOLDOWN_SEC", 15, min_value=0, max_value=300)
+        self.SEARCH_EMPTY_EVIDENCE_CACHE_TTL_SEC = self._get_int("SEARCH_EMPTY_EVIDENCE_CACHE_TTL_SEC", 600, min_value=60, max_value=86400)
+
+        # --- REDIS STREAM TUNING ---
+        self.REDIS_PUBLISH_MAX_RETRIES = self._get_int("REDIS_PUBLISH_MAX_RETRIES", 3, min_value=1)
+        self.REDIS_PUBLISH_RETRY_BASE_DELAY = self._get_float("REDIS_PUBLISH_RETRY_BASE_DELAY", 0.25, min_value=0.05)
+        self.REDIS_STREAM_MAXLEN = self._get_int("REDIS_STREAM_MAXLEN", 100000, min_value=1000)
 
     def _resolve_runtime_path(self, env_name: str, default_relative_path: str) -> str:
         raw_path = (os.getenv(env_name) or "").strip()

@@ -1,6 +1,5 @@
 """Unit tests for modular database repository and mixins."""
 
-import pytest
 from src.database.repository import DatabaseRepository
 from src.database.mixins import (
     SchemaMixin,

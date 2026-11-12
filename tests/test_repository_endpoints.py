@@ -4,7 +4,6 @@ Chạy offline, KHÔNG cần PostgreSQL thật. Dùng FakePool/FakeConn mô ph�
 truy vấn asyncpg để kiểm chứng hành vi repository (thêm/sửa/đọc/active
 endpoint + model slots). Phù hợp chạy trong CI không có hạ tầng DB.
 """
-import asyncio
 import os
 import sys
 from contextlib import asynccontextmanager

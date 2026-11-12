@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Dict, List, Optional
 
-from src.core.config import config, logger
+from src.core.config import Config, config, logger
 from src.tools.search.engine import SearchEngine
 from src.tools.builtin.calculator import CalculatorService
 from src.tools.builtin.weather import WeatherService
@@ -66,142 +65,67 @@ class ToolsManager:
     # ── Config loaders ─────────────────────────────────────
 
     def _load_google_search_streams(self) -> int:
-        raw = os.getenv("SEARCH_PARALLEL_STREAMS", "").strip()
-        if not raw:
-            legacy = os.getenv("GOOGLE_SEARCH_STREAMS", "").strip()
-            if legacy:
-                self.logger.warning(
-                    "GOOGLE_SEARCH_STREAMS đã đổi tên thành SEARCH_PARALLEL_STREAMS; "
-                    "biến cũ vẫn được đọc trong bản này."
-                )
-                raw = legacy
-        if not raw:
-            raw = "1"
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 1
-        return max(1, min(2, value))
+        if Config._get_str("SEARCH_PARALLEL_STREAMS"):
+            return Config._get_int("SEARCH_PARALLEL_STREAMS", 1, min_value=1, max_value=2)
+        if Config._get_str("GOOGLE_SEARCH_STREAMS"):
+            self.logger.warning(
+                "GOOGLE_SEARCH_STREAMS đã đổi tên thành SEARCH_PARALLEL_STREAMS; "
+                "biến cũ vẫn được đọc trong bản này."
+            )
+            return Config._get_int("GOOGLE_SEARCH_STREAMS", 1, min_value=1, max_value=2)
+        return 1
 
     def _load_fallback_provider_limit(self) -> int:
-        raw = os.getenv("SEARCH_FALLBACK_PROVIDER_LIMIT", "2").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 2
-        return max(1, min(4, value))
+        return Config._get_int("SEARCH_FALLBACK_PROVIDER_LIMIT", 2, min_value=1, max_value=4)
 
     def _load_intent_batch_size(self) -> int:
-        raw = os.getenv("SEARCH_INTENT_BATCH_SIZE", "3").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 3
-        return max(1, min(5, value))
+        return Config._get_int("SEARCH_INTENT_BATCH_SIZE", 3, min_value=1, max_value=5)
 
     def _load_search_web_mode(self) -> str:
-        raw = (os.getenv("SEARCH_WEB_MODE", "grounded") or "").strip().lower()
-        if raw in {"grounded", "summary", "snippet", "links"}:
-            return raw
-        return "grounded"
+        raw = Config._get_str("SEARCH_WEB_MODE", "grounded").lower()
+        return raw if raw in {"grounded", "summary", "snippet", "links"} else "grounded"
 
     def _load_search_grounded_top_links(self) -> int:
-        raw = os.getenv("SEARCH_GROUNDED_TOP_LINKS", "3").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 3
-        return max(1, min(8, value))
+        return Config._get_int("SEARCH_GROUNDED_TOP_LINKS", 3, min_value=1, max_value=8)
 
     def _load_search_top_results_limit(self) -> int:
-        raw = os.getenv("SEARCH_TOP_RESULTS_LIMIT", "5").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 5
-        return max(1, min(10, value))
+        return Config._get_int("SEARCH_TOP_RESULTS_LIMIT", 5, min_value=1, max_value=10)
 
     def _load_min_quality_sources(self) -> int:
-        raw = os.getenv("SEARCH_MIN_QUALITY_SOURCES", "1").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 1
-        return max(1, min(5, value))
+        return Config._get_int("SEARCH_MIN_QUALITY_SOURCES", 1, min_value=1, max_value=5)
 
     def _load_time_sensitive_min_quality_sources(self) -> int:
-        raw = os.getenv("SEARCH_TIME_SENSITIVE_MIN_QUALITY_SOURCES", "2").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 2
-        return max(1, min(6, value))
+        return Config._get_int("SEARCH_TIME_SENSITIVE_MIN_QUALITY_SOURCES", 2, min_value=1, max_value=6)
 
     def _load_search_subtasks_enabled(self) -> bool:
-        raw = os.getenv("SEARCH_SUBTASKS_ENABLED", "false").strip().lower()
-        return raw in {"1", "true", "yes", "on"}
+        return Config._get_bool("SEARCH_SUBTASKS_ENABLED", False)
 
     def _load_search_subtask_timeout_seconds(self) -> int:
-        raw = os.getenv("SEARCH_SUBTASK_TIMEOUT_SEC", "15").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 15
-        return max(3, min(60, value))
+        return Config._get_int("SEARCH_SUBTASK_TIMEOUT_SEC", 15, min_value=3, max_value=60)
 
     def _load_deep_read_top_links(self) -> int:
-        raw = os.getenv("SEARCH_DEEP_READ_TOP_LINKS", "2").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 2
-        return max(0, min(5, value))
+        return Config._get_int("SEARCH_DEEP_READ_TOP_LINKS", 2, min_value=0, max_value=5)
 
     def _load_deep_read_max_chars(self) -> int:
-        raw = os.getenv("SEARCH_DEEP_READ_MAX_CHARS", "1800").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 1800
-        return max(400, min(8000, value))
+        return Config._get_int("SEARCH_DEEP_READ_MAX_CHARS", 1800, min_value=400, max_value=8000)
 
     def _load_exa_autoprompt(self) -> bool:
-        return os.getenv("SEARCH_EXA_AUTOPROMPT", "false").strip().lower() in {"1", "true", "yes", "on"}
+        return Config._get_bool("SEARCH_EXA_AUTOPROMPT", False)
 
     def _load_search_semantic_cache_enabled(self) -> bool:
-        return os.getenv("SEARCH_SEMANTIC_CACHE_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+        return Config._get_bool("SEARCH_SEMANTIC_CACHE_ENABLED", True)
 
     def _load_search_general_cache_ttl_seconds(self) -> int:
-        raw = os.getenv("SEARCH_GENERAL_CACHE_TTL_SEC", "21600").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 21600
-        return max(60, min(86400 * 7, value))
+        return Config._get_int("SEARCH_GENERAL_CACHE_TTL_SEC", 21600, min_value=60, max_value=86400 * 7)
 
     def _load_search_time_sensitive_cache_ttl_seconds(self) -> int:
-        raw = os.getenv("SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC", "1800").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 1800
-        return max(30, min(86400, value))
+        return Config._get_int("SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC", 1800, min_value=30, max_value=86400)
 
     def _load_search_failed_query_cooldown_seconds(self) -> int:
-        raw = os.getenv("SEARCH_FAILED_QUERY_COOLDOWN_SEC", "15").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 15
-        return max(0, min(300, value))
+        return Config._get_int("SEARCH_FAILED_QUERY_COOLDOWN_SEC", 15, min_value=0, max_value=300)
 
     def _load_search_empty_evidence_cache_ttl_seconds(self) -> int:
-        raw = os.getenv("SEARCH_EMPTY_EVIDENCE_CACHE_TTL_SEC", "600").strip()
-        try:
-            value = int(raw)
-        except ValueError:
-            value = 600
-        return max(60, min(86400, value))
+        return Config._get_int("SEARCH_EMPTY_EVIDENCE_CACHE_TTL_SEC", 600, min_value=60, max_value=86400)
 
     # ── Mention tracking ───────────────────────────────────
 

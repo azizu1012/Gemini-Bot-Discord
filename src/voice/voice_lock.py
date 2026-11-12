@@ -5,11 +5,10 @@ from __future__ import annotations
 import datetime
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 from discord import app_commands
 from src.voice.store import LockStore, WhitelistStore
-from src.voice.models import LockRecord
 
 
 class VoiceLockManager:

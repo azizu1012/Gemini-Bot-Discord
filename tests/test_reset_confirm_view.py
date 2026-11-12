@@ -1,6 +1,5 @@
 """Tests for ConfirmActionView used by /reset-chat and /reset-all."""
 
-import asyncio
 from typing import Optional
 from unittest.mock import AsyncMock
 

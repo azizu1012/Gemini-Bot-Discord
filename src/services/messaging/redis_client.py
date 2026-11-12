@@ -1,10 +1,10 @@
 import asyncio
 import json
 import os
-from typing import Any, Dict, Optional, AsyncIterator
+from typing import Any, Dict, Optional
 
 from redis.asyncio import Redis  # type: ignore[reportMissingImports]
-from src.core.config import logger
+from src.core.config import Config, logger
 
 
 class _RedisMsg:
@@ -221,9 +221,9 @@ class RedisStreamService:
             self.logger.error(f"Cannot publish to stream '{stream}': Redis not connected")
             return False
 
-        max_attempts = max(1, int(os.getenv("REDIS_PUBLISH_MAX_RETRIES", "3") or 3))
-        base_delay = max(0.05, float(os.getenv("REDIS_PUBLISH_RETRY_BASE_DELAY", "0.25") or 0.25))
-        stream_maxlen = int(os.getenv("REDIS_STREAM_MAXLEN", "100000"))
+        max_attempts = Config._get_int("REDIS_PUBLISH_MAX_RETRIES", 3, min_value=1)
+        base_delay = Config._get_float("REDIS_PUBLISH_RETRY_BASE_DELAY", 0.25, min_value=0.05)
+        stream_maxlen = Config._get_int("REDIS_STREAM_MAXLEN", 100000, min_value=1000)
         user_id = payload.get("user_id") or key or "unknown"
         msg_id = payload.get("message_id") or payload.get("interaction_id") or payload.get("reply_group_id") or "none"
         action = payload.get("action") or payload.get("type")

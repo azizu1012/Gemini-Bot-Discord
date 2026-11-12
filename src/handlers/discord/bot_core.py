@@ -1,11 +1,7 @@
 import asyncio
-import io
-import json
-import os
 import random
 import re
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import discord
@@ -57,8 +53,7 @@ class BotCore:
 
         # Khởi tạo Redis client tùy chọn cho cơ chế Centralized Lock khi scale ngang
         self._redis_client = None
-        import os
-        redis_url = os.getenv("REDIS_URL")
+        redis_url = Config._get_str("REDIS_URL", "")
         if redis_url:
             try:
                 import redis.asyncio as aioredis  # type: ignore[reportMissingImports]

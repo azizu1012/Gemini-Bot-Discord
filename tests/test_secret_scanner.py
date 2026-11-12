@@ -1,7 +1,6 @@
 """Tests for the secret scanner."""
 
 import importlib.util
-import os
 import sys
 from pathlib import Path
 

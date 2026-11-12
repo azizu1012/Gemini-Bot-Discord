@@ -128,5 +128,5 @@ def test_fallback_returns_image_tool_result_without_model_call():
 
 if __name__ == "__main__":
     test_final_synthesis_keeps_discord_image()
-    test_fallback_synthesis_keeps_discord_image()
+    test_fallback_returns_image_tool_result_without_model_call()
     print("ALL PASS")

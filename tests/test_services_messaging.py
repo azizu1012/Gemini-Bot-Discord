@@ -1,9 +1,7 @@
 """Unit tests for services (FileParserService, subtask messaging)."""
 
-import pytest
 from src.services.indexing.parser import FileParserService
 from src.services.messaging.subtask_client import SearchSubtaskClient
-from src.services.messaging.subtask_worker import SearchSubtaskWorker
 
 
 class TestFileParserService:

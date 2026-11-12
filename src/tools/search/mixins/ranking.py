@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set
 
-from src.tools.helpers import UrlUtils
 from src.tools.search.languages.registry import detect_query_languages, iter_language_topic_keywords
 from src.tools.search.mixins.text import SearchTextMixin
 

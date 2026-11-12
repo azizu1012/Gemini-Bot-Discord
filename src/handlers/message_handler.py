@@ -1,7 +1,6 @@
 import os
 import re
 import uuid
-import json
 import asyncio
 import unicodedata
 from datetime import datetime
@@ -718,7 +717,7 @@ class MessageHandler:
             if self._incoming_consumer:
                 await self._incoming_consumer.ack(msg)
 
-        except Exception as e:
+        except Exception:
             self.logger.exception(f"Error processing message for {user_id}")
             try:
                 await self._publish_outgoing({
@@ -770,7 +769,6 @@ class MessageHandler:
     async def _process_imagine_command(self, payload: dict):
         """Process an imagine slash command (AI image generation with Gemini)."""
         import base64
-        import io
         import os
         from pathlib import Path
 

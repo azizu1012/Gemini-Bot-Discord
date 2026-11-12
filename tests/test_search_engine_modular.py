@@ -1,11 +1,8 @@
 """Unit tests for modular search engine subpackage with SSRF safety and consensus reranking."""
 
-import pytest
-from datetime import datetime, timezone
 from src.tools.search.query_planner import QueryPlanner
 from src.tools.search.cache import SearchCache
 from src.tools.search.reranker import SearchReranker
-from src.tools.search.models import SearchRecord
 from src.tools.search.engine import SearchEngine
 from src.tools.search.url_safety import is_safe_url
 
@@ -194,7 +191,6 @@ class TestSearchEngineFacade:
         assert inflight == {}
 
     def test_search_subtasks_disabled_by_default(self, monkeypatch):
-        import os
         from src.tools.manager import ToolsManager
 
         monkeypatch.delenv("SEARCH_SUBTASKS_ENABLED", raising=False)

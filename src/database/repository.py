@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from typing import Optional
 
 import asyncpg  # type: ignore[reportMissingImports]
 
-from src.core.config import logger
+from src.core.config import get_config, logger
 from src.database.mixins import (
     SchemaMixin,
     StateMixin,
@@ -32,8 +31,8 @@ class DatabaseRepository(
 ):
     """Direct asyncpg repository composed of domain-specific mixins."""
 
-    def __init__(self, db_url: str = os.getenv("DATABASE_URL", "postgresql://localhost:5432/azuris")):
-        self.db_url = db_url
+    def __init__(self, db_url: Optional[str] = None):
+        self.db_url = db_url or get_config().DATABASE_URL
         self.logger = logger
         self.pool: Optional[asyncpg.Pool] = None
         self._init_lock = asyncio.Lock()

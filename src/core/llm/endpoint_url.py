@@ -8,10 +8,11 @@ Private LAN/ULA endpoints are rejected unless ALLOW_PRIVATE_ENDPOINT_HOSTS=true.
 from __future__ import annotations
 
 import ipaddress
-import os
 import socket
 from typing import Tuple
 from urllib.parse import urlsplit
+
+from src.core.config import Config
 
 BLOCKED_HOSTNAMES = {
     "metadata.google.internal",
@@ -22,11 +23,6 @@ BLOCKED_HOSTNAMES = {
 BLOCKED_SUFFIXES = (".local", ".internal", ".lan", ".home", ".corp", ".arpa")
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    raw = (os.getenv(name) or "").strip().lower()
-    if not raw:
-        return default
-    return raw in {"1", "true", "yes", "on"}
 
 
 def _check_ip(ip: ipaddress._BaseAddress, allow_private: bool) -> Tuple[bool, str]:
@@ -60,7 +56,7 @@ def validate_endpoint_url(url: str) -> Tuple[bool, str]:
     if not hostname:
         return False, "URL thiếu hostname"
 
-    allow_private = _env_flag("ALLOW_PRIVATE_ENDPOINT_HOSTS", False)
+    allow_private = Config._get_bool("ALLOW_PRIVATE_ENDPOINT_HOSTS", False)
 
     if hostname in BLOCKED_HOSTNAMES:
         return False, f"hostname nội bộ ({hostname}) không được phép"

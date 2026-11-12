@@ -1,10 +1,9 @@
 """Unit tests for OOP instructions package (PromptManager, models, builders)."""
 
-import pytest
 from pathlib import Path
 from src.instructions.models import PromptTemplate, RetrievalPrompts, RoleContracts
 from src.instructions.builders import FallbackPromptFormatter, IdentityPromptBuilder
-from src.instructions.manager import PromptManager, prompt_manager
+from src.instructions.manager import PromptManager
 from src.instructions.prompts import (
     AZURIS_SYSTEM_PROMPT,
     LITE_SYSTEM_PROMPT,

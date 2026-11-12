@@ -1,9 +1,3 @@
-class TextParsedFunctionCall:
-    def __init__(self, name, args, id=None):
-        self.name = name
-        self.args = args
-        self.id = id
-
 import asyncio
 import re
 from datetime import datetime
@@ -24,6 +18,12 @@ from src.core.prompt_loader import (
 
 from src.core.llm.base import LLMNotConfiguredError, classify_error
 from src.core.llm.gateway import LLMGateway
+class TextParsedFunctionCall:
+    def __init__(self, name, args, id=None):
+        self.name = name
+        self.args = args
+        self.id = id
+
 
 
 def _prepare_user_input_block(user_input: str, max_chars: int = 2200) -> str:

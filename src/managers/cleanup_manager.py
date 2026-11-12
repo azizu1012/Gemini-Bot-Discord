@@ -1,5 +1,4 @@
 import os
-import asyncio
 import shutil
 from src.core.config import logger, FILE_STORAGE_PATH, MIN_FREE_SPACE_MB
 

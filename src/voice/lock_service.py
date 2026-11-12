@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import time
-from typing import Iterator, List, Optional, Set
+from typing import List, Optional, Set
 
 import discord
 from src.core.config import logger

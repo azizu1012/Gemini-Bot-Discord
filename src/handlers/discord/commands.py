@@ -3,10 +3,9 @@ import io
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 import discord
 from discord import app_commands
-from discord.ext import commands
 
 from src.handlers.discord.ui import (
     GlobalNoteView,

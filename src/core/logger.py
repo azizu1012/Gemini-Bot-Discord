@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 
 
 class LoggerService:
@@ -16,7 +15,7 @@ class LoggerService:
         if role == "user":
             self.logger.info(f"User {user_id} sent a message")
         elif role == "assistant" and "DM reply" in content:
-            self.logger.info(f"Bot sent DM to user mentioned in message")
+            self.logger.info("Bot sent DM to user mentioned in message")
     
     def info(self, message: str) -> None:
         """Log info level message."""

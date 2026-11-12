@@ -1,18 +1,12 @@
 """Unit tests for prompt_loader and prompt formats."""
 
-import pytest
 from src.core.prompt_loader import (
     get_azuris_system_prompt,
     get_lite_reasoning_prompt,
     get_fallback_system_prompt,
-    get_file_index_reasoning_prompt,
-    get_file_index_validation_prompt,
     get_retrieval_prompts,
 )
 from src.instructions.prompts import (
-    AZURIS_SYSTEM_PROMPT,
-    LITE_SYSTEM_PROMPT,
-    FALLBACK_SYSTEM_PROMPT,
     format_fallback_prompt,
 )
 

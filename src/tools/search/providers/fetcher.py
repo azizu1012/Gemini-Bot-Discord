@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import urllib.parse
-from typing import Optional
 
 import requests
 from src.tools.helpers import HtmlParser

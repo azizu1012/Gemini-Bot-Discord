@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List
 from src.core.config import logger
 from src.tools.search.mixins import SearchRankingMixin
 

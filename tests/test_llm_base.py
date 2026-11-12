@@ -6,7 +6,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.core.llm.base import (
     Candidate,
     Content,
-    FinishReason,
     FunctionCall,
     LLMError,
     LLMNotConfiguredError,

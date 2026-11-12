@@ -1,8 +1,6 @@
 """Unit tests for system managers (CacheManager, CleanupManager, PremiumManager)."""
 
-import os
 import tempfile
-import time
 import pytest
 from src.managers.cache_manager import CacheManager, get_cache_manager
 from src.managers.cleanup_manager import CleanupManager

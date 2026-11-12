@@ -4,10 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 from unittest.mock import MagicMock
-import pytest
 import discord
 
-from src.voice.models import LockRecord, LockOutcome, PurgeReport, RoleMovePlan
+from src.voice.models import LockRecord, PurgeReport, RoleMovePlan
 from src.voice.store import (
     LockStore,
     WhitelistStore,
@@ -17,10 +16,8 @@ from src.voice.store import (
 from src.voice.purge import VoicePurgeService, voice_purge_service
 from src.voice.role_hierarchy import (
     RoleHierarchyService,
-    role_hierarchy_service,
     shorten,
     role_rank,
-    plan_role_move,
 )
 from src.voice.lock_service import RoomLockService
 
