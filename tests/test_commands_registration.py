@@ -471,3 +471,57 @@ async def test_endpoint_switch_chooses(monkeypatch):
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_message_to_slash_dm(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    target = MagicMock()
+    target.id = 999
+    target.display_name = "Target"
+    target.send = AsyncMock()
+    bot_core.bot.fetch_user = AsyncMock(return_value=target)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "message_to_slash")
+    assert handler is not None
+    interaction = _interaction()
+    user = MagicMock()
+    user.id = 999
+    user.display_name = "Target"
+    await handler(interaction, user, "hello there", None)
+    interaction.followup.send.assert_awaited_once()
+    target.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_message_to_slash_channel(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    target = MagicMock()
+    target.id = 999
+    target.display_name = "Target"
+    target.mention = "<@999>"
+    bot_core.bot.fetch_user = AsyncMock(return_value=target)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "message_to_slash")
+    interaction = _interaction()
+    guild = MagicMock()
+    me = MagicMock()
+    channel = MagicMock()
+    channel.mention = "#general"
+    channel.permissions_for = MagicMock(return_value=MagicMock(send_messages=True))
+    channel.send = AsyncMock()
+    channel.guild = guild
+    channel.__class__ = __import__("discord").TextChannel
+    interaction.guild = guild
+    guild.me = me
+    user = MagicMock()
+    user.id = 999
+    user.display_name = "Target"
+    await handler(interaction, user, "hi", channel)
+    channel.send.assert_awaited_once()
