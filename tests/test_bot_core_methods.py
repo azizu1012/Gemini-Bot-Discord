@@ -205,3 +205,27 @@ def test_cancel_typing_task_no_task():
     bc = make_bc()
     bc._cancel_typing_task("u1")
     # no exception
+
+
+def test_build_voice_lock_manager_invalid_admin_id():
+    bc = make_bc()
+    bc.config.ADMIN_ID = "not-an-int"
+    assert bc._build_voice_lock_manager() is None
+
+
+def test_build_voice_lock_manager_missing_admin_id():
+    bc = make_bc()
+    bc.config.ADMIN_ID = None
+    assert bc._build_voice_lock_manager() is None
+
+
+def test_build_voice_lock_manager_valid():
+    bc = make_bc()
+    bc.config.ADMIN_ID = "12345"
+    bc.config.VOICE_WHITELIST_FILE = "data/wl.json"
+    bc.config.LOCKED_CHANNELS_FILE = "data/lc.json"
+    bc.config.ENFORCED_NAMES_FILE = "data/en.json"
+    bc.config.VOICE_LOCK_LOG_FILE = "data/vl.log"
+    mgr = bc._build_voice_lock_manager()
+    assert mgr is not None
+    assert mgr.owner_id == 12345
