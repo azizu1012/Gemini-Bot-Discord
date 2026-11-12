@@ -14,7 +14,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 # Chỉ cần CA certs cho TLS dial-out (Discord WS, LLM router, search APIs).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# apt-get upgrade vá các CVE OS trong base image (vd zlib1g) để Trivy xanh.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends \
+    && apt-get install -y --no-install-recommends \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

@@ -11,7 +11,7 @@ jaraco.context==6.1.0
 lxml==6.1.1
 msgpack==1.2.3
 openai==2.38.0
-pypdf==6.21.2
+pypdf==6.21.4
 python-dotenv==1.2.1
 redis>=5.0
 requests==2.34.2
