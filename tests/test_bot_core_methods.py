@@ -1,4 +1,5 @@
 """Offline tests for BotCore permission/autocomplete/mention/queue helpers."""
+import asyncio
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -36,6 +37,7 @@ def make_bc():
     bc._redis_client = None
     bc.voice_lock_manager = MagicMock()
     bc.voice_lock_manager.locked_channels = set()
+    bc.kafka_service = MagicMock()
     return bc
 
 
@@ -229,3 +231,29 @@ def test_build_voice_lock_manager_valid():
     mgr = bc._build_voice_lock_manager()
     assert mgr is not None
     assert mgr.owner_id == 12345
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_and_closes():
+    bc = make_bc()
+    async def _noop():
+        await asyncio.sleep(0)
+
+    task = asyncio.create_task(_noop())
+    bc._consume_task = task
+    bc.kafka_service.stop = AsyncMock()
+    bc.db_repo.close = AsyncMock()
+    await bc.shutdown()
+    assert task.cancelled() is True
+    bc.kafka_service.stop.assert_awaited_once()
+    bc.db_repo.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_no_task():
+    bc = make_bc()
+    bc._consume_task = None
+    bc.kafka_service.stop = AsyncMock()
+    bc.db_repo.close = AsyncMock()
+    await bc.shutdown()
+    bc.kafka_service.stop.assert_awaited_once()
