@@ -120,6 +120,43 @@ async def test_on_message_redis_lock_busy():
     assert message.reply.called
 
 
+def _voice_state(channel=None):
+    st = MagicMock()
+    st.channel = channel
+    return st
+
+
+@pytest.mark.asyncio
+async def test_on_voice_state_update_kicks_non_whitelisted():
+    bc = make_bc()
+    bc.bot.user.id = 1
+    bc.voice_lock_manager = MagicMock()
+    bc.voice_lock_manager.owner_id = 9
+    bc.voice_lock_manager.load_whitelist = MagicMock(return_value={})
+    events = _capture_events(bc)
+
+    member = MagicMock()
+    member.id = 50
+    member.name = "Intruder"
+    member.move_to = AsyncMock()
+    channel = MagicMock()
+    channel.id = 100
+    channel.name = "Lobby"
+    bc.voice_lock_manager.locked_channels = {100}
+
+    await events["on_voice_state_update"](member, _voice_state(None), _voice_state(channel))
+    member.move_to.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_voice_state_update_no_lock_manager():
+    bc = make_bc()
+    bc.voice_lock_manager = None
+    events = _capture_events(bc)
+    member = MagicMock()
+    await events["on_voice_state_update"](member, _voice_state(None), _voice_state(None))  # no-op
+
+
 @pytest.mark.asyncio
 async def test_on_message_success_publishes():
     bc = make_bc()
