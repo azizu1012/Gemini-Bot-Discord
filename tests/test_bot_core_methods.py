@@ -257,3 +257,39 @@ async def test_shutdown_no_task():
     bc.db_repo.close = AsyncMock()
     await bc.shutdown()
     bc.kafka_service.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_voice_lock_enforce_loop_empty():
+    bc = make_bc()
+    # closed after first iteration
+    bc.bot.is_closed = MagicMock(side_effect=[False, True])
+    bc.voice_lock_manager = MagicMock()
+    bc.voice_lock_manager.locked_channels = set()
+    bc.voice_lock_manager.load_whitelist = MagicMock(return_value={})
+    await bc._voice_lock_enforce_loop()  # exits after one empty iteration
+
+
+@pytest.mark.asyncio
+async def test_voice_lock_enforce_loop_kicks_non_whitelist():
+    bc = make_bc()
+    bc.bot.is_closed = MagicMock(side_effect=[False, True])
+    bc.bot.user = MagicMock()
+    bc.bot.user.id = 1
+    bc.voice_lock_manager = MagicMock()
+    bc.voice_lock_manager.owner_id = 9
+    whitelist = {"5": "A"}
+    bc.voice_lock_manager.load_whitelist = MagicMock(return_value=whitelist)
+
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.id = 100
+    member_bad = MagicMock()
+    member_bad.id = 50
+    member_bad.move_to = AsyncMock()
+    channel.members = [member_bad]
+    bc.bot.get_channel = MagicMock(return_value=channel)
+    bc.voice_lock_manager.locked_channels = {100}
+    bc.voice_lock_manager.enforced_names = {}
+
+    await bc._voice_lock_enforce_loop()
+    member_bad.move_to.assert_awaited_once()
