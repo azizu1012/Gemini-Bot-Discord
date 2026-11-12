@@ -656,3 +656,54 @@ async def test_moderator_slash_remove_dynamic(monkeypatch):
     user.display_name = "Bob"
     await handler(interaction, action, user)
     interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_list_no_locked_rooms(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.locked_channels = MagicMock(return_value=[])
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "lock_list")
+    assert handler is not None
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    await handler(interaction)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_list_with_locked_rooms(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    channel = MagicMock()
+    channel.mention = "#lobby"
+    rec = MagicMock()
+    rec.locked_at.timestamp = MagicMock(return_value=1000000)
+    room_lock_service.locked_channels = MagicMock(return_value=[channel])
+    room_lock_service.record = MagicMock(return_value=rec)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "lock_list")
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    await handler(interaction)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_allow_list_empty(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.whitelist.entries = MagicMock(return_value=[])
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "allow_list")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.response.send_message.assert_awaited_once()
