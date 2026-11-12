@@ -99,9 +99,18 @@ def _make_bot_core():
     bot.tree = tree
     bot_core = MagicMock()
     bot_core.bot = bot
+    from unittest.mock import AsyncMock
+
     bot_core.db_repo = MagicMock()
+    bot_core.db_repo.add_moderator_user = AsyncMock()
+    bot_core.db_repo.remove_moderator_user = AsyncMock()
+    bot_core.db_repo.add_premium_user = AsyncMock()
+    bot_core.db_repo.is_premium_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_admin_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_moderator_user = AsyncMock(return_value=False)
     bot_core.config = SimpleNamespace(
         ADMIN_USER_IDS=[],
+        MODERATOR_USER_IDS=[],
         TOKEN="t",
     )
     bot_core.logger = MagicMock()
@@ -263,3 +272,100 @@ async def test_allow_member_handler_self_returns(monkeypatch):
 
     await handler(interaction, member)
     room_lock_service.whitelist.add.assert_not_called()
+
+
+# ---------------- command handlers ----------------
+def _interaction(user_id=1000):
+    from unittest.mock import AsyncMock
+
+    interaction = MagicMock()
+    interaction.user = MagicMock()
+    interaction.user.id = user_id
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    return interaction
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_add_non_admin(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    register_slash_commands(bot_core)
+
+    handler = _find_registered(tree, "premium_slash")
+    assert handler is not None
+
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "add"
+    user = MagicMock()
+    user.id = 2000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_check_admin(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(side_effect=lambda uid: uid == "2000")
+    register_slash_commands(bot_core)
+
+    handler = _find_registered(tree, "premium_slash")
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "check"
+    user = MagicMock()
+    user.id = 2000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    assert "Admin" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_add(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    assert handler is not None
+
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "add"
+    user = MagicMock()
+    user.id = 2000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    bot_core.db_repo.add_moderator_user.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_donate_slash_missing_file(monkeypatch):
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    # point PROJECT_ROOT to an empty temp dir so the QR file doesn't exist
+    import tempfile
+
+    tmp = tempfile.mkdtemp()
+    bot_core.config.PROJECT_ROOT = tmp
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "donate_slash")
+    assert handler is not None
+
+    interaction = _interaction()
+    await handler(interaction, None)  # defaults to kofi -> missing file
+    interaction.followup.send.assert_awaited_once()
