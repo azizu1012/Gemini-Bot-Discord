@@ -25,25 +25,6 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Free conflicting ports
-        run: |
-          sudo systemctl stop postgresql || true
-          sudo systemctl stop redis || true
-          sudo fuser -k 55432/tcp || true
-          sudo fuser -k 6379/tcp || true
-
-      - name: Start test containers
-        run: |
-          docker run -d --name test-postgres -e POSTGRES_USER=azuris -e POSTGRES_PASSWORD=replace_me -e POSTGRES_DB=azuris -p 55432:5432 postgres:16
-          docker run -d --name test-redis -p 6379:6379 redis:7-alpine
-          for i in $(seq 1 30); do
-            if docker exec test-postgres pg_isready -U azuris; then
-              echo "PostgreSQL is ready!"
-              break
-            fi
-            sleep 1
-          done
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -53,9 +34,7 @@ jobs:
       - name: Compile check
         run: python -m compileall -q src run_bot.py main.py
 
-      - name: Run pytest
+      - name: Run pytest (offline, mock-only)
         env:
-          DATABASE_URL: postgresql://azuris:replace_me@127.0.0.1:55432/azuris
-          REDIS_URL: redis://127.0.0.1:6379/0
           DONATE_ENCRYPTION_KEY: ""
         run: python -m pytest -v
