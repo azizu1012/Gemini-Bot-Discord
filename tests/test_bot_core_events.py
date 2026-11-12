@@ -2,9 +2,14 @@
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 
 sys.path.insert(0, ".")
+
+async def _async_iter(items):
+    for it in items:
+        yield it
 
 from src.handlers.discord.bot_core import BotCore
 
@@ -155,6 +160,66 @@ async def test_on_voice_state_update_no_lock_manager():
     events = _capture_events(bc)
     member = MagicMock()
     await events["on_voice_state_update"](member, _voice_state(None), _voice_state(None))  # no-op
+
+
+@pytest.mark.asyncio
+async def test_on_guild_channel_update_anti_edit():
+    bc = make_bc()
+    bc.bot.user.id = 1
+    bc.voice_lock_manager = MagicMock()
+    bc.voice_lock_manager.locked_channels = {100}
+    bc.voice_lock_manager.ignore_next_updates = set()
+    bc.voice_lock_manager.enforced_names = {100: "ForcedName"}
+    bc.voice_lock_manager.log_action = MagicMock()
+    bc.bot.loop.create_task = MagicMock()
+
+    events = _capture_events(bc)
+    after = MagicMock(spec=discord.VoiceChannel)
+    after.id = 100
+    after.name = "renamed"
+    after.guild = MagicMock()
+    # no bot edits in audit logs
+    after.guild.audit_logs = MagicMock(return_value=_async_iter([]))
+    after.edit = AsyncMock()
+
+    await events["on_guild_channel_update"](MagicMock(), after)
+    after.edit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_guild_channel_update_no_lock_manager():
+    bc = make_bc()
+    bc.voice_lock_manager = None
+    events = _capture_events(bc)
+    after = MagicMock(spec=discord.VoiceChannel)
+    after.id = 100
+    await events["on_guild_channel_update"](MagicMock(), after)  # no-op
+
+
+@pytest.mark.asyncio
+async def test_on_guild_channel_delete_unlocks():
+    bc = make_bc()
+    bc.room_lock_service = MagicMock()
+    bc.room_lock_service.is_locked = MagicMock(return_value=True)
+    bc.room_lock_service.store.unlock = MagicMock()
+    events = _capture_events(bc)
+    channel = MagicMock()
+    channel.id = 100
+    channel.name = "Lobby"
+    await events["on_guild_channel_delete"](channel)
+    bc.room_lock_service.store.unlock.assert_called_once_with(100)
+
+
+@pytest.mark.asyncio
+async def test_on_command_error_not_found():
+    bc = make_bc()
+    events = _capture_events(bc)
+    ctx = MagicMock()
+    ctx.message.content = "!nope"
+    ctx.author = MagicMock()
+    from discord.ext import commands
+
+    await events["on_command_error"](ctx, commands.CommandNotFound())  # no raise
 
 
 @pytest.mark.asyncio
