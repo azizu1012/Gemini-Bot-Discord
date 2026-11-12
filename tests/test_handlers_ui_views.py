@@ -1,11 +1,17 @@
 """Offline tests for handlers/discord/ui.py View classes (pure logic)."""
 import sys
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 sys.path.insert(0, ".")
 
-from src.handlers.discord.ui import GlobalNoteDemoteView, GlobalNoteView, ModelPickerView
+from src.handlers.discord.ui import (
+    GlobalNoteDemoteView,
+    GlobalNoteView,
+    ImageHistoryView,
+    ModelPickerView,
+)
 
 
 def _notes(n=10):
@@ -98,3 +104,37 @@ async def test_global_note_demote_view_summary():
     text = view.summary_text()
     assert "Demote global notes" in text
     assert "page 1/1" in text
+
+
+@pytest.mark.asyncio
+async def test_image_history_view_init():
+    view = ImageHistoryView([{"prompt": "cat", "image_url": "http://x"}])
+    assert len(view.children) == 1
+
+
+@pytest.mark.asyncio
+async def test_image_history_select_callback_url(monkeypatch):
+    from unittest.mock import PropertyMock
+
+    view = ImageHistoryView([{"prompt": "cat", "image_url": "http://x/cat.png"}])
+    select = view.children[0]
+    monkeypatch.setattr(type(select), "values", PropertyMock(return_value=["0"]))
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    await select.callback(interaction)
+    interaction.response.edit_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_image_history_select_callback_local_file(tmp_path, monkeypatch):
+    from unittest.mock import PropertyMock
+
+    img = tmp_path / "img.png"
+    img.write_bytes(b"pngdata")
+    view = ImageHistoryView([{"prompt": "dog", "image_url": str(img)}])
+    select = view.children[0]
+    monkeypatch.setattr(type(select), "values", PropertyMock(return_value=["0"]))
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    await select.callback(interaction)
+    interaction.response.edit_message.assert_awaited_once()
