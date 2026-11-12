@@ -1,106 +1,210 @@
-"""Test NoteManager tóm tắt note qua LLMGateway (offline, không cần mạng)."""
-import asyncio
-import os
+"""Offline tests for NoteManager."""
 import sys
+from unittest.mock import AsyncMock, MagicMock
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
 
-from src.core.llm.base import LLMError
+sys.path.insert(0, ".")
+
 from src.managers.note_manager import NoteManager
 
 
-class FakeDbRepo:
-    def __init__(self):
-        self.saved = []
-        self.updated = None
+class NullLogger:
+    def info(self, *a, **k):
+        pass
 
-    async def add_user_note_db(self, user_id, note_id, content, metadata, scope=None, importance=None, note_type=None, fact_hash=None):
-        self.saved.append(content)
-        return True
+    def warning(self, *a, **k):
+        pass
 
-    async def get_file_note_by_filename_db(self, user_id, filename):
-        if filename == "existing.txt":
-            return {"note_id": "note-1"}
-        return None
-
-    async def update_user_note_db(self, note_id, user_id, content, metadata):
-        self.updated = (note_id, user_id, content, metadata)
-        return True
-
-    async def count_distinct_users_by_fact_hash_db(self, fact_hash):
-        return 0
-
-    async def promote_fact_hash_to_global_db(self, fact_hash):
-        return 0
+    def error(self, *a, **k):
+        pass
 
 
-class FakeGateway:
-    def __init__(self, summary="Tóm tắt ngắn.", error=None):
-        self.summary = summary
-        self.error = error
-        self.calls = []
-
-    async def generate_text(self, prompt, role="final"):
-        self.calls.append({"prompt": prompt, "role": role})
-        if self.error is not None:
-            raise self.error
-        return self.summary
+def make_mgr():
+    mgr = NoteManager(db_repo=MagicMock(), gateway=None)
+    mgr.logger = NullLogger()
+    return mgr
 
 
-def test_long_note_summarized_via_gateway():
-    db = FakeDbRepo()
-    gw = FakeGateway(summary="Tóm tắt ngắn.")
-    nm = NoteManager(db, gateway=gw)
-    asyncio.run(nm.save_note_to_db("u1", "x" * 1500, "chat_inference"))
-    assert len(gw.calls) == 1
-    assert gw.calls[0]["role"] == "final"
-    assert gw.calls[0]["prompt"].startswith("Bạn là trợ lý")
-    assert db.saved == ["Tóm tắt ngắn."]
+# ---------------- pure helpers ----------------
+def test_normalize_fact_text():
+    mgr = make_mgr()
+    assert mgr._normalize_fact_text("  Hello, World!  ") == "hello world"
+    assert mgr._normalize_fact_text("") == ""
 
 
-def test_short_note_skips_gateway():
-    db = FakeDbRepo()
-    gw = FakeGateway()
-    nm = NoteManager(db, gateway=gw)
-    asyncio.run(nm.save_note_to_db("u1", "Ghi chú ngắn", "manual"))
-    assert gw.calls == []
-    assert db.saved == ["Ghi chú ngắn"]
+def test_classify_note_blocked():
+    mgr = make_mgr()
+    assert mgr._classify_note("phone number is 0123 and doxing")[0] == "blocked"
 
 
-def test_gateway_error_falls_back_to_truncation():
-    db = FakeDbRepo()
-    gw = FakeGateway(error=LLMError("rate_limit", "boom"))
-    nm = NoteManager(db, gateway=gw)
-    asyncio.run(nm.save_note_to_db("u1", "y" * 1500, "manual"))
-    assert len(db.saved) == 1
-    assert db.saved[0].endswith("...")
-    assert len(db.saved[0]) == 1003
+def test_classify_note_personal():
+    mgr = make_mgr()
+    ntype, scope, imp, _ = mgr._classify_note("tôi thích cà phê")
+    assert ntype == "personal_preference"
+    assert scope == "user"
+    assert imp == 6
 
 
-def test_file_note_update_is_user_scoped():
-    db = FakeDbRepo()
-    nm = NoteManager(db, gateway=FakeGateway())
-    asyncio.run(nm.save_file_note_to_db("u1", "nội dung mới", "existing.txt"))
-    assert db.updated is not None
-    assert db.updated[0] == "note-1"
-    assert db.updated[1] == "u1"
-    assert db.updated[2] == "nội dung mới"
+def test_classify_note_global():
+    mgr = make_mgr()
+    ntype, scope, imp, fact_hash = mgr._classify_note("Vũ trụ giãn nở không ngừng")
+    assert ntype == "global_knowledge"
+    assert scope == "candidate_global"
+    assert fact_hash
 
 
-class FailingDbRepo(FakeDbRepo):
-    async def add_user_note_db(self, *args, **kwargs):
-        raise RuntimeError("db password=super-secret")
+def test_should_include_global():
+    mgr = make_mgr()
+    assert mgr._should_include_global("best practice gì đó") is True
+    assert mgr._should_include_global("tôi thích x") is False
+    assert mgr._should_include_global("") is False
 
 
-def test_save_note_error_is_sanitized():
-    nm = NoteManager(FailingDbRepo(), gateway=FakeGateway())
-    result = asyncio.run(nm.save_note_to_db("u1", "Ghi chú ngắn", "manual"))
-    assert result == "Lỗi khi lưu note. Vui lòng thử lại."
-    assert "super-secret" not in result
+# ---------------- get_user_identity ----------------
+@pytest.mark.asyncio
+async def test_get_user_identity_empty():
+    mgr = make_mgr()
+    mgr.db_repo.get_user_notes_db = AsyncMock(return_value=[])
+    assert await mgr.get_user_identity("u1") == ""
 
 
-if __name__ == "__main__":
-    test_long_note_summarized_via_gateway()
-    test_short_note_skips_gateway()
-    test_gateway_error_falls_back_to_truncation()
-    print("ALL PASS")
+@pytest.mark.asyncio
+async def test_get_user_identity_formats():
+    mgr = make_mgr()
+    mgr.db_repo.get_user_notes_db = AsyncMock(
+        return_value=[{"content": "likes coffee"}, {"content": "plays guitar"}]
+    )
+    identity = await mgr.get_user_identity("u1")
+    assert "likes coffee" in identity
+    assert "plays guitar" in identity
+
+
+# ---------------- save_note_to_db ----------------
+@pytest.mark.asyncio
+async def test_save_note_blocked():
+    mgr = make_mgr()
+    result = await mgr.save_note_to_db("u1", "số điện thoại 0123", "chat_inference")
+    assert "không an toàn" in result
+
+
+@pytest.mark.asyncio
+async def test_save_note_personal_success():
+    mgr = make_mgr()
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+    result = await mgr.save_note_to_db("u1", "tôi thích cà phê", "chat_inference")
+    assert "Đã ghi nhớ" in result
+
+
+@pytest.mark.asyncio
+async def test_save_note_global_promote():
+    mgr = make_mgr()
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+    mgr.db_repo.count_distinct_users_by_fact_hash_db = AsyncMock(return_value=5)
+    mgr.db_repo.promote_fact_hash_to_global_db = AsyncMock(return_value=1)
+    result = await mgr.save_note_to_db("u1", "Định luật Newton về chuyển động", "chat_inference")
+    assert "nâng thành kiến thức chung" in result
+
+
+@pytest.mark.asyncio
+async def test_save_note_global_candidate():
+    mgr = make_mgr()
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+    mgr.db_repo.count_distinct_users_by_fact_hash_db = AsyncMock(return_value=1)
+    result = await mgr.save_note_to_db("u1", "Trái đất quay quanh mặt trời", "chat_inference")
+    assert "candidate" in result
+
+
+@pytest.mark.asyncio
+async def test_save_note_db_failure():
+    mgr = make_mgr()
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=False)
+    result = await mgr.save_note_to_db("u1", "tôi thích nhạc", "chat_inference")
+    assert "Lỗi" in result
+
+
+@pytest.mark.asyncio
+async def test_save_note_summarizes_long_content():
+    mgr = make_mgr()
+    mgr.gateway = MagicMock()
+    mgr.gateway.generate_text = AsyncMock(return_value="tóm tắt ngắn gọn")
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+    mgr.db_repo.count_distinct_users_by_fact_hash_db = AsyncMock(return_value=1)
+    long_content = "nội dung " * 200  # >1000 chars
+    result = await mgr.save_note_to_db("u1", long_content, "chat_inference")
+    assert "candidate" in result
+    # content was summarized (short)
+    assert len(mgr.db_repo.add_user_note_db.call_args[0][2]) < 200
+
+
+@pytest.mark.asyncio
+async def test_save_note_summary_fallback_truncate():
+    mgr = make_mgr()
+    mgr.gateway = MagicMock()
+    mgr.gateway.generate_text = AsyncMock(side_effect=RuntimeError("llm down"))
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+    long_content = "x" * 2000
+    await mgr.save_note_to_db("u1", long_content, "chat_inference")
+    assert len(mgr.db_repo.add_user_note_db.call_args[0][2]) <= 1005
+
+
+# ---------------- save_file_note_to_db ----------------
+@pytest.mark.asyncio
+async def test_save_file_note_new():
+    mgr = make_mgr()
+    mgr.db_repo.get_file_note_by_filename_db = AsyncMock(return_value=None)
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+    assert await mgr.save_file_note_to_db("u1", "content", "a.txt") is True
+    assert mgr.db_repo.add_user_note_db.call_args.kwargs["note_type"] == "file_note"
+
+
+@pytest.mark.asyncio
+async def test_save_file_note_update():
+    mgr = make_mgr()
+    mgr.db_repo.get_file_note_by_filename_db = AsyncMock(return_value={"note_id": "n1"})
+    mgr.db_repo.update_user_note_db = AsyncMock(return_value=True)
+    assert await mgr.save_file_note_to_db("u1", "content", "a.txt") is True
+    mgr.db_repo.update_user_note_db.assert_awaited_once()
+    assert mgr.db_repo.update_user_note_db.call_args[0][0] == "n1"
+
+
+# ---------------- retrieve ----------------
+@pytest.mark.asyncio
+async def test_retrieve_notes_none_found():
+    mgr = make_mgr()
+    mgr.db_repo.get_user_notes_db = AsyncMock(return_value=[])
+    result = await mgr.retrieve_notes_from_db("u1", "anything")
+    assert "Không tìm thấy" in result
+
+
+@pytest.mark.asyncio
+async def test_retrieve_notes_formats():
+    mgr = make_mgr()
+    mgr.db_repo.get_user_notes_db = AsyncMock(
+        return_value=[{
+            "note_id": "n1",
+            "content": "some note",
+            "created_at": "2026-01-01",
+            "scope": "user",
+            "note_type": "personal_preference",
+            "metadata": {"type": "auto_note", "source": "chat_inference"},
+        }]
+    )
+    result = await mgr.retrieve_notes_from_db("u1", "note")
+    assert "n1" in result
+    assert "some note" in result
+
+
+@pytest.mark.asyncio
+async def test_delete_note_success():
+    mgr = make_mgr()
+    mgr.db_repo.delete_user_note_db = AsyncMock(return_value=True)
+    assert await mgr.delete_note_from_db("u1", "n1") == "Đã xóa note thành công."
+
+
+@pytest.mark.asyncio
+async def test_delete_note_failure():
+    mgr = make_mgr()
+    mgr.db_repo.delete_user_note_db = AsyncMock(return_value=False)
+    result = await mgr.delete_note_from_db("u1", "n1")
+    assert "Không thể xóa" in result

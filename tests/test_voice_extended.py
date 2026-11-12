@@ -552,3 +552,143 @@ async def test_set_room_no_args_returns_false():
     ok, updates = await svc.set_room(ch)
     assert ok is False
     assert updates == []
+
+
+# ---------------- additional lock_service branches ----------------
+@pytest.mark.asyncio
+async def test_apply_permissions_sets_default_and_members():
+    store = StubLockStore()
+    svc = _service(store=store, owner=999)
+    svc.whitelist.add(500, "A")
+    g = _mock_guild()
+    member = _mock_member(500, "A")
+    g.get_member = MagicMock(return_value=member)
+    ch = _mock_channel(1, g)
+    base = MagicMock()
+    ch.overwrites_for = MagicMock(return_value=base)
+    ch.set_permissions = AsyncMock()
+    await svc.apply_permissions(ch)
+    # default role + allowed member => at least 2 set_permissions calls
+    assert ch.set_permissions.await_count >= 2
+
+
+@pytest.mark.asyncio
+async def test_apply_permissions_ignores_set_permission_error(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+    store = StubLockStore()
+    svc = _service(store=store, owner=999)
+    svc.whitelist.add(500, "A")
+    g = _mock_guild()
+    member = _mock_member(500, "A")
+    g.get_member = MagicMock(return_value=member)
+    ch = _mock_channel(1, g)
+    ch.overwrites_for = MagicMock(return_value=MagicMock())
+    calls = {"n": 0}
+
+    async def _flaky(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] > 1:  # member loop raises
+            raise _FakeForbidden()
+
+    ch.set_permissions = _flaky
+    await svc.apply_permissions(ch)  # no exception
+
+
+def test_allowed_members_resolves():
+    store = StubLockStore()
+    svc = _service(store=store, owner=999)
+    svc.whitelist.add(500, "A")
+    g = _mock_guild()
+    member_a = _mock_member(500, "A")
+    g.get_member = MagicMock(side_effect=lambda uid: member_a if uid == 500 else None)
+    members = svc._allowed_members(g)
+    assert any(m.id == 500 for m in members)
+
+
+@pytest.mark.asyncio
+async def test_ensure_locked_status_true_when_reapplied():
+    store = StubLockStore()
+    svc = _service(store=store)
+    g = _mock_guild()
+    ch = _mock_channel(1, g)
+    base = MagicMock()
+    base.connect = None  # not False -> triggers reapply
+    base.add_reactions = None
+    ch.overwrites_for = MagicMock(return_value=base)
+    ch.set_permissions = AsyncMock()
+    assert await svc.ensure_locked(ch) is True
+    assert base.connect is False
+
+
+@pytest.mark.asyncio
+async def test_ensure_locked_false_when_already_locked():
+    store = StubLockStore()
+    svc = _service(store=store)
+    g = _mock_guild()
+    ch = _mock_channel(1, g)
+    base = MagicMock()
+    base.connect = False
+    base.add_reactions = False
+    ch.overwrites_for = MagicMock(return_value=base)
+    ch.set_permissions = AsyncMock()
+    assert await svc.ensure_locked(ch) is False
+    ch.set_permissions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_strip_reactions_removes_non_allowed():
+    store = StubLockStore()
+    svc = _service(store=store, owner=999)
+    svc.whitelist.add(999, "owner")
+    g = _mock_guild()
+    ch = _mock_channel(1, g)
+
+    bad_user = _mock_member(777, "bad")
+    allowed_user = _mock_member(999, "owner")
+    reaction = MagicMock()
+    reaction.users = lambda: _async_iter([bad_user, allowed_user])
+    reaction.remove = AsyncMock()
+    message = MagicMock()
+    message.reactions = [reaction]
+    ch.history = MagicMock(return_value=_async_iter([message]))
+    removed = await svc.strip_reactions(ch)
+    assert removed == 1
+    reaction.remove.assert_awaited_once_with(bad_user)
+
+
+@pytest.mark.asyncio
+async def test_grant_access_exception_skips(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+    store = StubLockStore()
+    store.lock(301, 999)
+    svc = _service(store=store, owner=999)
+    g = _mock_guild(10)
+    ch = _mock_channel(301, g)
+    svc.bot.get_channel = MagicMock(return_value=ch)
+    member = _mock_member(500)
+    member.guild = g
+    ch.set_permissions = AsyncMock(side_effect=_FakeForbidden())
+    assert await svc.grant_access(member) == 0
+
+
+@pytest.mark.asyncio
+async def test_revoke_access_moves_member_out():
+    store = StubLockStore()
+    store.lock(301, 999)
+    svc = _service(store=store, owner=999)
+    g = _mock_guild(10)
+    ch = _mock_channel(301, g)
+    svc.bot.get_channel = MagicMock(return_value=ch)
+    member = _mock_member(500)
+    member.guild = g
+    member.move_to = AsyncMock()
+    ch.members = [member]
+    ch.set_permissions = AsyncMock()
+    assert await svc.revoke_access(member) == 1
+    member.move_to.assert_awaited_once()
