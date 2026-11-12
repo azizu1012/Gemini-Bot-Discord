@@ -157,3 +157,36 @@ def test_split_text_code_fence_not_split():
     chunks = h._split_text(text, limit=150)
     # should not split inside the fence — at least each chunk is stable
     assert any("```" in c for c in chunks)
+
+
+@pytest.mark.asyncio
+async def test_call_pipeline_with_deadline():
+    h = make_handler()
+    h.config.LLM_TOTAL_TIMEOUT_SECONDS = 10
+    pipeline = MagicMock()
+    pipeline.call_gemini_api = AsyncMock(return_value="answer")
+    result = await h._call_pipeline_with_deadline(pipeline, [], "u1", {})
+    assert result == "answer"
+    pipeline.call_gemini_api.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_call_easy_with_deadline_success():
+    h = make_handler()
+    h._build_identity_instruction = MagicMock(return_value="identity")
+    h.gateway = MagicMock()
+    response = MagicMock()
+    response.candidates = [MagicMock(content=MagicMock(parts=[MagicMock(text="easy answer")]))]
+    h.gateway.generate = AsyncMock(return_value=response)
+    result = await h._call_easy_with_deadline("hello", "u1", {"bot_name": "Bot"})
+    assert result == "easy answer"
+
+
+@pytest.mark.asyncio
+async def test_call_easy_with_deadline_empty_raises():
+    h = make_handler()
+    h._build_identity_instruction = MagicMock(return_value="")
+    h.gateway = MagicMock()
+    h.gateway.generate = AsyncMock(return_value=MagicMock(candidates=[]))
+    with pytest.raises(ValueError, match="Easy response"):
+        await h._call_easy_with_deadline("hi", "u1", {})
