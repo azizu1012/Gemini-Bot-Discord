@@ -85,6 +85,34 @@ def test_extract_main_text_paragraphs():
     assert "Para one" in text
 
 
+def test_extract_main_text_code_and_table():
+    html = """
+    <html><body><article>
+      <pre><code class="language-python">print(1)</code></pre>
+      <table><tr><td>A</td><td>B</td></tr></table>
+      <ul><li>item one</li></ul>
+    </article></body></html>
+    """
+    text = T()._extract_main_text(html)
+    assert "print(1)" in text
+    assert "A | B" in text
+    assert "item one" in text
+
+
+def test_extract_main_text_noise_removed():
+    html = """
+    <html><body><article>
+      <div class="comments">spam comments</div>
+      <div class="advertisement">buy now</div>
+      <p>real content</p>
+    </article></body></html>
+    """
+    text = T()._extract_main_text(html)
+    assert "real content" in text
+    assert "spam" not in text
+    assert "buy now" not in text
+
+
 # ---------------- _extract_query_highlight ----------------
 def test_query_highlight_short_text():
     assert T()._extract_query_highlight("short", "q") == "short"
@@ -160,6 +188,20 @@ def test_query_highlight_no_tokens():
     text = "x" * 2000
     hl = T()._extract_query_highlight(text, "!!", max_chars=100)
     assert len(hl) <= 100
+
+
+def test_query_highlight_expands_paragraphs():
+    # multiple paragraphs with matching keyword -> window expands to max_chars
+    text = "\n\n".join(["matching paragraph " * 20] + ["other " * 20] * 10)
+    hl = T()._extract_query_highlight(text, "matching", max_chars=600)
+    assert "matching" in hl
+    assert len(hl) <= 600
+
+
+def test_query_highlight_no_matching_paragraph():
+    text = "\n\n".join(["alpha " * 30, "beta " * 30, "gamma " * 30])
+    hl = T()._extract_query_highlight(text, "zzz", max_chars=500)
+    assert hl  # returns first max_chars slice
 
 
 # ---------------- evidence mixin ----------------
