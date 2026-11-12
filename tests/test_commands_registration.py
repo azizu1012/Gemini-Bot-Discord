@@ -810,3 +810,59 @@ async def test_global_note_demote_no_match(monkeypatch):
     interaction = _interaction()
     await handler(interaction, "xyz")
     assert "Không tìm thấy" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_switch_on_choose(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    captured = {}
+
+    class FakeSDKView:
+        def __init__(self, on_choose):
+            captured["on_choose"] = on_choose
+
+    monkeypatch.setattr(cmd_mod, "SDKChoiceView", FakeSDKView)
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.get_llm_endpoints = AsyncMock(return_value={"genai": {}})
+    bot_core.db_repo.set_active_sdk = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    bot_core2, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_switch")
+    bot_core2.db_repo.get_llm_endpoints = AsyncMock(return_value={"genai": {}})
+    bot_core2.db_repo.set_active_sdk = AsyncMock(return_value=True)
+    interaction = _interaction()
+    await handler(interaction)
+
+    on_choose = captured["on_choose"]
+    choice_interaction = _interaction()
+    await on_choose(choice_interaction, "genai")
+    bot_core2.db_repo.set_active_sdk.assert_awaited_once()
+    choice_interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_endpoint_switch_on_choose_unconfigured(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    captured = {}
+
+    class FakeSDKView:
+        def __init__(self, on_choose):
+            captured["on_choose"] = on_choose
+
+    monkeypatch.setattr(cmd_mod, "SDKChoiceView", FakeSDKView)
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.get_llm_endpoints = AsyncMock(return_value={})
+    register_slash_commands(bot_core)
+    bot_core2, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_switch")
+    bot_core2.db_repo.get_llm_endpoints = AsyncMock(return_value={})
+    interaction = _interaction()
+    await handler(interaction)
+
+    on_choose = captured["on_choose"]
+    choice_interaction = _interaction()
+    await on_choose(choice_interaction, "openai")
+    assert "chưa được cấu hình" in choice_interaction.response.send_message.call_args[0][0]
