@@ -58,8 +58,12 @@ class FakeTree:
 
 
 class FakeGroup:
+    _all = {}
+
     def __init__(self, *a, **kw):
         self._cmd = FakeCommandDecorator()
+        name = kw.get("name", "unknown")
+        FakeGroup._all[name] = self
 
     def command(self, *a, **kw):
         return self._cmd(*a, **kw)
@@ -431,3 +435,39 @@ async def test_unlock_room_not_locked(monkeypatch):
     interaction.user.voice = MagicMock(channel=channel)
     await handler(interaction)
     interaction.followup.send.assert_awaited_once()
+
+
+def _find_group_handler(monkeypatch, group_name, handler_name):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get(group_name)
+    assert group is not None, f"group {group_name} not registered"
+    for func in group._cmd.registered:
+        if getattr(func, "__name__", "") == handler_name:
+            return bot_core, func
+    raise AssertionError(f"handler {handler_name} not found in group {group_name}")
+
+
+@pytest.mark.asyncio
+async def test_endpoint_view(monkeypatch):
+    bot_core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_view")
+    bot_core.db_repo.get_llm_endpoints = AsyncMock(return_value={})
+    bot_core.db_repo.get_active_sdk = AsyncMock(return_value="genai")
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_endpoint_switch_chooses(monkeypatch):
+    bot_core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_switch")
+    bot_core.db_repo.get_llm_endpoints = AsyncMock(return_value={"genai": {}})
+    bot_core.db_repo.set_active_sdk = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+
+
+
