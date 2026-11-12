@@ -906,3 +906,77 @@ async def test_moderator_slash_check_dynamic_mod(monkeypatch):
     user.display_name = "Bob"
     await handler(interaction, action, user)
     assert "Moderator" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_reset_chat_slash_do_reset(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    captured = {}
+
+    class FakeConfirmView:
+        def __init__(self, *a, **kw):
+            captured["on_confirm"] = kw.get("on_confirm")
+            self.message = None
+
+    monkeypatch.setattr(cmd_mod, "ConfirmActionView", FakeConfirmView)
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.clear_user_data_db = AsyncMock()
+    bot_core.kafka_service.publish = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "reset_chat_slash")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction)
+    on_confirm = captured["on_confirm"]
+    btn = _interaction()
+    result = await on_confirm(btn)
+    assert "xóa toàn bộ" in result
+    bot_core.db_repo.clear_user_data_db.assert_awaited_once_with("1000")
+
+
+@pytest.mark.asyncio
+async def test_endpoint_test_not_configured(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.get_active_sdk = AsyncMock(return_value=None)
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get("endpoint")
+    handler = next(f for f in group._cmd.registered if f.__name__ == "endpoint_test")
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_endpoint_test_success(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.get_active_sdk = AsyncMock(return_value="genai")
+    resolver.get_endpoint = AsyncMock(return_value={"base_url": "http://x", "api_key": "k"})
+    resolver.get_slot_models = AsyncMock(return_value={"reasoning": "m1", "final": "m2", "fallback": None})
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+
+    gw = MagicMock()
+    gw.list_models_for = AsyncMock(return_value=[{"id": "m1"}, {"id": "m2"}])
+    monkeypatch.setattr(cmd_mod, "get_llm_gateway", lambda: gw)
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    bot_core.db_repo.update_endpoint_check_status = AsyncMock()
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get("endpoint")
+    handler = next(f for f in group._cmd.registered if f.__name__ == "endpoint_test")
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+    bot_core.db_repo.update_endpoint_check_status.assert_awaited_once()
