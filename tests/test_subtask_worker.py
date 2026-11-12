@@ -76,3 +76,6 @@ async def test_shutdown_stops_kafka():
     worker.kafka_service.stop = AsyncMock()
     await worker.shutdown()
     worker.kafka_service.stop.assert_awaited_once()
+
+
+
