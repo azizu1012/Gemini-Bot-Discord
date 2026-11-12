@@ -554,3 +554,50 @@ async def test_health_check_slash_configured_ok(monkeypatch):
     interaction = _interaction()
     await handler(interaction)
     interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_imagine_history_empty(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.get_generated_images = AsyncMock(return_value=[])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "imagine_slash")
+    assert handler is not None
+    action = MagicMock()
+    action.value = "history"
+    interaction = _interaction()
+    await handler(interaction, action, None)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_imagine_no_prompt(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "imagine_slash")
+    action = MagicMock()
+    action.value = "create"
+    interaction = _interaction()
+    await handler(interaction, action, None)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_imagine_premium_publishes(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    bot_core.kafka_service.publish = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "imagine_slash")
+    action = MagicMock()
+    action.value = "create"
+    interaction = _interaction()
+    interaction.id = 555
+    interaction.channel_id = 1
+    interaction.user.display_name = "Bob"
+    await handler(interaction, action, "a cat")
+    bot_core.kafka_service.publish.assert_awaited_once()
