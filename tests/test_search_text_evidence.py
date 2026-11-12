@@ -139,6 +139,29 @@ def test_query_coverage_score_none():
     assert T()._query_coverage_score("zzz", "aaa") == 0.0
 
 
+def test_query_coverage_score_high_ratio():
+    score = T()._query_coverage_score("alpha beta gamma delta", "alpha beta gamma delta extra")
+    assert score >= 1.0
+
+
+def test_query_coverage_score_partial():
+    # some tokens hit -> small positive score
+    score = T()._query_coverage_score("alpha beta gamma delta", "alpha something else")
+    assert score > 0
+
+
+def test_query_highlight_unclosed_code_fence():
+    text = ("paragraph one content " * 30) + "\n\n```python\nprint(1)\n" + ("more " * 30)
+    hl = T()._extract_query_highlight(text, "one", max_chars=500)
+    assert hl.count("```") % 2 == 0  # balanced
+
+
+def test_query_highlight_no_tokens():
+    text = "x" * 2000
+    hl = T()._extract_query_highlight(text, "!!", max_chars=100)
+    assert len(hl) <= 100
+
+
 # ---------------- evidence mixin ----------------
 def test_fetch_page_data_unsafe_url():
     owner = E()
