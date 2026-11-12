@@ -866,3 +866,23 @@ async def test_endpoint_switch_on_choose_unconfigured(monkeypatch):
     choice_interaction = _interaction()
     await on_choose(choice_interaction, "openai")
     assert "chưa được cấu hình" in choice_interaction.response.send_message.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_models_not_configured(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.get_active_sdk = AsyncMock(return_value=None)
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "endpoint_models")
+    if handler is None:
+        group = FakeGroup._all.get("endpoint")
+        handler = next(f for f in group._cmd.registered if f.__name__ == "endpoint_models")
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
