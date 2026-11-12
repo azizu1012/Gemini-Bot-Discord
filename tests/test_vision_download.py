@@ -45,10 +45,6 @@ def test_set_cache_evicts_oldest():
 
 
 # ---------------- _download_image ----------------
-async def _run(coro):
-    return await asyncio.run(coro) if False else await coro
-
-
 @pytest.mark.asyncio
 async def test_download_image_turn_cache_hit():
     v = make_vision()
