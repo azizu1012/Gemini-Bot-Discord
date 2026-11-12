@@ -601,3 +601,58 @@ async def test_imagine_premium_publishes(monkeypatch):
     interaction.user.display_name = "Bob"
     await handler(interaction, action, "a cat")
     bot_core.kafka_service.publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_check_static_admin(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=["2000"], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "check"
+    user = MagicMock()
+    user.id = 2000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    assert "Admin" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_remove_static(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=["2000"], MODERATOR_USER_IDS=["3000"])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "remove"
+    user = MagicMock()
+    user.id = 3000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    assert "tĩnh" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_remove_dynamic(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    bot_core.db_repo.remove_moderator_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "remove"
+    user = MagicMock()
+    user.id = 4000
+    user.display_name = "Bob"
+    await handler(interaction, action, user)
+    interaction.followup.send.assert_awaited_once()
