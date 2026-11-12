@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white" alt="Redis Streams" />
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose" />
   <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/ci.yml/badge.svg" alt="CI" />
-  <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret-scan.yml/badge.svg" alt="Secret scan" />
+  <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret_scan.yml/badge.svg" alt="Secret scan" />
 </p>
 
 <p><strong>A reliable, endpoint-first AI assistant for Discord.</strong><br />
@@ -234,7 +234,7 @@ The CI workflow runs compilation, PostgreSQL/Redis-backed tests, and the secret 
 1. Create a focused branch from main.
 2. Add or update tests in tests/.
 3. Run the local test and compile commands.
-4. Open a pull request and wait for CI and secret-scan checks.
+4. Open a pull request and wait for CI and secret_scan checks.
 5. Merge only after all required checks pass.
 
 ## License

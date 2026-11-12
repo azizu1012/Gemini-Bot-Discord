@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white" alt="Redis Streams" />
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose" />
   <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/ci.yml/badge.svg" alt="CI" />
-  <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret-scan.yml/badge.svg" alt="Secret scan" />
+  <img src="https://github.com/azizu1012/Gemini-Bot-Discord/actions/workflows/secret_scan.yml/badge.svg" alt="Secret scan" />
 </p>
 
 <p><strong>Trợ lý AI Discord đáng tin cậy, ưu tiên endpoint và tự lưu trữ.</strong><br />
