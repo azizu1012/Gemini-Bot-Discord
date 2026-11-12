@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
-from src.handlers.discord.ui import GlobalNoteView, ModelPickerView
+from src.handlers.discord.ui import GlobalNoteDemoteView, GlobalNoteView, ModelPickerView
 
 
 def _notes(n=10):
@@ -74,3 +74,27 @@ async def test_model_picker_summary_embed():
     embed = view.summary_embed()
     assert embed is not None
     assert "Chọn model" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_view_empty_summary():
+    view = GlobalNoteDemoteView([], db_repo=None)
+    assert "Không còn" in view.summary_text()
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_view_pages():
+    notes = _notes(20)
+    view = GlobalNoteDemoteView(notes, db_repo=None, page_size=8)
+    assert view.total_pages == 3
+    assert len(view._current_page_notes()) == 8
+    view.page = 2
+    assert len(view._current_page_notes()) == 4
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_view_summary():
+    view = GlobalNoteDemoteView(_notes(3), db_repo=None)
+    text = view.summary_text()
+    assert "Demote global notes" in text
+    assert "page 1/1" in text
