@@ -77,14 +77,8 @@ graphify-out/
 
 # Internal project docs (AI agent handoff, not for public)
 CLAUDE.md
-GEMINI.md
-AGENT_HANDOFF_PROJECT_CONTEXT.md
-PROJECT_INFO.txt
-Project_structure.txt
-DOCUMENTATION.md
 
-# Docs folder (never commit)
-docs/
+# Docs folder — committed to GitHub (living documentation)
 Donet-qr/
 
 # OS specific

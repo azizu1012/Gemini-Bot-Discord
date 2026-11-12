@@ -77,7 +77,28 @@ if ($args.Count -ge 1) {
 
 switch ($cmd) {
     'up' {
-        docker compose up -d --build
+        # Offline-friendly: image đã có thì start thẳng, không --build
+        # (--build luôn check metadata python:3.12-slim trên Docker Hub
+        #  nên rớt mạng/DNS là fail dù image cũ vẫn chạy tốt).
+        $botImage = if ($env:BOT_IMAGE) { $env:BOT_IMAGE } else { 'azuris-bot:local' }
+        docker image inspect $botImage 2>$null | Out-Null
+        $haveImage = ($LASTEXITCODE -eq 0)
+        if ($haveImage) {
+            Write-Host "[INFO] Image $botImage da co — start khong build (muon build moi: chon 8)."
+            docker compose up -d
+        } else {
+            Write-Host '[INFO] Chua co image bot — build lan dau (can mang)...'
+            docker compose up -d --build
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host ''
+            Write-Host '[LOI] Khong build/start duoc. Nguyen nhan thuong gap nhat:'
+            Write-Host '  - May mat mang / DNS hong (loi "no such host" = Docker khong phan giai duoc registry-1.docker.io).'
+            Write-Host '  - Cach xu ly: kiem tra mang, doi DNS sang 8.8.8.8/1.1.1.1, restart Docker Desktop, roi chon 1 lai.'
+            Write-Host '  - Neu image cu van con: chay tay `docker compose up -d` (khong --build) de chay offline.'
+            pause
+            return
+        }
         docker image prune -f | Out-Null
         docker compose ps
     }
