@@ -50,6 +50,38 @@ def test_required_quality_sources_delegates():
     assert e._required_quality_sources("q") == 2
 
 
+def test_delegated_planner_methods():
+    e = make_engine()
+    e.planner.contains_year = MagicMock(return_value=True)
+    e.planner.time_sensitive_timelimit = MagicMock(return_value="d")
+    e.planner.transform_temporal_query = MagicMock(return_value=("q2", "d"))
+    e.planner.determine_batch_size = MagicMock(return_value=1)
+    e.planner.classify_topic = MagicMock(return_value="general")
+    assert e._contains_year("2026") is True
+    assert e._time_sensitive_timelimit("news") == "d"
+    assert e._transform_temporal_query("news") == ("q2", "d")
+    assert e._determine_batch_size(["a"]) == 1
+    assert e._classify_topic("q") == "general"
+
+
+def test_delegated_rerank_methods():
+    e = make_engine()
+    e.reranker.dedupe_records = MagicMock(return_value=[])
+    e.reranker.score_record = MagicMock(return_value=1.0)
+    e.reranker.is_quality_record = MagicMock(return_value=True)
+    e.reranker.count_quality_sources = MagicMock(return_value=2)
+    e.reranker.domain_diversify_records = MagicMock(return_value=[])
+    e.reranker.lightweight_rerank = MagicMock(return_value=[])
+    e.reranker.format_final_search_result = MagicMock(return_value="final")
+    assert e._dedupe_records([]) == []
+    assert e._score_record("g", "q", {}) == 1.0
+    assert e._is_quality_record("g", "q", {}) is True
+    assert e._count_quality_sources([], "g", "q") == 2
+    assert e._domain_diversify_records([], 3, True) == []
+    assert e._lightweight_rerank("g", "q", []) == []
+    assert e._format_final_search_result("g", "q", [], 1) == "final"
+
+
 # ---------------- run_search_apis ----------------
 @pytest.mark.asyncio
 async def test_run_search_apis_empty_query():
@@ -164,6 +196,45 @@ async def test_search_single_intent_happy_path(monkeypatch):
     out = await e._search_single_intent("query")
     assert out == "final"
     e._fetch_page_evidence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_fallback_search_records_selection(monkeypatch):
+    import src.tools.search.engine as eng_mod
+
+    e = make_engine()
+    e._search_serpapi_records = AsyncMock(return_value=[{"provider": "serpapi"}])
+    e._search_tavily_records = AsyncMock(return_value=[{"provider": "tavily"}])
+    e._search_exa_records = AsyncMock(return_value=[{"provider": "exa"}])
+
+    # select 2 fallback providers
+    e.fallback_provider_limit = 2
+    old_keys = (eng_mod.SERPAPI_API_KEY, eng_mod.TAVILY_API_KEY, eng_mod.EXA_API_KEY)
+    eng_mod.SERPAPI_API_KEY = "k1"
+    eng_mod.TAVILY_API_KEY = "k2"
+    eng_mod.EXA_API_KEY = "k3"
+    try:
+        merged = await e._run_fallback_search_records("q")
+        assert merged
+        providers = {r["provider"] for r in merged}
+        assert len(providers) == 2  # limited to fallback_provider_limit
+    finally:
+        eng_mod.SERPAPI_API_KEY, eng_mod.TAVILY_API_KEY, eng_mod.EXA_API_KEY = old_keys
+
+
+@pytest.mark.asyncio
+async def test_run_fallback_search_records_no_keys(monkeypatch):
+    import src.tools.search.engine as eng_mod
+
+    e = make_engine()
+    old = (eng_mod.SERPAPI_API_KEY, eng_mod.TAVILY_API_KEY, eng_mod.EXA_API_KEY)
+    eng_mod.SERPAPI_API_KEY = ""
+    eng_mod.TAVILY_API_KEY = ""
+    eng_mod.EXA_API_KEY = ""
+    try:
+        assert await e._run_fallback_search_records("q") == []
+    finally:
+        eng_mod.SERPAPI_API_KEY, eng_mod.TAVILY_API_KEY, eng_mod.EXA_API_KEY = old
 
 
 @pytest.mark.asyncio
