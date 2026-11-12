@@ -568,6 +568,106 @@ async def test_fallback_lite_invalid_key_returns_user_error():
 
 
 @pytest.mark.asyncio
+async def test_final_rate_limit_fallback_to_lite():
+    state = {"n": 0}
+
+    class RLGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            state["n"] += 1
+            if state["n"] <= 1:
+                raise Exception("rate limit hit")
+            return SimpleNamespace(candidates=[_step_candidate(text="lite answer", finish="STOP")])
+
+        def _is_rate_limit_error(self, s):
+            return "rate limit" in str(s)
+
+        def _is_unavailable_error(self, s):
+            return False
+
+        def _is_invalid_key_error(self, s):
+            return False
+
+        def _is_connection_error(self, s):
+            return False
+
+        def log_exception(self, **kw):
+            pass
+
+    pipeline = make_pipeline(RLGateway(None))
+    result = await pipeline._call_gemini_final(
+        [{"role": "user", "parts": [{"text": "hi"}]}],
+        "reasoning",
+        "",
+        "u1",
+        {"is_admin": False},
+    )
+    assert "lite answer" in result
+
+
+@pytest.mark.asyncio
+async def test_final_invalid_key_breaks_to_fallback():
+    class KeyGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            raise Exception("invalid key abc")
+
+        def _is_invalid_key_error(self, s):
+            return "invalid key" in str(s)
+
+        def _is_rate_limit_error(self, s):
+            return False
+
+        def _is_connection_error(self, s):
+            return False
+
+        def log_exception(self, **kw):
+            pass
+
+    pipeline = make_pipeline(KeyGateway(None))
+    result = await pipeline._call_gemini_final(
+        [{"role": "user", "parts": [{"text": "hi"}]}],
+        "reasoning",
+        "",
+        "u1",
+        {"is_admin": False},
+    )
+    assert "thử lại" in result
+
+
+@pytest.mark.asyncio
+async def test_final_connection_error_retries_then_empty_candidate():
+    state = {"n": 0}
+
+    class ConnGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            state["n"] += 1
+            if state["n"] <= 1:
+                raise ConnectionError("connection reset")
+            return SimpleNamespace(candidates=[])
+
+        def _is_connection_error(self, s):
+            return True
+
+        def _is_invalid_key_error(self, s):
+            return False
+
+        def _is_rate_limit_error(self, s):
+            return False
+
+        def log_exception(self, **kw):
+            pass
+
+    pipeline = make_pipeline(ConnGateway(None))
+    result = await pipeline._call_gemini_final(
+        [{"role": "user", "parts": [{"text": "hi"}]}],
+        "reasoning",
+        "",
+        "u1",
+        {"is_admin": False},
+    )
+    assert "thử lại" in result
+
+
+@pytest.mark.asyncio
 async def test_call_gemini_api_extra_retrieval_pass():
     class ExtraConfig(FakeConfig):
         SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = True
