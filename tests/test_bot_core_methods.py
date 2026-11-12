@@ -271,6 +271,44 @@ async def test_voice_lock_enforce_loop_empty():
 
 
 @pytest.mark.asyncio
+async def test_send_message_with_retry_success():
+    bc = make_bc()
+    channel = MagicMock()
+    channel.send = AsyncMock(return_value=MagicMock())
+    result = await bc._send_message_with_retry(channel, content="hi", reference=None, mention_author=False, label="reply")
+    assert result is not None
+    channel.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_send_message_with_retry_failure_returns_none():
+    bc = make_bc()
+    channel = MagicMock()
+    channel.send = AsyncMock(side_effect=ConnectionError("boom"))
+    result = await bc._send_message_with_retry(channel, content="hi", reference=None, mention_author=False, label="reply")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_edit_message_with_retry_success():
+    bc = make_bc()
+    message = MagicMock()
+    message.edit = AsyncMock()
+    ok = await bc._edit_message_with_retry(message, content="new", label="edit")
+    assert ok is True
+    message.edit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_edit_message_with_retry_failure():
+    bc = make_bc()
+    message = MagicMock()
+    message.edit = AsyncMock(side_effect=RuntimeError("x"))
+    ok = await bc._edit_message_with_retry(message, content="new", label="edit")
+    assert ok is False
+
+
+@pytest.mark.asyncio
 async def test_voice_lock_enforce_loop_kicks_non_whitelist():
     bc = make_bc()
     bc.bot.is_closed = MagicMock(side_effect=[False, True])
