@@ -271,6 +271,58 @@ async def test_voice_lock_enforce_loop_empty():
 
 
 @pytest.mark.asyncio
+async def test_resolve_referenced_message_no_reference():
+    bc = make_bc()
+    message = MagicMock()
+    message.reference = None
+    assert await bc._resolve_referenced_message(message) is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_referenced_message_resolved():
+    bc = make_bc()
+    message = MagicMock()
+    reference = MagicMock()
+    reference.message_id = 1
+    resolved = MagicMock(spec=discord.Message)
+    reference.resolved = resolved
+    message.reference = reference
+    assert await bc._resolve_referenced_message(message) is resolved
+
+
+@pytest.mark.asyncio
+async def test_resolve_referenced_message_fetch_error():
+    bc = make_bc()
+    message = MagicMock()
+    reference = MagicMock()
+    reference.message_id = 1
+    reference.channel_id = None
+    reference.resolved = None
+    message.reference = reference
+    message.channel = MagicMock()
+    message.channel.fetch_message = AsyncMock(side_effect=discord.NotFound(MagicMock(), "x"))
+    assert await bc._resolve_referenced_message(message) is None
+
+
+@pytest.mark.asyncio
+async def test_collect_message_attachments():
+    bc = make_bc()
+    message = MagicMock()
+    att = MagicMock()
+    att.id = 1
+    att.url = "http://x/a.png"
+    att.proxy_url = "http://x/a.png"
+    att.filename = "a.png"
+    att.size = 10
+    att.content_type = "image/png"
+    message.attachments = [att]
+    message.reference = None
+    bc._build_attachment_payload = MagicMock(return_value={"id": "1"})
+    result = await bc._collect_message_attachments(message)
+    assert result == [{"id": "1"}]
+
+
+@pytest.mark.asyncio
 async def test_send_message_with_retry_success():
     bc = make_bc()
     channel = MagicMock()
