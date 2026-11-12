@@ -138,3 +138,25 @@ async def test_image_history_select_callback_local_file(tmp_path, monkeypatch):
     interaction.response.edit_message = AsyncMock()
     await select.callback(interaction)
     interaction.response.edit_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_model_picker_confirm_without_selection():
+    view = ModelPickerView(models=_models(), slot="reasoning")
+    # find confirm button (label contains Xác nhận)
+    confirm = next(b for b in view.children if "Xác nhận" in getattr(b, "label", ""))
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    await confirm.callback(interaction)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_model_picker_skip():
+    view = ModelPickerView(models=_models(), slot="final")
+    skip = next(b for b in view.children if "Để trống" in getattr(b, "label", ""))
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    await skip.callback(interaction)
+    assert view.skipped is True
+    assert view.confirmed is True
