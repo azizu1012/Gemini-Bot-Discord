@@ -30,6 +30,7 @@ def make_handler():
     h.logger = NullLogger()
     h.config = MagicMock()
     h.config.FILE_CHUNK_DIR = "data/file_chunks"
+    h.file_chunk_dir = "data/file_chunks"
     h.cache_mgr = MagicMock()
     h.db_repo = MagicMock()
     h.db_repo.log_message_db = AsyncMock()
@@ -46,7 +47,7 @@ def make_handler():
     h.note_mgr = MagicMock()
     h.note_mgr.get_user_identity = AsyncMock(return_value="")
     h.file_parser = MagicMock()
-    h.__dict__["file_index_svc"] = MagicMock()
+    h.__dict__["_file_index_svc"] = MagicMock()
     h.tools_mgr = MagicMock()
     h.tools_mgr.pop_allowed_mentions = MagicMock(return_value=[])
     h.__dict__["_pipeline"] = MagicMock()
@@ -101,6 +102,28 @@ async def test_process_message_easy_path():
     actions = [call[0][0].get("action") for call in h._publish_outgoing.call_args_list]
     assert "reply_batch" in actions
     h._call_pipeline_with_deadline.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_message_text_attachment_indexing():
+    h = make_handler()
+    h.cache_mgr.get_chat_history = MagicMock(return_value=[])
+    h.file_parser.prepare_file_for_indexing = AsyncMock(
+        return_value={"filename": "a.txt", "file_extension": ".txt", "chunk_manifest": [], "security_report": ""}
+    )
+    h.file_index_svc.build_file_index = AsyncMock(return_value={"chunk_count": 0})
+    h.file_index_svc.validate_file_index = AsyncMock(return_value={"status": "ok"})
+    h.file_index_svc.set_latest_index = MagicMock()
+    await h.process_message(make_msg({
+        "type": "message",
+        "user_id": "u1",
+        "content": "see file",
+        "channel_id": "c1",
+        "attachments": [{"filename": "doc.txt", "url": "http://x/doc.txt", "size": 100}],
+    }))
+    actions = [call[0][0].get("action") for call in h._publish_outgoing.call_args_list]
+    assert "reply_batch" in actions
+    h.file_index_svc.build_file_index.assert_awaited_once()
 
 
 @pytest.mark.asyncio
