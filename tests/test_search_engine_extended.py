@@ -139,3 +139,49 @@ async def test_fetch_page_evidence_empty_sets_empty_cache(monkeypatch):
     e.fetcher.fetch_page_evidence = AsyncMock(return_value="")
     assert await e._fetch_page_evidence("http://x") == ""
     e.cache.set_deep_read.assert_called_once()
+
+
+# ---------------- _search_single_intent ----------------
+@pytest.mark.asyncio
+async def test_search_single_intent_happy_path(monkeypatch):
+    e = make_engine()
+    rec = {"title": "t", "snippet": "s" * 120, "url": "http://a", "domain": "a.com"}
+    e._classify_topic = MagicMock(return_value="general")
+    e._transform_temporal_query = MagicMock(return_value=("q", None))
+    e._search_duckduckgo_records = AsyncMock(return_value=[rec])
+    e._dedupe_records = MagicMock(side_effect=lambda x: x)
+    e._required_quality_sources = MagicMock(return_value=1)
+    e._is_search_result_sufficient = MagicMock(return_value=True)
+    e._run_fallback_search_records = AsyncMock(return_value=[])
+    e._score_record = MagicMock(return_value=2.0)
+    e._lightweight_rerank = MagicMock(side_effect=lambda t, q, r: r)
+    e._fetch_page_evidence = AsyncMock(return_value="evidence")
+    e._format_final_search_result = MagicMock(return_value="final")
+    e._count_quality_sources = MagicMock(return_value=1)
+    e.search_web_mode = "grounded"
+    e.search_grounded_top_links = 1
+
+    out = await e._search_single_intent("query")
+    assert out == "final"
+    e._fetch_page_evidence.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_search_single_intent_fallback_when_insufficient(monkeypatch):
+    e = make_engine()
+    e._classify_topic = MagicMock(return_value="general")
+    e._transform_temporal_query = MagicMock(return_value=("q", None))
+    e._search_duckduckgo_records = AsyncMock(return_value=[])
+    e._dedupe_records = MagicMock(side_effect=lambda x: x)
+    e._required_quality_sources = MagicMock(return_value=2)
+    e._is_search_result_sufficient = MagicMock(return_value=False)
+    fallback_rec = {"title": "f", "snippet": "s", "url": "http://f", "domain": "f.com"}
+    e._run_fallback_search_records = AsyncMock(return_value=[fallback_rec])
+    e._score_record = MagicMock(return_value=1.0)
+    e._lightweight_rerank = MagicMock(side_effect=lambda t, q, r: r)
+    e._format_final_search_result = MagicMock(return_value="final2")
+    e._count_quality_sources = MagicMock(return_value=1)
+    e.search_web_mode = "snippet"
+    out = await e._search_single_intent("query")
+    assert "final2" in out
+    e._run_fallback_search_records.assert_awaited_once()

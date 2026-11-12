@@ -520,6 +520,54 @@ async def test_fallback_lite_success_returns_text():
 
 
 @pytest.mark.asyncio
+async def test_fallback_lite_truncated_continuation():
+    state = {"n": 0}
+
+    def next_candidate():
+        state["n"] += 1
+        if state["n"] == 1:
+            return _step_candidate(text="partial ", finish="MAX_TOKENS")
+        return _step_candidate(text="continued", finish="STOP")
+
+    pipeline = make_pipeline(FakeGateway(next_candidate))
+    result = await pipeline._fallback_lite_as_flash(
+        [{"role": "user", "parts": [{"text": "hi"}]}],
+        "reasoning",
+        "",
+        "u1",
+        {"is_admin": False},
+    )
+    assert "partial" in result
+    assert "continued" in result
+
+
+@pytest.mark.asyncio
+async def test_fallback_lite_invalid_key_returns_user_error():
+    class KeyGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            raise Exception("invalid key abc")
+
+        def _is_invalid_key_error(self, s):
+            return "invalid key" in str(s)
+
+        def _is_rate_limit_error(self, s):
+            return False
+
+        def _is_connection_error(self, s):
+            return False
+
+    pipeline = make_pipeline(KeyGateway(None))
+    result = await pipeline._fallback_lite_as_flash(
+        [{"role": "user", "parts": [{"text": "hi"}]}],
+        "reasoning",
+        "",
+        "u1",
+        {"is_admin": False},
+    )
+    assert "thử lại" in result
+
+
+@pytest.mark.asyncio
 async def test_call_gemini_api_extra_retrieval_pass():
     class ExtraConfig(FakeConfig):
         SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS = True
