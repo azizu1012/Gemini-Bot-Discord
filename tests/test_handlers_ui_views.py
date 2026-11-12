@@ -5,7 +5,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
-from src.handlers.discord.ui import GlobalNoteView
+from src.handlers.discord.ui import GlobalNoteView, ModelPickerView
 
 
 def _notes(n=10):
@@ -47,3 +47,30 @@ async def test_global_note_view_empty_notes():
     assert view.total_pages == 1
     assert view._current_page_notes() == []
     view._rebuild_components()  # select disabled but no crash
+
+
+def _models(n=30):
+    return [{"id": f"model-{i}", "name": f"Model {i}"} for i in range(n)]
+
+
+@pytest.mark.asyncio
+async def test_model_picker_filtered():
+    view = ModelPickerView(models=_models(), slot="reasoning")
+    assert len(view.filtered) == 30
+    view.apply_query("model-1")
+    assert len(view.filtered) == 11  # model-1, model-10..19
+
+
+@pytest.mark.asyncio
+async def test_model_picker_pages():
+    view = ModelPickerView(models=_models(), slot="final")
+    assert view.total_pages == 2  # 30 models / 25 per page
+    assert len(view.page_models) == 25
+
+
+@pytest.mark.asyncio
+async def test_model_picker_summary_embed():
+    view = ModelPickerView(models=_models(), slot="reasoning")
+    embed = view.summary_embed()
+    assert embed is not None
+    assert "Chọn model" in embed.title
