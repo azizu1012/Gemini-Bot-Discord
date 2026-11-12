@@ -7,7 +7,7 @@ every command definition + the shared error handler.
 import asyncio
 import sys
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from discord import app_commands
@@ -368,4 +368,66 @@ async def test_donate_slash_missing_file(monkeypatch):
 
     interaction = _interaction()
     await handler(interaction, None)  # defaults to kofi -> missing file
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_global_notes_slash_empty(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.get_global_notes_db = AsyncMock(return_value=[])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "global_notes_slash")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction, 40)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_by_id(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.demote_global_note_by_id_db = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "global_note_demote_slash")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction, "note-123")
+    assert "Demoted global note by id" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_lock_room_not_in_voice(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "lock_room")
+    assert handler is not None
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    interaction.user.voice = None  # not in voice
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_unlock_room_not_locked(monkeypatch):
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.is_locked = MagicMock(return_value=False)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "unlock_room")
+    assert handler is not None
+
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    channel = MagicMock()
+    channel.id = 1
+    channel.name = "Lobby"
+    interaction.user.voice = MagicMock(channel=channel)
+    await handler(interaction)
     interaction.followup.send.assert_awaited_once()
