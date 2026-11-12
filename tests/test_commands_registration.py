@@ -525,3 +525,32 @@ async def test_message_to_slash_channel(monkeypatch):
     user.display_name = "Target"
     await handler(interaction, user, "hi", channel)
     channel.send.assert_awaited_once()
+
+
+def _find_health_handler(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.is_configured = AsyncMock(return_value=True)
+    resolver.get_active_sdk = AsyncMock(return_value="genai")
+    resolver.get_endpoint = AsyncMock(return_value={"base_url": "http://x", "api_key": "k"})
+    resolver.get_slot_models = AsyncMock(return_value={})
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    bot_core.db_repo.init_db = AsyncMock()
+    bot_core.db_repo.update_endpoint_check_status = AsyncMock()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "health_check_slash")
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_health_check_slash_configured_ok(monkeypatch):
+    handler = _find_health_handler(monkeypatch)
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
