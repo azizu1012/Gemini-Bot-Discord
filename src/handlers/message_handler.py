@@ -568,7 +568,7 @@ class MessageHandler:
                         attachment_data += f"\n[System Error: Không thể index file {att.get('filename')}]\n"
 
             # Run parallel download for images
-            downloaded_images = []
+            downloaded_images: list[dict[str, Any]] = []
             if image_tasks:
                 downloaded_results = await asyncio.gather(*image_tasks)
                 for img_bytes, (fname, img_url, mime) in zip(downloaded_results, image_metas):
@@ -652,7 +652,7 @@ class MessageHandler:
                 messages.append({"role": role, "parts": [{"text": hist_msg["content"]}]})
 
             # Tin nhắn user cuối cùng chứa text và toàn bộ inline_data của ảnh tải được
-            user_parts = [{"text": user_message}]
+            user_parts: list[dict[str, Any]] = [{"text": user_message}]
             if downloaded_images:
                 user_parts.extend(downloaded_images)
             messages.append({"role": "user", "parts": user_parts})

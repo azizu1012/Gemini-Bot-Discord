@@ -15,6 +15,7 @@ class HealthCheckerService:
 
         self.key_status: Dict[str, Dict[str, Any]] = {}
         self.admin_user = None
+        self._background_task_task: Optional[asyncio.Task] = None
 
     async def _generate_recovery_report(self, key_name: str, provider: str, downtime_start: float, uptime_time: float, downtime_str: str) -> str:
         """Generate a summary recovery report (static text, no LLM)."""

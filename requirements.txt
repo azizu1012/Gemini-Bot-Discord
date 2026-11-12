@@ -13,7 +13,7 @@ msgpack==1.2.3
 openai==2.38.0
 pypdf==6.21.4
 python-dotenv==1.2.1
-redis>=5.0
+redis==7.4.1
 requests==2.34.2
 serpapi==1.0.2
 setuptools==84.2.1

@@ -276,7 +276,7 @@ class SearchEngine:
             if isinstance(res, Exception):
                 self.logger.error(f"Search intent error for '{intent[:60]}': {res}")
                 final_sections.append(f"### 🔍 [Chủ đề: GENERAL] Kết quả cho '{intent}':\n(Không thể truy xuất dữ liệu cho intent này.)")
-            elif res:
+            elif isinstance(res, str):
                 final_sections.append(res)
 
         return "\n\n".join(final_sections).strip() if final_sections else ""

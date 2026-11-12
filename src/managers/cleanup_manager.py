@@ -47,7 +47,7 @@ class CleanupManager:
             # Sort by access time (oldest first)
             files_to_delete.sort(key=lambda x: x[1])
             
-            total_deleted_size = 0
+            total_deleted_size = 0.0
             deleted_count = 0
             
             # Delete files until we reach threshold

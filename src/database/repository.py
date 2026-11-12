@@ -6,7 +6,7 @@ import asyncio
 import json
 from typing import Optional
 
-import asyncpg  # type: ignore[reportMissingImports]
+import asyncpg
 
 from src.core.config import get_config, logger
 from src.database.mixins import (

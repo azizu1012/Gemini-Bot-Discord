@@ -3,6 +3,7 @@ import uuid
 from typing import Any, Dict, Optional
 
 from src.core.config import logger
+from src.services.messaging.redis_client import RedisStreamConsumer
 from src.services.redis_service import RedisStreamService
 
 
@@ -12,7 +13,7 @@ class SearchSubtaskClient:
     def __init__(self, kafka_service: RedisStreamService, group_id: Optional[str] = None):
         self.kafka_service = kafka_service
         self.group_id = group_id or f"azuris_search_results_{uuid.uuid4()}"
-        self._consumer = None
+        self._consumer: Optional[RedisStreamConsumer] = None
         self._listener_task: Optional[asyncio.Task] = None
         self._pending: Dict[str, asyncio.Future] = {}
         self.logger = logger

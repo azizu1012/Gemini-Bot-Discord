@@ -117,7 +117,7 @@ def register_slash_commands(bot_core_instance):
                 inline=False,
             )
         else:
-            active = await resolver.get_active_sdk()
+            active = await resolver.get_active_sdk() or "genai"
             ep = await resolver.get_endpoint(active) or {}
             start = time.perf_counter()
             try:
@@ -382,7 +382,7 @@ def register_slash_commands(bot_core_instance):
                         filename="donate_momo_anh_tr.png",
                     )
 
-                    msg = await interaction.followup.send(
+                    msg = await interaction.followup.send(  # type: ignore[func-returns-value]
                         content=(
                             "⚠️ Lệnh `/imagine` chỉ dành cho người dùng **Premium**!\n"
                             "Cảm ơn bạn đã cân nhắc ủng hộ! Đây là mã QR Momo của Anh Tr, hãy donate và liên hệ admin để cấp quyền nhé:\n"
@@ -395,7 +395,8 @@ def register_slash_commands(bot_core_instance):
                     async def auto_delete():
                         await asyncio.sleep(120)
                         try:
-                            await msg.delete()  # type: ignore[union-attr]
+                            if msg is not None:
+                                await msg.delete()
                         except (discord.NotFound, discord.Forbidden):
                             pass
 
@@ -804,7 +805,7 @@ def register_slash_commands(bot_core_instance):
             filename=info["original_filename"],
         )
 
-        msg = await interaction.followup.send(
+        msg = await interaction.followup.send(  # type: ignore[func-returns-value]
             content=f"**{info['message']}**\n_Tin nhắn này sẽ tự xóa sau 2 phút._",
             file=file_obj,
         )
@@ -812,7 +813,8 @@ def register_slash_commands(bot_core_instance):
         async def auto_delete():
             await asyncio.sleep(120)
             try:
-                await msg.delete()  # type: ignore[union-attr]
+                if msg is not None:
+                    await msg.delete()
             except (discord.NotFound, discord.Forbidden):
                 pass
 
@@ -1097,6 +1099,9 @@ def register_slash_commands(bot_core_instance):
         me = interaction.guild.me if interaction.guild else None
         if not me or not me.guild_permissions.manage_nicknames:
             await interaction.response.send_message("Bot thiếu quyền Manage Nicknames trong server này.", ephemeral=True)
+            return
+        if not isinstance(target, discord.Member):
+            await interaction.response.send_message("Chỉ có thể đổi biệt danh cho thành viên trong server.", ephemeral=True)
             return
 
         try:

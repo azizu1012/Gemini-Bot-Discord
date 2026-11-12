@@ -56,7 +56,7 @@ class BotCore:
         redis_url = Config._get_str("REDIS_URL", "")
         if redis_url:
             try:
-                import redis.asyncio as aioredis  # type: ignore[reportMissingImports]
+                import redis.asyncio as aioredis
                 self._redis_client = aioredis.from_url(redis_url, decode_responses=True)
                 self.logger.info("Redis detected! Centralized Lock mode is ENABLED for BotCore.")
             except Exception as e:
@@ -352,15 +352,15 @@ class BotCore:
         if isinstance(resolved, discord.Message):
             return resolved
 
-        channel = message.channel
+        channel: discord.abc.Messageable = message.channel
         reference_channel_id = getattr(reference, "channel_id", None)
         if reference_channel_id and int(reference_channel_id) != message.channel.id:
             resolved_channel = self.bot.get_channel(int(reference_channel_id))
             if resolved_channel is not None and hasattr(resolved_channel, "fetch_message"):
-                channel = resolved_channel
+                channel = resolved_channel  # type: ignore[assignment]
 
         try:
-            return await channel.fetch_message(reference.message_id)  # type: ignore[union-attr]
+            return await channel.fetch_message(reference.message_id)
         except (discord.NotFound, discord.Forbidden):
             return None
         except Exception as e:
@@ -514,7 +514,7 @@ class BotCore:
             task.cancel()
         self._active_user_locks.pop(user_id, None)
         if self._redis_client:
-            asyncio.create_task(self._redis_client.delete(f"lock:user:{user_id}"))
+            asyncio.ensure_future(self._redis_client.delete(f"lock:user:{user_id}"))
 
     async def _outgoing_sender_loop(self, user_id: str) -> None:
         queue = self._outgoing_queues.get(user_id)
@@ -722,7 +722,7 @@ class BotCore:
             kwargs: Dict[str, Any] = {"content": content, "mention_author": mention_author}
             if reference is not None:
                 kwargs["reference"] = reference
-            return await channel.send(**kwargs)  # type: ignore[arg-type]
+            return await channel.send(**kwargs)
 
         try:
             return await self._run_with_retry(_do_send, label, max_attempts, base_delay)

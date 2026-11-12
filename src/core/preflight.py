@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
-import asyncpg  # type: ignore[reportMissingImports]
+import asyncpg
 
 from .config import Config, logger
 
