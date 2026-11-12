@@ -96,3 +96,54 @@ async def test_on_message_dm_not_mentioned():
     bc._handle_confirmation_message = AsyncMock(return_value=False)
     await events["on_message"](message)
     # not dm, not mentioned -> returns
+
+
+@pytest.mark.asyncio
+async def test_on_message_redis_lock_busy():
+    bc = make_bc()
+    bc._redis_client = MagicMock()
+    bc._redis_client.set = AsyncMock(return_value=False)  # not acquired
+    bc._handle_confirmation_message = AsyncMock(return_value=False)
+    events = _capture_events(bc)
+    message = MagicMock()
+    message.author.bot = False
+    message.author.id = 42
+    message.channel = MagicMock()
+    message.mentions = []
+    message.reply = AsyncMock()
+    # make it a DM so it proceeds past mention check
+    message.channel = MagicMock()
+    from discord import DMChannel
+
+    message.channel = MagicMock(spec=DMChannel)
+    await events["on_message"](message)
+    assert message.reply.called
+
+
+@pytest.mark.asyncio
+async def test_on_message_success_publishes():
+    bc = make_bc()
+    bc._redis_client = MagicMock()
+    bc._redis_client.set = AsyncMock(return_value=True)  # acquired
+    bc._handle_confirmation_message = AsyncMock(return_value=False)
+    bc.kafka_service.publish = AsyncMock(return_value=True)
+    bc._collect_message_attachments = AsyncMock(return_value=[])
+    bc._resolve_referenced_message = AsyncMock(return_value=None)
+    bc.db_repo.clear_user_processing_state = AsyncMock()
+    events = _capture_events(bc)
+    message = MagicMock()
+    message.author.bot = False
+    message.author.id = 42
+    message.author.name = "Bob"
+    message.author.display_name = "Bob"
+    message.id = 1
+    message.content = "hello"
+    message.reference = None
+    message.mentions = []
+    message.channel = MagicMock()
+    message.channel.id = 5
+    from discord import DMChannel
+
+    message.channel = MagicMock(spec=DMChannel)
+    await events["on_message"](message)
+    bc.kafka_service.publish.assert_awaited_once()
