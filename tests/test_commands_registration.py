@@ -748,3 +748,20 @@ async def test_moderator_slash_check_dynamic(monkeypatch):
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_reset_all_slash(monkeypatch):
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.db_repo.clear_all_data_db = AsyncMock()
+    bot_core.kafka_service.publish = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[], PROJECT_ROOT="")
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "reset_all_slash")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
