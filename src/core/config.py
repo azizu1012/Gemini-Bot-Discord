@@ -133,6 +133,7 @@ class Config:
         self.CITY = os.getenv("CITY")
 
         # --- ANTI-SPAM ---
+        self.CHAT_LIMITS_ENABLED = self._get_bool("CHAT_LIMITS_ENABLED", True)
         self.SPAM_THRESHOLD = self._get_int("SPAM_THRESHOLD", 3, min_value=1)
         self.SPAM_WINDOW = self._get_int("SPAM_WINDOW", 30, min_value=1)
 
@@ -277,6 +278,7 @@ TOKEN = config.TOKEN
 ADMIN_ID = config.ADMIN_ID
 ADMIN_TOKEN = config.ADMIN_TOKEN
 SAFETY_SETTINGS = config.SAFETY_SETTINGS
+CHAT_LIMITS_ENABLED = config.CHAT_LIMITS_ENABLED
 SPAM_THRESHOLD = config.SPAM_THRESHOLD
 SPAM_WINDOW = config.SPAM_WINDOW
 SERPAPI_API_KEY = config.SERPAPI_API_KEY

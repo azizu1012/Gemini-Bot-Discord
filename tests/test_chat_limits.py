@@ -62,6 +62,7 @@ class CounterRedis:
 def make_core(redis=None, *, premium=False):
     core = object.__new__(BotCore)
     core.config = SimpleNamespace(
+        CHAT_LIMITS_ENABLED=True,
         ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[],
         SPAM_THRESHOLD=3, SPAM_WINDOW=30,
         DEFAULT_RATE_LIMIT="10/60", PREMIUM_RATE_LIMIT="20/60",
@@ -74,6 +75,22 @@ def make_core(redis=None, *, premium=False):
     core.kafka_service = RedisStreamService(redis_url="redis://unused", client_id="test")
     core.kafka_service._redis = redis if redis is not None else CounterRedis()
     return core
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_dm", [False, True])
+async def test_disabled_chat_limits_skip_counters_and_redis(is_dm):
+    redis = MagicMock()
+    core = make_core(redis)
+    core.config.CHAT_LIMITS_ENABLED = False
+    core.kafka_service.increment_counter = AsyncMock(side_effect=AssertionError("Counter must not be called"))
+
+    for _ in range(25):
+        assert await core._chat_limit_reply("u1", is_dm=is_dm) is None
+
+    core.kafka_service.increment_counter.assert_not_called()
+    assert redis.mock_calls == []
+    assert core.db_repo.mock_calls == []
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,7 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 
 | Biến | Mặc định | Mô tả |
 |------|----------|-------|
+| `CHAT_LIMITS_ENABLED` | `true` | Đặt `false` để tắt anti-spam, rate limit và giới hạn DM/ngày; không đọc/ghi bộ đếm Redis |
 | `SPAM_THRESHOLD` | `3` | Số tin nhắn spam tối đa trong window |
 | `SPAM_WINDOW` | `30` | Cửa sổ thời gian (giây) |
 | `DEFAULT_RATE_LIMIT` | `10/60` | 10 messages / 60s |

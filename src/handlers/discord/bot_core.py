@@ -106,6 +106,8 @@ class BotCore:
         return await self.db_repo.is_moderator_user(str(user_id))
 
     async def _chat_limit_reply(self, user_id: str, *, is_dm: bool) -> Optional[str]:
+        if not self.config.CHAT_LIMITS_ENABLED:
+            return None
         # Keep the existing unlimited admin/moderator tiers, including DB roles.
         if await self._is_admin_user(user_id) or await self._is_moderator_user(user_id):
             return None
