@@ -104,6 +104,24 @@ def test_config_get_int_and_float_invalid_and_clamps():
     assert _with_env({"TEST_FLOAT_VAR": "0.1"}, lambda: Config._get_float("TEST_FLOAT_VAR", 1.0, min_value=0.5)) == 0.5
 
 
+def test_chat_limit_configuration_reads_environment(monkeypatch):
+    from src.core.config import Config
+
+    monkeypatch.setattr("src.core.config._load_runtime_env", lambda root: None)
+    for name, value in {
+        "SPAM_THRESHOLD": "4", "SPAM_WINDOW": "20", "DEFAULT_RATE_LIMIT": "12/60",
+        "PREMIUM_RATE_LIMIT": "30/90", "DEFAULT_DM_LIMIT": "8", "PREMIUM_DM_LIMIT": "25",
+    }.items():
+        monkeypatch.setenv(name, value)
+    cfg = Config()
+    assert (cfg.SPAM_THRESHOLD, cfg.SPAM_WINDOW) == (4, 20)
+    assert (cfg.DEFAULT_RATE_LIMIT, cfg.PREMIUM_RATE_LIMIT) == ("12/60", "30/90")
+    assert (cfg.DEFAULT_DM_LIMIT, cfg.PREMIUM_DM_LIMIT) == (8, 25)
+    for invalid in ("bad", "0/60", "10/0", "-1/60", "10/60/90"):
+        monkeypatch.setenv("DEFAULT_RATE_LIMIT", invalid)
+        assert Config._get_rate_limit("DEFAULT_RATE_LIMIT", "10/60") == "10/60"
+
+
 def test_config_db_pool_accessors():
     from src.core.config import get_db_pool, set_db_pool
 

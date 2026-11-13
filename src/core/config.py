@@ -70,6 +70,17 @@ class Config:
         raw = (os.getenv(name) or "").strip()
         return raw if raw else default
 
+    @staticmethod
+    def _get_rate_limit(name: str, default: str) -> str:
+        raw = Config._get_str(name, default)
+        try:
+            limit, window = (int(part) for part in raw.split("/"))
+            if limit > 0 and window > 0:
+                return f"{limit}/{window}"
+        except ValueError:
+            pass
+        return default
+
     def __init__(self):
         self.PROJECT_ROOT = _detect_project_root()
         _load_runtime_env(self.PROJECT_ROOT)
@@ -122,14 +133,14 @@ class Config:
         self.CITY = os.getenv("CITY")
 
         # --- ANTI-SPAM ---
-        self.SPAM_THRESHOLD = 3
-        self.SPAM_WINDOW = 30
+        self.SPAM_THRESHOLD = self._get_int("SPAM_THRESHOLD", 3, min_value=1)
+        self.SPAM_WINDOW = self._get_int("SPAM_WINDOW", 30, min_value=1)
 
         # --- RATE & DM LIMITS ---
-        self.DEFAULT_RATE_LIMIT = "10/60"
-        self.PREMIUM_RATE_LIMIT = "20/60"
-        self.DEFAULT_DM_LIMIT = 5
-        self.PREMIUM_DM_LIMIT = 15
+        self.DEFAULT_RATE_LIMIT = self._get_rate_limit("DEFAULT_RATE_LIMIT", "10/60")
+        self.PREMIUM_RATE_LIMIT = self._get_rate_limit("PREMIUM_RATE_LIMIT", "20/60")
+        self.DEFAULT_DM_LIMIT = self._get_int("DEFAULT_DM_LIMIT", 5, min_value=1)
+        self.PREMIUM_DM_LIMIT = self._get_int("PREMIUM_DM_LIMIT", 15, min_value=1)
 
         self.ADMIN_ID_RAW = os.getenv("ADMIN_IDS", os.getenv("ADMIN_ID", ""))
         self.ADMIN_USER_IDS = [i.strip() for i in self.ADMIN_ID_RAW.split(",") if i.strip()] if self.ADMIN_ID_RAW else []
