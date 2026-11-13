@@ -274,9 +274,9 @@ class ParserSecurityTests(unittest.TestCase):
 
 
 class SecretRedactionTests(unittest.IsolatedAsyncioTestCase):
-    secret = "configured-secret-123"
+    secret = "fake"
     diagnostic = (
-        "configured-secret-123 Authorization: Basic basic-secret\n"
+        "fake Authorization: Basic basic-secret\n"
         "Bearer bearer-secret https://alice:password@router.org/path?key=query-secret#fragment-secret"
     )
 
