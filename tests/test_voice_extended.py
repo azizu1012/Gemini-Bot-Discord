@@ -692,3 +692,169 @@ async def test_revoke_access_moves_member_out():
     ch.set_permissions = AsyncMock()
     assert await svc.revoke_access(member) == 1
     member.move_to.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_locked_exception_returns_false(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+    store = StubLockStore()
+    svc = _service(store=store)
+    g = _mock_guild()
+    ch = _mock_channel(1, g)
+    base = MagicMock()
+    base.connect = None
+    ch.overwrites_for = MagicMock(return_value=base)
+    ch.set_permissions = AsyncMock(side_effect=_FakeForbidden())
+    assert await svc.ensure_locked(ch) is False
+
+
+@pytest.mark.asyncio
+async def test_strip_reactions_remove_fails_continues(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+    store = StubLockStore()
+    svc = _service(store=store, owner=999)
+    g = _mock_guild()
+    ch = _mock_channel(1, g)
+
+    bad_user = _mock_member(777, "bad")
+    reaction = MagicMock()
+    reaction.users = lambda: _async_iter([bad_user])
+    reaction.remove = AsyncMock(side_effect=_FakeForbidden())
+    message = MagicMock()
+    message.reactions = [reaction]
+    ch.history = MagicMock(return_value=_async_iter([message]))
+    # should catch exception and continue
+    assert await svc.strip_reactions(ch) == 0
+
+
+@pytest.mark.asyncio
+async def test_revoke_access_move_fails_continues(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+    store = StubLockStore()
+    store.lock(301, 999)
+    svc = _service(store=store, owner=999)
+    g = _mock_guild(10)
+    ch = _mock_channel(301, g)
+    svc.bot.get_channel = MagicMock(return_value=ch)
+    member = _mock_member(500)
+    member.guild = g
+    member.move_to = AsyncMock(side_effect=_FakeForbidden())
+    ch.members = [member]
+    ch.set_permissions = AsyncMock()
+    assert await svc.revoke_access(member) == 1
+
+
+@pytest.mark.asyncio
+async def test_move_member_forbidden(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+
+    svc = _tools_service()
+    member = _mock_member(1)
+    member.voice = MagicMock(channel=MagicMock())
+    g = _mock_guild(1)
+    ch = _mock_channel(1, g)
+    member.guild = g
+    member.move_to = AsyncMock(side_effect=_FakeForbidden())
+    ok, msg = await svc.move_member(member, ch, member)
+    assert ok is False
+    assert "thiếu quyền" in msg
+
+
+@pytest.mark.asyncio
+async def test_move_all_with_forbidden_failure(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+
+    svc = _tools_service()
+    actor = _mock_member(9, "actor")
+    member_a = _mock_member(1, "A")
+    svc.service.allowed_ids = MagicMock(return_value={9, 1})
+
+    source = MagicMock()
+    source.id = 100
+    source.members = [actor, member_a]
+    source.guild = _mock_guild()
+    target = MagicMock()
+    target.guild = source.guild
+
+    actor.move_to = AsyncMock()
+    member_a.move_to = AsyncMock(side_effect=_FakeForbidden())
+
+    moved, failed = await svc.move_all(source, target, actor)
+    assert moved == 1
+    assert "A" in failed
+
+
+@pytest.mark.asyncio
+async def test_set_room_http_exception(monkeypatch):
+    class _FakeHTTP(Exception):
+        pass
+    monkeypatch.setattr(discord, "HTTPException", _FakeHTTP)
+
+    svc = _tools_service()
+    ch = MagicMock()
+    ch.id = 1
+    ch.edit = AsyncMock(side_effect=_FakeHTTP("edit fail"))
+
+    ok, updates = await svc.set_room(ch, name="NewName")
+    assert ok is False
+    assert "edit fail" in updates[0]
+
+
+@pytest.mark.asyncio
+async def test_purge_delete_messages_bulk_and_fallback_to_voice(monkeypatch):
+    svc = VoicePurgeService(batch_size=50)
+    cutoff = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    # 2 bad messages
+    m1 = MagicMock(created_at=datetime(2026, 6, 1, tzinfo=timezone.utc), webhook_id=None)
+    m1.author = MagicMock(id=50, display_name="Bad1")
+    m2 = MagicMock(created_at=datetime(2026, 6, 2, tzinfo=timezone.utc), webhook_id=None)
+    m2.author = MagicMock(id=51, display_name="Bad2")
+
+    # voice channel with history and delete_messages directly
+    ch = MagicMock(spec=discord.VoiceChannel)
+    ch.id = 1
+    ch.history = MagicMock(return_value=_async_iter([m1, m2]))
+    ch.delete_messages = AsyncMock()
+
+    # resolve_text_channel returns None -> falls back to voice channel
+    svc.resolve_text_channel = AsyncMock(return_value=None)
+
+    report = await svc.purge_foreign_messages(ch, cutoff=cutoff, allowed_ids={999}, bot_user_id=1)
+    assert report.deleted == 2
+    ch.delete_messages.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_purge_bulk_delete_fails(monkeypatch):
+    class _FakeForbidden(Exception):
+        pass
+    monkeypatch.setattr(discord, "Forbidden", _FakeForbidden)
+
+    svc = VoicePurgeService(batch_size=50)
+    cutoff = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    m1 = MagicMock(created_at=datetime(2026, 6, 1, tzinfo=timezone.utc), webhook_id=None)
+    m1.author = MagicMock(id=50, display_name="Bad1")
+    m2 = MagicMock(created_at=datetime(2026, 6, 2, tzinfo=timezone.utc), webhook_id=None)
+    m2.author = MagicMock(id=51, display_name="Bad2")
+
+    ch = MagicMock(spec=discord.VoiceChannel)
+    ch.id = 1
+    ch.history = MagicMock(return_value=_async_iter([m1, m2]))
+    ch.delete_messages = AsyncMock(side_effect=_FakeForbidden())
+    svc.resolve_text_channel = AsyncMock(return_value=None)
+
+    report = await svc.purge_foreign_messages(ch, cutoff=cutoff, allowed_ids={999}, bot_user_id=1)
+    assert report.failed == 2

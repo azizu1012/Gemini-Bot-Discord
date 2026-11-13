@@ -93,3 +93,57 @@ def test_dns_gaierror_in_pytest(monkeypatch):
     # PYTEST_CURRENT_TEST is set while running under pytest -> allowed
     safe, _ = is_safe_url("http://nonexistent.tld")
     assert safe is True
+
+
+def test_dns_resolves_to_loopback(monkeypatch):
+    fake = MagicMock(return_value=[(None, None, None, None, ("127.0.0.1", 80))])
+    monkeypatch.setattr("socket.getaddrinfo", fake)
+    safe, err = is_safe_url("http://dns-loopback.org")
+    assert safe is False
+    assert "loopback" in err
+
+
+def test_dns_resolves_to_link_local(monkeypatch):
+    fake = MagicMock(return_value=[(None, None, None, None, ("169.254.1.1", 80))])
+    monkeypatch.setattr("socket.getaddrinfo", fake)
+    safe, err = is_safe_url("http://dns-metadata.org")
+    assert safe is False
+    assert "not allowed" in err
+
+
+def test_dns_resolves_to_multicast(monkeypatch):
+    fake = MagicMock(return_value=[(None, None, None, None, ("224.0.0.1", 80))])
+    monkeypatch.setattr("socket.getaddrinfo", fake)
+    safe, err = is_safe_url("http://dns-multicast.org")
+    assert safe is False
+    assert "restricted" in err
+
+
+def test_unqualified_hostname_allow_private():
+    safe, _ = is_safe_url("http://backend", allow_private=True)
+    assert safe is True
+
+
+def test_urlparse_exception(monkeypatch):
+    import urllib.parse
+    monkeypatch.setattr(urllib.parse, "urlparse", MagicMock(side_effect=ValueError("bad url")))
+    safe, err = is_safe_url("http://bad.org")
+    assert safe is False
+    assert "Invalid URL" in err
+
+
+def test_dns_no_addr_info_non_test_env(monkeypatch):
+    import socket
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(socket, "getaddrinfo", MagicMock(return_value=[]))
+    safe, err = is_safe_url("http://nonexistent-empty.org")
+    assert safe is False
+    assert "Could not resolve" in err
+
+
+def test_dns_generic_exception(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket, "getaddrinfo", MagicMock(side_effect=RuntimeError("dns boom")))
+    safe, err = is_safe_url("http://errordns.org")
+    assert safe is False
+    assert "DNS validation error" in err

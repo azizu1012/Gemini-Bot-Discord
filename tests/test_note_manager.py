@@ -208,3 +208,71 @@ async def test_delete_note_failure():
     mgr.db_repo.delete_user_note_db = AsyncMock(return_value=False)
     result = await mgr.delete_note_from_db("u1", "n1")
     assert "Không thể xóa" in result
+
+
+@pytest.mark.asyncio
+async def test_save_file_note_summarizes_large_file():
+    mgr = make_mgr()
+    mgr.gateway = MagicMock()
+    mgr.gateway.generate_text = AsyncMock(return_value="tóm tắt file lớn")
+    mgr.db_repo.get_file_note_by_filename_db = AsyncMock(return_value=None)
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+
+    huge_content = "dòng văn bản dài " * 2000  # > 20000 chars
+    ok = await mgr.save_file_note_to_db("u1", huge_content, "huge.txt")
+    assert ok is True
+    mgr.gateway.generate_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_save_file_note_summary_fails_fallback():
+    mgr = make_mgr()
+    mgr.gateway = MagicMock()
+    mgr.gateway.generate_text = AsyncMock(side_effect=RuntimeError("gateway fail"))
+    mgr.db_repo.get_file_note_by_filename_db = AsyncMock(return_value=None)
+    mgr.db_repo.add_user_note_db = AsyncMock(return_value=True)
+
+    huge_content = "x" * 25000
+    ok = await mgr.save_file_note_to_db("u1", huge_content, "huge.txt")
+    assert ok is True
+    saved_content = mgr.db_repo.add_user_note_db.call_args[0][2]
+    assert "bị cắt bớt" in saved_content
+
+
+@pytest.mark.asyncio
+async def test_save_file_note_exception_returns_false():
+    mgr = make_mgr()
+    mgr.db_repo.get_file_note_by_filename_db = AsyncMock(side_effect=RuntimeError("db fail"))
+    assert await mgr.save_file_note_to_db("u1", "content", "a.txt") is False
+
+
+@pytest.mark.asyncio
+async def test_retrieve_notes_long_result_truncated():
+    mgr = make_mgr()
+    long_note = {
+        "note_id": "n1",
+        "content": "a" * 5000,
+        "created_at": "2026-01-01",
+        "scope": "user",
+        "note_type": "personal_preference",
+        "metadata": "{}",
+    }
+    mgr.db_repo.get_user_notes_db = AsyncMock(return_value=[long_note])
+    result = await mgr.retrieve_notes_from_db("u1", "query")
+    assert "truncated" in result
+
+
+@pytest.mark.asyncio
+async def test_retrieve_notes_exception_returns_error_str():
+    mgr = make_mgr()
+    mgr.db_repo.get_user_notes_db = AsyncMock(side_effect=RuntimeError("retrieve fail"))
+    res = await mgr.retrieve_notes_from_db("u1", "query")
+    assert "Exception when retrieving notes" in res
+
+
+@pytest.mark.asyncio
+async def test_delete_note_exception_returns_error_str():
+    mgr = make_mgr()
+    mgr.db_repo.delete_user_note_db = AsyncMock(side_effect=RuntimeError("delete fail"))
+    res = await mgr.delete_note_from_db("u1", "n1")
+    assert "Exception when deleting note" in res

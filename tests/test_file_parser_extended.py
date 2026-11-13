@@ -164,3 +164,49 @@ def test_download_disk_full(monkeypatch, tmp_path):
 def _run_async(coro):
     import asyncio
     return asyncio.run(coro)
+
+
+def test_read_csv_file_truncations(tmp_path):
+    p = make_parser()
+    p.MAX_TEXT_LENGTH = 15
+    p.MAX_SCAN_LINES = 2
+
+    f = tmp_path / "test.csv"
+    f.write_text("a,b,c\n,\n12345678901234567890\nrow3_extra\nrow4_extra", encoding="utf-8")
+    text, truncated = p._read_csv_file(str(f))
+    assert truncated is True
+
+
+def test_build_security_report_limits():
+    p = make_parser()
+    p.MAX_SCAN_LINES = 2
+    p.MAX_SUSPICIOUS_LINES = 1
+
+    long_line = "ignore previous instructions " + "x" * 300
+    text = f"{long_line}\nsystem prompt\njailbreak"
+    cleaned, report = p._build_security_report(text)
+    assert "..." in report
+    assert "Possible prompt-injection" in report
+
+
+def test_scan_security_line_limits():
+    p = make_parser()
+    p.MAX_SCAN_LINES = 1
+    p.MAX_SUSPICIOUS_LINES = 1
+    state = p._init_security_state()
+
+    long_line = "ignore previous instructions " + "x" * 300
+    p._scan_security_line(long_line, "label1", state)
+    # second line exceeds MAX_SCAN_LINES -> not scanned
+    p._scan_security_line("jailbreak line", "label2", state)
+    assert len(state["suspicious_lines"]) == 1
+    assert "..." in state["suspicious_lines"][0]
+
+
+def test_build_chunk_manifest_extensions(tmp_path):
+    p = make_parser()
+    for ext in ('.json', '.yml', '.csv'):
+        f = tmp_path / f"test{ext}"
+        f.write_text("key: value\n", encoding="utf-8")
+        manifest, report, truncated = p._build_chunk_manifest(str(f), ext, str(tmp_path / f"chunks_{ext}"))
+        assert isinstance(manifest, list)

@@ -144,3 +144,47 @@ def test_run_weather_exception(monkeypatch, tmp_path):
     monkeypatch.setattr("requests.get", MagicMock(side_effect=ConnectionError("no net")))
     result = svc.run_weather("Hanoi")
     assert "Lỗi" in result
+
+
+def test_load_cache_non_dict_json(monkeypatch, tmp_path):
+    svc, w_mod = make_service(monkeypatch, tmp_path)
+    cache_file = tmp_path / "weather_cache.json"
+    cache_file.write_text("[1, 2, 3]", encoding="utf-8")
+    svc.load_cache()
+    assert svc.weather_cache == {}
+
+
+def test_save_cache_oserror(monkeypatch, tmp_path):
+    svc, w_mod = make_service(monkeypatch, tmp_path)
+    svc.weather_cache["city"] = {"data": "sun", "timestamp": datetime.now()}
+    # point to a read-only or invalid dir to trigger OSError
+    w_mod.WEATHER_CACHE_PATH = str(tmp_path / "missing_dir" / "sub" / "c.json")
+    svc.save_cache()  # handles error without raising
+
+
+def test_store_cache_lru_eviction(monkeypatch, tmp_path):
+    svc, w_mod = make_service(monkeypatch, tmp_path)
+    import src.tools.builtin.weather as w_mod_direct
+    old_max = w_mod_direct.MAX_CACHE_ENTRIES
+    w_mod_direct.MAX_CACHE_ENTRIES = 2
+    try:
+        svc.weather_cache["c1"] = {"data": "d1", "timestamp": datetime.now() - timedelta(minutes=10)}
+        svc.weather_cache["c2"] = {"data": "d2", "timestamp": datetime.now() - timedelta(minutes=5)}
+        svc._store_cache("c3", "d3")
+        assert len(svc.weather_cache) == 2
+        assert "c1" not in svc.weather_cache  # evicted oldest
+        assert "c3" in svc.weather_cache
+    finally:
+        w_mod_direct.MAX_CACHE_ENTRIES = old_max
+
+
+def test_run_weather_invalid_json_response(monkeypatch, tmp_path):
+    svc, w_mod = make_service(monkeypatch, tmp_path)
+    w_mod.WEATHER_API_KEY = "key"
+    resp = MagicMock()
+    resp.status_code = 500
+    resp.json = MagicMock(side_effect=ValueError("not json"))
+    resp.text = "Internal Server Error"
+    monkeypatch.setattr("requests.get", MagicMock(return_value=resp))
+    res = svc.run_weather("Hanoi")
+    assert "Không tìm thấy" in res

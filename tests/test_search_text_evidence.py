@@ -271,3 +271,114 @@ def test_fetch_page_evidence_returns_text(monkeypatch):
     monkeypatch.setattr(ev_mod.requests, "get", lambda *a, **kw: FakeResponse())
     text = _await(owner._fetch_page_evidence("https://example.com/e"))
     assert "evidence" in text
+
+
+def test_extract_page_metadata_relative_ages():
+    from datetime import datetime, timedelta
+
+    t = T()
+    now = datetime.now()
+
+    # 1. yesterday
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    html1 = f'<meta property="article:published_time" content="{yesterday}">'
+    assert t._extract_page_metadata(html1)["relative_age"] == "hôm qua"
+
+    # 2. 10 days ago
+    days_10 = (now - timedelta(days=10)).strftime("%Y-%m-%d")
+    html2 = f'<meta property="article:published_time" content="{days_10}">'
+    assert "ngày trước" in t._extract_page_metadata(html2)["relative_age"]
+
+    # 3. 60 days ago -> months
+    days_60 = (now - timedelta(days=60)).strftime("%Y-%m-%d")
+    html3 = f'<meta property="article:published_time" content="{days_60}">'
+    assert "tháng trước" in t._extract_page_metadata(html3)["relative_age"]
+
+    # 4. 400 days ago -> years
+    days_400 = (now - timedelta(days=400)).strftime("%Y-%m-%d")
+    html4 = f'<meta property="article:published_time" content="{days_400}">'
+    assert "năm trước" in t._extract_page_metadata(html4)["relative_age"]
+
+
+def test_organization_domain_vietnamese_suffix():
+    t = T()
+    assert t._organization_domain("news.company.com.vn") == "company.com.vn"
+    assert t._organization_domain("sub.portal.gov.vn") == "portal.gov.vn"
+
+
+def test_query_coverage_score_all_ratios():
+    t = T()
+    # 4 tokens query
+    q = "apple banana orange grape"
+
+    # ratio >= 0.75 (3 hits out of 4)
+    s_75 = t._query_coverage_score(q, "apple banana orange other")
+    assert s_75 == 1.1
+
+    # ratio >= 0.55 (2 hits out of 4 -> 0.5 < 0.55, need 3 hits out of 5)
+    q5 = "alpha beta gamma delta epsilon"
+    s_60 = t._query_coverage_score(q5, "alpha beta gamma other other2")
+    assert s_60 == 0.8
+
+    # ratio >= 0.35 (2 hits out of 5 = 0.40 >= 0.35)
+    s_40 = t._query_coverage_score(q5, "alpha beta other other2 other3")
+    assert s_40 == 0.45
+
+    # ratio > 0 (1 hit out of 5 = 0.20 < 0.35)
+    s_20 = t._query_coverage_score(q5, "alpha other other2 other3 other4")
+    assert s_20 == 0.2
+
+
+def test_fetch_page_data_redirect(monkeypatch):
+    owner = E()
+
+    class RedirectResp:
+        status_code = 302
+        is_redirect = True
+        headers = {"Location": "http://example.com/target"}
+        text = ""
+
+    class FinalResp:
+        status_code = 200
+        is_redirect = False
+        headers = {}
+        encoding = "utf-8"
+        text = "<html><body><article><p>" + "evidence text " * 30 + "</p></article></body></html>"
+
+    calls = {"n": 0}
+    def fake_get(url, **kw):
+        calls["n"] += 1
+        return RedirectResp() if calls["n"] == 1 else FinalResp()
+
+    import src.tools.search.mixins.evidence as ev_mod
+    monkeypatch.setattr(ev_mod.requests, "get", fake_get)
+    text, meta = _await(owner._fetch_page_data("http://example.com/start"))
+    assert "evidence text" in text
+
+
+def test_fetch_page_data_non_200(monkeypatch):
+    owner = E()
+    class ErrResp:
+        status_code = 404
+        is_redirect = False
+        text = "Not found"
+        headers = {}
+    import src.tools.search.mixins.evidence as ev_mod
+    monkeypatch.setattr(ev_mod.requests, "get", lambda *a, **kw: ErrResp())
+    text, meta = _await(owner._fetch_page_data("http://example.com/notfound"))
+    assert text == ""
+
+
+def test_fetch_page_data_short_text_returns_meta_only(monkeypatch):
+    owner = E()
+    class ShortResp:
+        status_code = 200
+        is_redirect = False
+        headers = {}
+        encoding = "utf-8"
+        text = '<html><head><meta name="date" content="2026-01-01"></head><body><p>short</p></body></html>'
+    import src.tools.search.mixins.evidence as ev_mod
+    monkeypatch.setattr(ev_mod.requests, "get", lambda *a, **kw: ShortResp())
+    text, meta = _await(owner._fetch_page_data("http://example.com/short"))
+    assert text == ""
+    assert meta == {}

@@ -202,3 +202,33 @@ async def test_build_file_index_skips_missing_chunk_path():
         user_id="u1",
     )
     assert result["chunk_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_validate_file_index_success():
+    svc = make_service()
+    payload_json = '{"status": "ok", "reason": "clean", "risk_flags": []}'
+    cand = SimpleNamespace(content=SimpleNamespace(parts=[SimpleNamespace(text=payload_json)]))
+    svc.gateway.generate = AsyncMock(return_value=SimpleNamespace(candidates=[cand]))
+    res = await svc.validate_file_index({"document_id": "d1"}, "u1")
+    assert res["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_validate_file_index_empty():
+    svc = make_service()
+    svc.gateway.generate = AsyncMock(return_value=SimpleNamespace(candidates=[]))
+    res = await svc.validate_file_index({"document_id": "d1"}, "u1")
+    assert res["status"] == "warn"
+    assert res["reason"] == "empty validation"
+
+
+@pytest.mark.asyncio
+async def test_validate_file_index_exception():
+    svc = make_service()
+    svc.gateway.generate = AsyncMock(side_effect=RuntimeError("val fail"))
+    svc.gateway.log_exception = MagicMock()
+    res = await svc.validate_file_index({"document_id": "d1"}, "u1")
+    assert res["status"] == "warn"
+    assert res["reason"] == "validation failed"
+    svc.gateway.log_exception.assert_called_once()

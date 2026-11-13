@@ -201,3 +201,65 @@ def test_properties():
 async def test_close():
     c = make_client()
     assert await c.close() is None
+
+
+def test_contents_to_router_wire_all_parts():
+    contents = [{
+        "role": "model",
+        "parts": [
+            {"inline_data": {"data": b"x"}, "thought_signature": b"sig"},
+            {"function_call": {"name": "calc", "args": {"a": 1}}},
+            {"function_response": {"name": "calc", "response": {"result": 2}}},
+        ]
+    }]
+    wire = _contents_to_router_wire(contents)
+    assert "thoughtSignature" in wire[0]["parts"][0]
+    assert "functionCall" in wire[0]["parts"][1]
+    assert "functionResponse" in wire[0]["parts"][2]
+
+
+def test_messages_to_genai_contents_with_thought_signature():
+    msg = {
+        "role": "model",
+        "parts": [
+            {"text": "reasoning", "thought_signature": b"sig1"},
+            {"function_call": {"name": "tool1", "args": {}}, "thoughtSignature": b"sig2"},
+            {"function_response": {"name": "tool1", "response": "plain_string_result"}},
+        ]
+    }
+    out = messages_to_genai_contents(None, [msg])
+    assert out[0]["parts"][0]["thought_signature"] == b"sig1"
+    assert out[0]["parts"][1]["thought_signature"] == b"sig2"
+    assert out[0]["parts"][2]["function_response"]["response"] == "plain_string_result"
+
+
+@pytest.mark.asyncio
+async def test_generate_custom_endpoint_with_system_instruction_and_tools(monkeypatch):
+    c = GenAIClient(base_url="http://custom:8000", api_key="k", logger=NullLogger(), timeout_ms=5000)
+    response = MagicMock()
+    response.is_error = False
+    response.json = MagicMock(return_value={"candidates": []})
+    post = AsyncMock(return_value=response)
+
+    class FakeAsyncClient:
+        def __init__(self, timeout=None):
+            self.post = post
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr("httpx.AsyncClient", FakeAsyncClient)
+    res = await c._generate_custom_endpoint(
+        model_id="m1",
+        system_instruction="You are Chad",
+        generation_config={"temperature": 0.5},
+        messages=[],
+        tools=[{"type": "function"}],
+    )
+    assert res.candidates == []
+    call_json = post.call_args.kwargs["json"]
+    assert "systemInstruction" in call_json
+    assert "tools" in call_json

@@ -137,3 +137,92 @@ async def test_role_done_view_init():
     view = RoleDoneView(g, role_id=2, old_rank=1, new_rank=3, author_id=1)
     assert view.author_id == 1
     assert view.embed is not None
+
+
+@pytest.mark.asyncio
+async def test_role_panel_on_timeout_success():
+    panel = RolePanel(author_id=123)
+    panel.detached = False
+    panel.message = MagicMock(edit=AsyncMock())
+    await panel.on_timeout()
+    panel.message.edit.assert_awaited_once()
+    assert "hết giờ" in panel.embed.description
+
+
+@pytest.mark.asyncio
+async def test_role_panel_close_button():
+    panel = RolePanel(author_id=123)
+    interaction = _interaction(user_id=123)
+    # child 0 is the close button
+    close_btn = panel.children[0]
+    await close_btn.callback(interaction)
+    assert panel.detached is True
+    assert "Panel đã đóng" in panel.embed.description
+    interaction.response.edit_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_role_picker_view_buttons():
+    g = _mock_guild()
+    view = RolePickerView(g, author_id=123)
+    interaction = _interaction(user_id=123)
+    # child 2 is prev, child 3 is next
+    prev_btn = view.children[2]
+    next_btn = view.children[3]
+    await next_btn.callback(interaction)
+    await prev_btn.callback(interaction)
+
+
+@pytest.mark.asyncio
+async def test_role_picker_view_select_callbacks(monkeypatch):
+    import src.voice.ui as voice_ui_mod
+
+    g = _mock_guild()
+    r = g.roles[0]
+    view = RolePickerView(g, author_id=123)
+    select_item = view.children[1]
+    type(select_item).values = property(lambda self: [str(r.id)])
+
+    interaction = _interaction(user_id=123)
+    # immovable role branch
+    monkeypatch.setattr(voice_ui_mod, "role_is_movable", lambda g, role: False)
+    await select_item.callback(interaction)
+    assert "không thể kéo" in interaction.response.send_message.call_args[0][0]
+
+    # movable role branch -> swap_panel
+    monkeypatch.setattr(voice_ui_mod, "role_is_movable", lambda g, role: True)
+    monkeypatch.setattr(voice_ui_mod, "swap_panel", AsyncMock())
+    await select_item.callback(interaction)
+    voice_ui_mod.swap_panel.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_role_position_view_select_and_buttons(monkeypatch):
+    import src.voice.ui as voice_ui_mod
+
+    g = _mock_guild()
+    r1, r2, r3 = g.roles
+    r1.position, r2.position, r3.position = 1, 2, 3
+
+    monkeypatch.setattr(voice_ui_mod, "top_movable_slot", lambda guild: 0)
+    monkeypatch.setattr(voice_ui_mod, "role_order", lambda guild: [r1, r2, r3])
+    monkeypatch.setattr(voice_ui_mod, "role_rank", lambda guild, r: 1)
+    monkeypatch.setattr(voice_ui_mod, "role_is_movable", lambda g, role: True)
+    monkeypatch.setattr(voice_ui_mod, "plan_role_move", lambda guild, role, slot: {role.id: slot})
+    monkeypatch.setattr(voice_ui_mod, "swap_panel", AsyncMock())
+
+    view = RolePositionView(g, r1, author_id=123)
+    assert len(view.children) == 4
+    select_item = view.children[1]
+    type(select_item).values = property(lambda self: ["1"])
+
+    interaction = _interaction(user_id=123)
+    await select_item.callback(interaction)
+    g.edit_role_positions.assert_awaited_once()
+    voice_ui_mod.swap_panel.assert_awaited_once()
+
+    # prev and next buttons
+    prev_btn = view.children[2]
+    next_btn = view.children[3]
+    await next_btn.callback(interaction)
+    await prev_btn.callback(interaction)

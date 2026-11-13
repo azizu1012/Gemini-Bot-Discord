@@ -79,3 +79,32 @@ async def test_shutdown_stops_kafka():
 
 
 
+
+
+@pytest.mark.asyncio
+async def test_subtask_worker_init_and_consumer_loop(monkeypatch):
+    import src.services.messaging.subtask_worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "RedisStreamService", MagicMock)
+    monkeypatch.setattr(worker_mod, "ToolsManager", MagicMock)
+
+    cfg = MagicMock()
+    cfg.REDIS_URL = "redis://localhost:6379/0"
+    worker = worker_mod.SearchSubtaskWorker(cfg)
+    assert worker.config is cfg
+
+    # Test the consumer loop with a breaking consumer
+    msg = MagicMock()
+    msg.value = {"correlation_id": "c1", "query": "q"}
+
+    async def breaking_agen():
+        yield msg
+        raise RuntimeError("loop break for test")
+
+    worker.kafka_service.start_producer = AsyncMock()
+    worker.kafka_service.start_consumer = AsyncMock(return_value=breaking_agen())
+    worker.shutdown = AsyncMock()
+    worker._process_subtask = AsyncMock()
+
+    await worker.start_worker()
+    worker.shutdown.assert_awaited_once()

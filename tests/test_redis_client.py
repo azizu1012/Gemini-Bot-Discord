@@ -9,6 +9,7 @@ import json
 import sys
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, ".")
 
@@ -330,3 +331,46 @@ async def test_stop_closes_redis_and_stops_consumers():
     assert service._redis is None
     assert consumer._running is False
     assert service.consumers == {}
+
+
+@pytest.mark.asyncio
+async def test_claim_message_once_exception_handled():
+    service = RedisStreamService("redis://x:6379/0", "c1")
+    redis = FakeRedis()
+    async def boom(*a, **kw):
+        raise ConnectionError("redis down")
+    redis.set = boom
+    service._redis = redis
+    assert await service.claim_message_once("m1") is True
+
+
+@pytest.mark.asyncio
+async def test_stop_consumer_exception_handled():
+    service = RedisStreamService("redis://x:6379/0", "c1")
+    redis = FakeRedis()
+    service._redis = redis
+    consumer = MagicMock()
+    consumer.stop = AsyncMock(side_effect=RuntimeError("stop error"))
+    service.consumers["s1"] = consumer
+    await service.stop()
+    assert service.consumers == {}
+
+
+@pytest.mark.asyncio
+async def test_stop_redis_close_exception_handled():
+    service = RedisStreamService("redis://x:6379/0", "c1")
+    redis = FakeRedis()
+    redis.close = AsyncMock(side_effect=RuntimeError("close error"))
+    service._redis = redis
+    await service.stop()
+    assert service._redis is None
+
+
+@pytest.mark.asyncio
+async def test_consumer_reclaim_pending_empty_msg_ids():
+    redis = FakeRedis()
+    redis.pending_entries = [{"message_id": "1-1", "time_since_delivered": 100}]
+    consumer = await _consumer_with(redis)
+    # min_idle_ms = 30000 -> 100 < 30000 -> msg_ids is empty
+    assert await consumer.reclaim_pending(min_idle_ms=30000) == []
+    await consumer.stop()

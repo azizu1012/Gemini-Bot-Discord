@@ -29,6 +29,8 @@ class NullLogger:
 def make_bc():
     bc = object.__new__(BotCore)
     bc.logger = NullLogger()
+    bc.confirmation_pending = {}
+    bc.admin_confirmation_pending = {}
     bc._outgoing_queues = {}
     bc._outgoing_senders = {}
     bc.active_typing_tasks = {}
@@ -250,3 +252,142 @@ async def test_on_message_success_publishes():
     message.channel = MagicMock(spec=DMChannel)
     await events["on_message"](message)
     bc.kafka_service.publish.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_message_local_ram_lock_busy():
+    import time
+    from discord import DMChannel
+
+    bc = make_bc()
+    bc._redis_client = None  # force RAM lock path
+    bc._active_user_locks["42"] = time.time()  # locked recently
+    events = _capture_events(bc)
+
+    msg = MagicMock()
+    msg.author.bot = False
+    msg.author.id = 42
+    msg.channel = MagicMock(spec=DMChannel)
+    msg.reply = AsyncMock()
+
+    await events["on_message"](msg)
+    assert "Đợi chút nha" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_on_message_redis_publish_fails_replies_error():
+    from discord import DMChannel
+
+    bc = make_bc()
+    bc._redis_client = None
+    bc.kafka_service.publish = AsyncMock(return_value=False)  # triggers RuntimeError
+    bc._collect_message_attachments = AsyncMock(return_value=[])
+    bc._resolve_referenced_message = AsyncMock(return_value=None)
+    bc.db_repo.clear_user_processing_state = AsyncMock()
+    events = _capture_events(bc)
+
+    msg = MagicMock()
+    msg.author.bot = False
+    msg.author.id = 42
+    msg.author.name = "Bob"
+    msg.author.display_name = "Bob"
+    msg.id = 1
+    msg.content = "hello"
+    msg.reference = None
+    msg.mentions = []
+    msg.channel = MagicMock(spec=DMChannel)
+    msg.reply = AsyncMock()
+
+    await events["on_message"](msg)
+    assert "đang lỗi" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_on_voice_state_update_anti_drag():
+    bc = make_bc()
+    bc.bot.user.id = 1
+    bc.voice_lock_manager = MagicMock()
+    bc.voice_lock_manager.owner_id = 9
+    bc.voice_lock_manager.locked_channels = {100}
+    bc.voice_lock_manager.log_action = MagicMock()
+
+    events = _capture_events(bc)
+
+    before_ch = MagicMock(spec=discord.VoiceChannel)
+    before_ch.id = 100
+    before_ch.name = "LockedRoom"
+    after_ch = MagicMock(spec=discord.VoiceChannel)
+    after_ch.id = 200
+    after_ch.name = "OtherRoom"
+
+    member = MagicMock(spec=discord.Member)
+    member.id = 50
+    member.name = "DraggedUser"
+    member.move_to = AsyncMock()
+
+    # audit log with recent move
+    audit_entry = MagicMock()
+    audit_entry.target = MagicMock(id=50)
+    audit_entry.created_at = discord.utils.utcnow()
+    audit_entry.user = MagicMock(name="AdminDragger")
+
+    guild = MagicMock()
+    guild.audit_logs = MagicMock(return_value=_async_iter([audit_entry]))
+    member.guild = guild
+
+    await events["on_voice_state_update"](member, _voice_state(before_ch), _voice_state(after_ch))
+    member.move_to.assert_awaited_once_with(before_ch, reason="Anti-drag protection")
+
+
+@pytest.mark.asyncio
+async def test_on_ready_full_flow(monkeypatch):
+    bc = make_bc()
+    bc.config.ADMIN_ID = "12345"
+    bc.bot.fetch_user = AsyncMock(return_value=MagicMock())
+    bc.health_checker = MagicMock()
+    bc.voice_lock_manager = MagicMock()
+    bc._voice_lock_enforce_loop = AsyncMock()
+
+    ch = MagicMock()
+    ch.name = "GameRoom"
+    rec = MagicMock()
+    rec.channel_id = 99
+    bc.room_lock_service = MagicMock()
+    bc.room_lock_service.prune_missing_channels = MagicMock(return_value=[rec])
+    bc.room_lock_service.all_locked_channels = MagicMock(return_value=[ch])
+    bc.room_lock_service.ensure_locked = AsyncMock()
+    bc.room_lock_service.enforce = AsyncMock()
+
+    bc.db_repo.init_db = AsyncMock()
+    bc.db_repo.cleanup_db = AsyncMock()
+    bc.db_repo.backup_db = AsyncMock()
+    bc.cleanup_mgr.cleanup_local_files = AsyncMock()
+    bc.setup_redis = AsyncMock()
+    bc.bot.tree.sync = AsyncMock(return_value=[MagicMock()])
+
+    events = _capture_events(bc)
+    await events["on_ready"]()
+
+    bc.health_checker.start_background_check.assert_called_once()
+    bc.room_lock_service.ensure_locked.assert_awaited_once_with(ch)
+    bc.room_lock_service.enforce.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_on_message_locked_voice_channel_deletes():
+    bc = make_bc()
+    v_channel = MagicMock(spec=discord.VoiceChannel)
+    v_channel.id = 555
+    bc.room_lock_service = MagicMock()
+    bc.room_lock_service.is_locked = MagicMock(return_value=True)
+    bc.room_lock_service.is_allowed = MagicMock(return_value=False)
+
+    events = _capture_events(bc)
+    msg = MagicMock()
+    msg.author.bot = False
+    msg.author.id = 77
+    msg.channel = v_channel
+    msg.delete = AsyncMock()
+
+    await events["on_message"](msg)
+    msg.delete.assert_awaited_once()

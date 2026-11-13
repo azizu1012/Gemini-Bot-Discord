@@ -30,6 +30,7 @@ def make_handler():
     h.resolver = MagicMock()
     h.gateway = MagicMock()
     h._image_download_sem = asyncio.Semaphore(1)
+    h.search_subtask_client = MagicMock()
     return h
 
 
@@ -179,3 +180,70 @@ async def test_download_file_with_sem():
     h._download_file = AsyncMock(return_value=b"x")
     data = await h._download_file_with_sem("http://x")
     assert data == b"x"
+
+
+@pytest.mark.asyncio
+async def test_message_handler_init_with_mocks(monkeypatch):
+    import src.handlers.message_handler as mh_mod
+
+    def fake_mock(*a, **kw):
+        return MagicMock()
+    monkeypatch.setattr(mh_mod, "DatabaseRepository", fake_mock)
+    monkeypatch.setattr(mh_mod, "RedisStreamService", fake_mock)
+    monkeypatch.setattr(mh_mod, "NoteManager", fake_mock)
+    monkeypatch.setattr(mh_mod, "SearchSubtaskClient", fake_mock)
+    monkeypatch.setattr(mh_mod, "ToolsManager", fake_mock)
+    monkeypatch.setattr(mh_mod, "FileParserService", fake_mock)
+    monkeypatch.setattr(mh_mod, "PremiumManager", fake_mock)
+    monkeypatch.setattr(mh_mod, "CleanupManager", fake_mock)
+
+    cfg = MagicMock()
+    cfg.DATABASE_URL = "postgresql://mock"
+    cfg.REDIS_URL = "redis://mock"
+    cfg.FILE_CHUNK_DIR = "chunks"
+    cfg.MAX_CONCURRENT_MESSAGES = 2
+
+    handler = mh_mod.MessageHandler(cfg)
+    assert handler.config is cfg
+
+
+@pytest.mark.asyncio
+async def test_message_handler_start_worker_and_shutdown():
+    h = make_handler()
+    h.db_repo.init_db = AsyncMock()
+    h.db_repo.close = AsyncMock()
+    h.kafka_service.start_producer = AsyncMock()
+    h.kafka_service.stop = AsyncMock()
+    h.search_subtask_client.close = AsyncMock()
+    h._worker_tasks = set()
+
+    msg = MagicMock()
+    async def breaking_consumer():
+        yield msg
+        raise RuntimeError("break worker loop")
+
+    consumer = MagicMock()
+    consumer.reclaim_pending = AsyncMock(return_value=[MagicMock()])
+    consumer.__aiter__ = lambda self: breaking_consumer()
+
+    h.kafka_service.start_consumer = AsyncMock(return_value=consumer)
+    h._process_message_guarded = AsyncMock()
+
+    await h.start_worker()
+    h.db_repo.init_db.assert_awaited_once()
+    h.kafka_service.start_producer.assert_awaited_once()
+    h.kafka_service.start_consumer.assert_awaited_once()
+    consumer.reclaim_pending.assert_awaited_once()
+    h.kafka_service.stop.assert_awaited_once()
+    h.db_repo.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_message_handler_start_worker_start_producer_fails():
+    h = make_handler()
+    h.db_repo.init_db = AsyncMock()
+    h.kafka_service.start_producer = AsyncMock(side_effect=RuntimeError("producer fail"))
+    h.shutdown = AsyncMock()
+
+    await h.start_worker()
+    h.shutdown.assert_awaited_once()

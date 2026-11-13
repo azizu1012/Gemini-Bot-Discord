@@ -85,3 +85,48 @@ def test_finalize_security_report_with_hidden(tmp_path):
     state["hidden_removed"] = 3
     report = p._finalize_security_report(state)
     assert "Hidden/control" in report
+
+
+def test_chunk_text_file_exceeds_limit(tmp_path):
+    p = make_parser(tmp_path)
+    p.INDEX_CHUNK_CHAR_LIMIT = 50
+    f = tmp_path / "long.txt"
+    f.write_text("\n".join(f"line {i} with some content" for i in range(20)), encoding="utf-8")
+    state = p._init_security_state()
+    manifest, truncated = p._chunk_text_file(str(f), str(tmp_path / "chunks"), state)
+    assert len(manifest) >= 2
+
+
+def test_chunk_csv_file_exceeds_limit(tmp_path):
+    p = make_parser(tmp_path)
+    p.INDEX_CHUNK_CHAR_LIMIT = 50
+    f = tmp_path / "long.csv"
+    f.write_text("\n".join(f"col1_{i},col2_{i},col3_{i}" for i in range(20)), encoding="utf-8")
+    state = p._init_security_state()
+    manifest, truncated = p._chunk_csv_file(str(f), str(tmp_path / "chunks"), state)
+    assert len(manifest) >= 2
+
+
+def test_chunk_pdf_file_with_pages(tmp_path, monkeypatch):
+    import src.services.indexing.parser as parser_mod
+
+    class FakePage:
+        def __init__(self, text):
+            self._text = text
+
+        def extract_text(self):
+            return self._text
+
+    class FakeReader:
+        def __init__(self, path):
+            self.pages = [FakePage("page 1 text line\nanother line"), FakePage("page 2 text content")]
+
+        def get_num_pages(self):
+            return 2
+
+    monkeypatch.setattr(parser_mod.pypdf, "PdfReader", FakeReader)
+    p = make_parser(tmp_path)
+    p.INDEX_CHUNK_CHAR_LIMIT = 20
+    state = p._init_security_state()
+    manifest, truncated = p._chunk_pdf_file("test.pdf", str(tmp_path / "chunks"), state)
+    assert len(manifest) >= 2

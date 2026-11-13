@@ -78,3 +78,15 @@ class TestSplitTextCodeFence:
             assert c.count("```") % 2 == 0
         joined = "\n".join(chunks)
         assert "Mở đầu" in joined and "Kết thúc." in joined
+
+    def test_try_parse_invalid_blocks(self):
+        tn = TableNormalizer()
+        assert tn._try_parse([]) is None
+        assert tn._try_parse(["| header |"]) is None
+        assert tn._try_parse(["| header |", "| bad sep |"]) is None
+        assert tn._try_parse(["|   |", "|---|"]) is None
+
+    def test_too_many_columns_rejected(self):
+        tn = TableNormalizer(max_columns=3)
+        too_many = "| " + " | ".join(f"C{i}" for i in range(10)) + " |\n" + "| " + " | ".join("---" for _ in range(10)) + " |"
+        assert tn._try_parse(too_many.splitlines()) is None

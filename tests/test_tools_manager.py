@@ -252,3 +252,50 @@ def test_call_known_tool_returns_error():
     mgr, _ = make_manager()
     result = _await(mgr.call_tool(_fn("does_not_exist"), "u1"))
     assert "không tồn tại" in result
+
+
+def test_manage_role_add_admin():
+    mgr, sub = make_manager()
+    sub.db_repo.is_admin_user = AsyncMock(return_value=True)
+    res = _await(mgr.call_tool(_fn("manage_user_role", {"target_user_id": "2", "action": "add", "role": "admin"}), "u1"))
+    assert "Admin" in res
+    sub.db_repo.add_admin_user.assert_awaited_once_with("2")
+
+
+def test_manage_role_add_premium():
+    mgr, sub = make_manager()
+    sub.db_repo.is_admin_user = AsyncMock(return_value=True)
+    res = _await(mgr.call_tool(_fn("manage_user_role", {"target_user_id": "2", "action": "add", "role": "premium"}), "u1"))
+    assert "Premium" in res
+    sub.db_repo.add_premium_user.assert_awaited_once_with("2")
+
+
+def test_manage_role_remove_moderator():
+    mgr, sub = make_manager()
+    sub.db_repo.is_admin_user = AsyncMock(return_value=True)
+    res = _await(mgr.call_tool(_fn("manage_user_role", {"target_user_id": "2", "action": "remove", "role": "moderator"}), "u1"))
+    assert "Đã hạ chức" in res
+    sub.db_repo.remove_moderator_user.assert_awaited_once_with("2")
+
+
+def test_manage_role_remove_admin():
+    mgr, sub = make_manager()
+    sub.db_repo.is_admin_user = AsyncMock(return_value=True)
+    res = _await(mgr.call_tool(_fn("manage_user_role", {"target_user_id": "2", "action": "remove", "role": "admin"}), "u1"))
+    assert "Đã hạ chức" in res
+    sub.db_repo.remove_admin_user.assert_awaited_once_with("2")
+
+
+def test_manage_role_remove_premium():
+    mgr, sub = make_manager()
+    sub.db_repo.is_admin_user = AsyncMock(return_value=True)
+    res = _await(mgr.call_tool(_fn("manage_user_role", {"target_user_id": "2", "action": "remove", "role": "premium"}), "u1"))
+    assert "Đã hủy Premium" in res
+    sub.db_repo.remove_premium_user.assert_awaited_once_with("2")
+
+
+def test_manage_role_invalid_action():
+    mgr, sub = make_manager()
+    sub.db_repo.is_admin_user = AsyncMock(return_value=True)
+    res = _await(mgr.call_tool(_fn("manage_user_role", {"target_user_id": "2", "action": "invalid", "role": "unknown"}), "u1"))
+    assert "không hợp lệ" in res

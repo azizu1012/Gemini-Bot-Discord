@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import discord
 from discord import app_commands
 
 sys.path.insert(0, ".")
@@ -281,15 +282,19 @@ async def test_allow_member_handler_self_returns(monkeypatch):
 # ---------------- command handlers ----------------
 def _interaction(user_id=1000):
     from unittest.mock import AsyncMock
+    import discord
 
-    interaction = MagicMock()
-    interaction.user = MagicMock()
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.user = MagicMock(spec=discord.Member)
     interaction.user.id = user_id
+    interaction.user.name = "TestUser"
+    interaction.user.display_name = "TestUser"
     interaction.response = MagicMock()
     interaction.response.defer = AsyncMock()
     interaction.response.send_message = AsyncMock()
     interaction.followup = MagicMock()
     interaction.followup.send = AsyncMock()
+    interaction.original_response = AsyncMock(return_value=MagicMock())
     return interaction
 
 
@@ -980,3 +985,799 @@ async def test_endpoint_test_success(monkeypatch):
     await handler(interaction)
     interaction.followup.send.assert_awaited_once()
     bot_core.db_repo.update_endpoint_check_status.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_change_bd_too_long(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get("change")
+    assert group is not None
+    handler = next(f for f in group._cmd.registered if f.__name__ == "change_bd")
+    interaction = _interaction()
+    await handler(interaction, "x" * 40, None)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_change_bd_no_permission(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get("change")
+    handler = next(f for f in group._cmd.registered if f.__name__ == "change_bd")
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    me = MagicMock()
+    me.guild_permissions.manage_nicknames = False
+    interaction.guild.me = me
+    await handler(interaction, "newname", None)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_change_bd_success(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get("change")
+    handler = next(f for f in group._cmd.registered if f.__name__ == "change_bd")
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    me = MagicMock()
+    me.guild_permissions.manage_nicknames = True
+    interaction.guild.me = me
+    target = MagicMock(spec=discord.Member)
+    target.edit = AsyncMock()
+    target.mention = "<@100>"
+    await handler(interaction, "newname", target)
+    target.edit.assert_awaited_once_with(nick="newname")
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reset_all_slash_do_confirm(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    captured = {}
+
+    class FakeConfirmView:
+        def __init__(self, *a, **kw):
+            captured["on_confirm"] = kw.get("on_confirm")
+            self.message = None
+
+    monkeypatch.setattr(cmd_mod, "ConfirmActionView", FakeConfirmView)
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.db_repo.clear_all_data_db = AsyncMock()
+    bot_core.kafka_service.publish = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[], PROJECT_ROOT="")
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "reset_all_slash")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction)
+
+    on_confirm = captured["on_confirm"]
+    res = await on_confirm(_interaction())
+    assert "Đã xóa toàn bộ" in res
+    bot_core.db_repo.clear_all_data_db.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_global_notes_with_notes(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.get_global_notes_db = AsyncMock(return_value=[
+        {"note_id": "n1", "user_id": "u1", "content": "fact 1", "fact_hash": "h1"}
+    ])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "global_notes_slash")
+    interaction = _interaction()
+    await handler(interaction, 40)
+    interaction.followup.send.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_room_already_locked(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.is_locked = MagicMock(return_value=True)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "lock_room")
+
+    interaction = _interaction()
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.id = 101
+    channel.name = "Game"
+    interaction.guild = MagicMock()
+    interaction.user.voice = MagicMock(channel=channel)
+    await handler(interaction)
+    assert "đang bị khóa rồi" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_lock_room_success(monkeypatch):
+    from datetime import datetime, timezone
+    from src.voice.models import LockOutcome, LockRecord, PurgeReport
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.is_locked = MagicMock(return_value=False)
+    rec = LockRecord(101, datetime.now(timezone.utc), 1000)
+    outcome = LockOutcome(record=rec, kicked=["Intruder"], purge=PurgeReport(deleted=3), reactions_removed=1)
+    room_lock_service.lock = AsyncMock(return_value=outcome)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "lock_room")
+
+    interaction = _interaction()
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.id = 101
+    channel.name = "Game"
+    interaction.guild = MagicMock()
+    interaction.user.voice = MagicMock(channel=channel)
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+    embed = interaction.followup.send.call_args.kwargs.get("embed")
+    assert embed is not None
+    assert "Đã khóa" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_unlock_room_success(monkeypatch):
+    from datetime import datetime, timezone
+    from src.voice.models import LockRecord
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock_service = MagicMock()
+    room_lock_service.is_locked = MagicMock(return_value=True)
+    rec = LockRecord(101, datetime.now(timezone.utc), 1000)
+    room_lock_service.unlock = AsyncMock(return_value=rec)
+    bot_core.room_lock_service = room_lock_service
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "unlock_room")
+
+    interaction = _interaction()
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.id = 101
+    channel.name = "Game"
+    interaction.guild = MagicMock()
+    interaction.user.voice = MagicMock(channel=channel)
+    await handler(interaction)
+    embed = interaction.followup.send.call_args.kwargs.get("embed")
+    assert embed is not None
+    assert "Đã mở khóa" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_move_member_handler_success(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_tools = MagicMock()
+    room_tools.move_member = AsyncMock(return_value=(True, "Đã chuyển user"))
+    bot_core.room_tools_service = room_tools
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_member")
+
+    interaction = _interaction()
+    guild = MagicMock()
+    target_member = MagicMock(spec=discord.Member)
+    target_channel = MagicMock(spec=discord.VoiceChannel)
+    guild.get_member = MagicMock(return_value=target_member)
+    guild.get_channel = MagicMock(return_value=target_channel)
+    interaction.guild = guild
+
+    await handler(interaction, member="500", channel="101")
+    room_tools.move_member.assert_awaited_once()
+    assert "Đã chuyển" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_move_all_handler_success(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_tools = MagicMock()
+    room_tools.move_all = AsyncMock(return_value=(3, []))
+    bot_core.room_tools_service = room_tools
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_all")
+
+    interaction = _interaction()
+    guild = MagicMock()
+    interaction.guild = guild
+    source_channel = MagicMock(spec=discord.VoiceChannel)
+    source_channel.id = 200
+    interaction.user.voice = MagicMock(channel=source_channel)
+    target_channel = MagicMock(spec=discord.VoiceChannel)
+    target_channel.id = 300
+    target_channel.name = "TargetRoom"
+
+    await handler(interaction, target_channel=target_channel)
+    room_tools.move_all.assert_awaited_once()
+    assert "Đã chuyển **3** người" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_set_room_handler_show_status(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.room_tools_service = MagicMock()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "set_room")
+
+    interaction = _interaction()
+    guild = MagicMock()
+    interaction.guild = guild
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.id = 200
+    channel.name = "MyRoom"
+    channel.status = "Playing"
+    interaction.user.voice = MagicMock(channel=channel)
+
+    await handler(interaction, name=None, status=None)
+    assert "Playing" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_set_room_handler_update_success(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_tools = MagicMock()
+    room_tools.set_room = AsyncMock(return_value=(True, ["Tên: NewName"]))
+    bot_core.room_tools_service = room_tools
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "set_room")
+
+    interaction = _interaction()
+    guild = MagicMock()
+    interaction.guild = guild
+    channel = MagicMock(spec=discord.VoiceChannel)
+    channel.id = 200
+    interaction.user.voice = MagicMock(channel=channel)
+
+    await handler(interaction, name="NewName", status="Chill")
+    room_tools.set_room.assert_awaited_once()
+    assert "Đã cập nhật phòng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_rolerank_command_handler(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "rolerank_command")
+
+    interaction = _interaction()
+    guild = MagicMock()
+    guild.me = MagicMock()
+    guild.me.guild_permissions.manage_roles = True
+    guild.roles = []
+    interaction.guild = guild
+
+    await handler(interaction)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_donate_slash_success(monkeypatch):
+    import cryptography.fernet
+
+    class FakeFernet:
+        def __init__(self, key):
+            pass
+
+        def decrypt(self, data):
+            return b"fake-png-bytes"
+
+    monkeypatch.setattr(cryptography.fernet, "Fernet", FakeFernet)
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config.PROJECT_ROOT = "."
+    bot_core.config.DONATE_ENCRYPTION_KEY = "dummy_key_12345"
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "donate_slash")
+    assert handler is not None
+
+    interaction = _interaction()
+    choice = MagicMock()
+    choice.value = "kofi"
+    await handler(interaction, choice)
+    interaction.followup.send.assert_awaited_once()
+    assert interaction.followup.send.call_args.kwargs.get("file") is not None
+
+
+@pytest.mark.asyncio
+async def test_imagine_slash_non_premium_sends_momo_qr(monkeypatch):
+    import cryptography.fernet
+
+    class FakeFernet:
+        def __init__(self, key):
+            pass
+
+        def decrypt(self, data):
+            return b"fake-png-bytes"
+
+    monkeypatch.setattr(cryptography.fernet, "Fernet", FakeFernet)
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_premium_user = AsyncMock(return_value=False)
+    bot_core.config.PROJECT_ROOT = "."
+    bot_core.config.DONATE_ENCRYPTION_KEY = "dummy_key_12345"
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "imagine_slash")
+
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "create"
+    await handler(interaction, action, prompt="super cool dog")
+    interaction.followup.send.assert_awaited_once()
+    assert "Momo" in interaction.followup.send.call_args.kwargs.get("content", "")
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_buy_already_premium(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    bot_core._is_moderator_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "premium_slash")
+
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "buy"
+    await handler(interaction, action, None)
+    assert "đã có quyền" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_buy_success(monkeypatch):
+    import cryptography.fernet
+
+    class FakeFernet:
+        def __init__(self, key):
+            pass
+
+        def decrypt(self, data):
+            return b"fake-png-bytes"
+
+    monkeypatch.setattr(cryptography.fernet, "Fernet", FakeFernet)
+
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_premium_user = AsyncMock(return_value=False)
+    bot_core.config.PROJECT_ROOT = "."
+    bot_core.config.DONATE_ENCRYPTION_KEY = "dummy_key_12345"
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "premium_slash")
+
+    interaction = _interaction()
+    action = MagicMock()
+    action.value = "buy"
+    await handler(interaction, action, None)
+    interaction.followup.send.assert_awaited_once()
+    assert interaction.followup.send.call_args.kwargs.get("file") is not None
+
+
+@pytest.mark.asyncio
+async def test_ping_command_sends_pong(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "ping")
+    assert handler is not None
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.response.send_message.assert_awaited_once()
+    assert "Bot đang hoạt động" in interaction.response.send_message.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_config_calls_flow(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    flow_mock = MagicMock()
+    flow_mock.start = AsyncMock()
+    monkeypatch.setattr(cmd_mod, "EndpointConfigFlow", lambda **kw: flow_mock)
+
+    bot_core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_config")
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.response.defer.assert_awaited_once()
+    flow_mock.start.assert_awaited_once_with(interaction)
+
+
+@pytest.mark.asyncio
+async def test_endpoint_view_with_details(monkeypatch):
+    bot_core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_view")
+    bot_core.db_repo.get_llm_endpoints = AsyncMock(return_value={
+        "genai": {
+            "base_url": "http://g", "updated_at": "now", "updated_by": "adm",
+            "last_checked_at": "yesterday", "last_check_ok": False, "last_check_error": "timeout",
+        },
+        "openai": {
+            "base_url": "http://o", "updated_at": "now", "updated_by": "adm",
+            "last_checked_at": None,
+        }
+    })
+    bot_core.db_repo.get_active_sdk = AsyncMock(return_value="genai")
+    bot_core.db_repo.get_llm_model_slots = AsyncMock(return_value={"reasoning": "m1"})
+
+    interaction = _interaction()
+    await handler(interaction)
+    interaction.followup.send.assert_awaited_once()
+    embed = interaction.followup.send.call_args.kwargs.get("embed")
+    assert embed is not None
+
+
+@pytest.mark.asyncio
+async def test_endpoint_models_empty_list(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.get_active_sdk = AsyncMock(return_value="genai")
+    resolver.get_endpoint = AsyncMock(return_value={"base_url": "http://x", "api_key": "k"})
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+
+    gw = MagicMock()
+    gw.list_models_for = AsyncMock(return_value=[])  # empty
+    monkeypatch.setattr(cmd_mod, "get_llm_gateway", lambda: gw)
+
+    bot_core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_models")
+    interaction = _interaction()
+    await handler(interaction)
+    assert "danh sách model rỗng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_models_fetch_error(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.get_active_sdk = AsyncMock(return_value="genai")
+    resolver.get_endpoint = AsyncMock(return_value={"base_url": "http://x", "api_key": "k"})
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+
+    gw = MagicMock()
+    gw.list_models_for = AsyncMock(side_effect=RuntimeError("models error"))
+    monkeypatch.setattr(cmd_mod, "get_llm_gateway", lambda: gw)
+
+    bot_core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_models")
+    interaction = _interaction()
+    await handler(interaction)
+    assert "Không lấy được danh sách model" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_global_note_demote_no_target_shows_view(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.db_repo.get_global_notes_db = AsyncMock(return_value=[
+        {"note_id": "n1", "user_id": "u1", "content": "note 1", "fact_hash": "h1"}
+    ])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "global_note_demote_slash")
+    interaction = _interaction()
+    await handler(interaction, target=None)
+    interaction.followup.send.assert_awaited_once()
+    assert interaction.followup.send.call_args.kwargs.get("view") is not None
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_add_no_user(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "premium_slash")
+    action = MagicMock(value="add")
+    interaction = _interaction()
+    await handler(interaction, action, user=None)
+    assert "chọn người dùng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_premium_slash_check_moderator_and_premium(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    bot_core._is_moderator_user = AsyncMock(return_value=True)
+    bot_core.db_repo.is_premium_user = AsyncMock(return_value=False)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "premium_slash")
+    action = MagicMock(value="check")
+    user = MagicMock(id=88, display_name="ModUser")
+    interaction = _interaction()
+    await handler(interaction, action, user=user)
+    assert "Moderator" in interaction.followup.send.call_args[0][0]
+
+    # test check premium
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_premium_user = AsyncMock(return_value=True)
+    await handler(interaction, action, user=user)
+    assert "Premium" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_add_already_admin_or_mod(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=["99"], MODERATOR_USER_IDS=["88"])
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    action = MagicMock(value="add")
+    user_admin = MagicMock(id=99, display_name="AdminMan")
+    user_mod = MagicMock(id=88, display_name="ModMan")
+    interaction = _interaction()
+
+    await handler(interaction, action, user=user_admin)
+    assert "đã là Admin" in interaction.followup.send.call_args[0][0]
+
+    await handler(interaction, action, user=user_mod)
+    assert "đã là Moderator" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_remove_not_dynamic(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    bot_core.db_repo.remove_moderator_user = AsyncMock(return_value=False)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    action = MagicMock(value="remove")
+    user = MagicMock(id=55, display_name="Normal")
+    interaction = _interaction()
+    await handler(interaction, action, user=user)
+    assert "không phải Moderator động" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_moderator_slash_check_static_mod_and_normal(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=["44"])
+    bot_core.db_repo.is_admin_user = AsyncMock(return_value=False)
+    bot_core.db_repo.is_moderator_user = AsyncMock(return_value=False)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "moderator_slash")
+    action = MagicMock(value="check")
+    user_mod = MagicMock(id=44, display_name="ModStatic")
+    user_norm = MagicMock(id=33, display_name="Norm")
+    interaction = _interaction()
+
+    await handler(interaction, action, user=user_mod)
+    assert "tĩnh" in interaction.followup.send.call_args[0][0]
+
+    await handler(interaction, action, user=user_norm)
+    assert "người dùng bình thường" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_message_to_slash_moderator_rules(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    # caller is moderator, not admin
+    bot_core._is_admin_user = AsyncMock(return_value=False)
+    bot_core._is_moderator_user = AsyncMock(return_value=True)
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "message_to_slash")
+    user = MagicMock(id=77, display_name="U")
+    interaction = _interaction()
+
+    # 1. No channel -> error
+    await handler(interaction, user=user, message="hi", channel=None)
+    assert "không được quyền gửi DM" in interaction.followup.send.call_args[0][0]
+
+    # 2. Channel from different guild -> error
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.guild = MagicMock()
+    interaction.guild = MagicMock()
+    await handler(interaction, user=user, message="hi", channel=channel)
+    assert "chỉ được phép gửi tin nhắn trong server" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_message_to_slash_channel_permission_error(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core._is_admin_user = AsyncMock(return_value=True)
+    bot_core._is_moderator_user = AsyncMock(return_value=False)
+    bot_core.bot.fetch_user = AsyncMock(return_value=MagicMock(id=77, mention="<@77>", display_name="U"))
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "message_to_slash")
+
+    interaction = _interaction()
+    guild = MagicMock()
+    me = MagicMock()
+    interaction.guild = guild
+    guild.me = me
+
+    # channel not text channel
+    voice_ch = MagicMock(spec=discord.VoiceChannel)
+    voice_ch.guild = guild
+    await handler(interaction, user=MagicMock(id=77), message="msg", channel=voice_ch)
+    assert "must be text channel" in interaction.followup.send.call_args[0][0]
+
+    # bot lacks send permission in channel
+    text_ch = MagicMock(spec=discord.TextChannel)
+    text_ch.guild = guild
+    text_ch.permissions_for = MagicMock(return_value=MagicMock(send_messages=False))
+    await handler(interaction, user=MagicMock(id=77), message="msg", channel=text_ch)
+    assert "no send permission" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_set_room_no_tools(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.room_tools_service = None
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "set_room")
+    interaction = _interaction()
+    await handler(interaction)
+    assert "chưa sẵn sàng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_set_room_not_in_voice(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "set_room")
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    interaction.user.voice = None
+    await handler(interaction)
+    assert "không ở trong voice" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_set_room_update_failed(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.room_tools_service.set_room = AsyncMock(return_value=(False, ["fail reason"]))
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "set_room")
+    ch = MagicMock(spec=discord.VoiceChannel)
+    ch.id = 1
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    interaction.user.voice = MagicMock(channel=ch)
+    await handler(interaction, name="New")
+    assert "thất bại" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_move_member_no_tools(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.room_tools_service = None
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_member")
+    interaction = _interaction()
+    await handler(interaction, "1", "2")
+    assert "chưa sẵn sàng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_move_member_not_found(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_member")
+    interaction = _interaction()
+    guild = MagicMock()
+    guild.get_member = MagicMock(return_value=None)
+    interaction.guild = guild
+    await handler(interaction, "1", "2")
+    assert "Không tìm thấy" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_move_all_no_tools(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.room_tools_service = None
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_all")
+    interaction = _interaction()
+    await handler(interaction, target_channel=MagicMock())
+    assert "chưa sẵn sàng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_move_all_not_in_voice(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_all")
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    interaction.user.voice = None
+    await handler(interaction, target_channel=MagicMock())
+    assert "không ở trong voice" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_move_all_same_channel(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    register_slash_commands(bot_core)
+    handler = _find_registered(tree, "move_all")
+    ch = MagicMock(spec=discord.VoiceChannel)
+    ch.id = 100
+    interaction = _interaction()
+    interaction.guild = MagicMock()
+    interaction.user.voice = MagicMock(channel=ch)
+    await handler(interaction, target_channel=ch)
+    assert "trùng phòng" in interaction.followup.send.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_aliases_work(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    room_lock = MagicMock()
+    room_lock.whitelist = MagicMock()
+    room_lock.whitelist.entries = MagicMock(return_value=[])
+    bot_core.room_lock_service = room_lock
+    register_slash_commands(bot_core)
+
+    add_privet = _find_registered(tree, "add_privet")
+    list_privet = _find_registered(tree, "list_privet")
+    assert add_privet is not None
+    assert list_privet is not None
+
+    interaction = _interaction()
+    await list_privet(interaction)
+    interaction.response.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_change_bd_error_branches(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    bot_core, tree = _make_bot_core()
+    bot_core.config = SimpleNamespace(ADMIN_USER_IDS=[], MODERATOR_USER_IDS=[])
+    register_slash_commands(bot_core)
+    group = FakeGroup._all.get("change")
+    handler = next(f for f in group._cmd.registered if f.__name__ == "change_bd")
+
+    # 1. Target is not a Member (e.g. User object in DM)
+    interaction = _interaction()
+    guild = MagicMock()
+    me = MagicMock()
+    me.guild_permissions.manage_nicknames = True
+    guild.me = me
+    interaction.guild = guild
+    user_target = MagicMock(spec=discord.User)  # User, not Member
+    await handler(interaction, "nick", user_target)
+    assert "Chỉ có thể đổi biệt danh" in interaction.response.send_message.call_args[0][0]
+
+    # 2. Forbidden exception during edit
+    interaction = _interaction()
+    interaction.guild = guild
+    member_target = MagicMock(spec=discord.Member)
+    member_target.edit = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "forbidden"))
+    await handler(interaction, "nick", member_target)
+    assert "thiếu quyền" in interaction.response.send_message.call_args[0][0]

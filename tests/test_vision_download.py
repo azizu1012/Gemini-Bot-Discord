@@ -225,3 +225,125 @@ async def test_download_image_oversize(monkeypatch):
     result = await v._download_image("http://example.com/big.png")
     assert result[0] is None
     assert "20 MB" in result[2]
+
+
+@pytest.mark.asyncio
+async def test_download_image_redirect_missing_location(monkeypatch):
+    v = make_vision()
+
+    class RedirectNoLocation:
+        status = 301
+        headers = {}
+
+        async def read(self):
+            return b""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class FakeSession:
+        def __init__(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get(self, url, timeout=None, allow_redirects=False):
+            return RedirectNoLocation()
+
+    import aiohttp
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+    res = await v._download_image("http://example.com/a.png")
+    assert "không có Location" in res[2]
+
+
+@pytest.mark.asyncio
+async def test_download_image_empty_bytes(monkeypatch):
+    v = make_vision()
+
+    class EmptyResp:
+        status = 200
+        headers = {"Content-Type": "image/png"}
+
+        async def read(self):
+            return b""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class FakeSession:
+        def __init__(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get(self, url, timeout=None, allow_redirects=False):
+            return EmptyResp()
+
+    import aiohttp
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+    res = await v._download_image("http://example.com/a.png")
+    assert "tải về rỗng" in res[2]
+
+
+@pytest.mark.asyncio
+async def test_download_image_fallback_content_type(monkeypatch):
+    v = make_vision()
+
+    class OctetResp:
+        status = 200
+        headers = {"Content-Type": "application/octet-stream"}
+
+        async def read(self):
+            return b"some_bytes"
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    class FakeSession:
+        def __init__(self):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def get(self, url, timeout=None, allow_redirects=False):
+            return OctetResp()
+
+    import aiohttp
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+    res = await v._download_image("http://example.com/photo.png")
+    assert res[0] == b"some_bytes"
+    assert res[1] == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_run_image_recognition_empty_url():
+    v = make_vision()
+    assert "Không tìm thấy URL" in await v.run_image_recognition("", "q")
+
+
+@pytest.mark.asyncio
+async def test_run_image_recognition_cache_hit():
+    v = make_vision()
+    v._set_cache("http://img", "what", "a cached cat")
+    assert await v.run_image_recognition("http://img", "what") == "a cached cat"

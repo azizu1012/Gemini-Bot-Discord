@@ -89,3 +89,34 @@ class TestPremiumManager:
         assert await pm.is_premium_user("u100") is True
         assert await pm.remove_premium_user("u100") is True
         assert await pm.is_premium_user("u100") is False
+
+    def test_cache_expiration_and_clear_all(self):
+        import time
+
+        cm = CacheManager()
+        # 1. expired search
+        cm.web_search_cache["expired_q"] = {"data": "old", "timestamp": time.time() - 99999}
+        assert cm.get_web_search_cache("expired_q") is None
+        assert "expired_q" not in cm.web_search_cache
+
+        # 2. expired image
+        cm.image_recognition_cache["url|q"] = {"data": "old", "timestamp": time.time() - 99999}
+        assert cm.get_image_recognition_cache("url", "q") is None
+        assert "url|q" not in cm.image_recognition_cache
+
+        # 3. expired chat history
+        cm.chat_history_cache["u_old"] = {"history": [{"role": "user", "content": "x"}], "timestamp": time.time() - 99999}
+        assert cm.get_chat_history("u_old", limit=5) is None
+        assert "u_old" not in cm.chat_history_cache
+
+        # 4. add_chat_message expired removes entry
+        cm.chat_history_cache["u_exp"] = {"history": [], "timestamp": time.time() - 99999}
+        cm.add_chat_message("u_exp", "user", "msg")
+        assert "u_exp" not in cm.chat_history_cache
+
+        # 5. clear_all_caches
+        cm.set_web_search_cache("q", "d")
+        cm.clear_all_caches()
+        assert cm.web_search_cache == {}
+        assert cm.chat_history_cache == {}
+        assert cm.image_recognition_cache == {}

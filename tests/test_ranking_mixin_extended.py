@@ -211,3 +211,44 @@ def test_is_search_result_sufficient():
     records = [{"snippet": "s" * 300, "title": "t" * 50}]
     assert m._is_search_result_sufficient(records, "g", "q", 2, min_chars=220) is True
     assert m._is_search_result_sufficient(records, "g", "q", 3, min_chars=220) is False
+
+
+def test_time_decay_grace_windows_by_topic():
+    from datetime import timedelta
+    m = make_mixin()
+    now = datetime.now()
+
+    # future date -> 0.0
+    future = now + timedelta(days=2)
+    assert m._calculate_time_decay_penalty("general", future, True) == 0.0
+
+    # gaming: 21 days grace -> 10 days old has 0 penalty
+    assert m._calculate_time_decay_penalty("gaming", now - timedelta(days=10), True) == 0.0
+    # gaming: 30 days old has penalty
+    assert m._calculate_time_decay_penalty("gaming", now - timedelta(days=30), True) < 0.0
+
+    # finance: 3 days grace
+    assert m._calculate_time_decay_penalty("finance", now - timedelta(days=2), True) == 0.0
+    assert m._calculate_time_decay_penalty("finance", now - timedelta(days=5), True) < 0.0
+
+    # movies_tv: 14 days grace
+    assert m._calculate_time_decay_penalty("movies_tv", now - timedelta(days=10), True) == 0.0
+    assert m._calculate_time_decay_penalty("movies_tv", now - timedelta(days=20), True) < 0.0
+
+    # weather: 1 day grace
+    assert m._calculate_time_decay_penalty("weather", now - timedelta(days=0.5), True) == 0.0
+    assert m._calculate_time_decay_penalty("weather", now - timedelta(days=2), True) < 0.0
+
+
+def test_coupled_freshness_pub_date_ranges():
+    from datetime import timedelta
+    m = make_mixin()
+    now = datetime.now()
+
+    # <= 30 days
+    s_30 = m._calculate_coupled_freshness("news", "text", now - timedelta(days=20), True)
+    assert s_30 >= 0.6
+
+    # <= 90 days
+    s_90 = m._calculate_coupled_freshness("news", "text", now - timedelta(days=60), True)
+    assert s_90 >= 0.3

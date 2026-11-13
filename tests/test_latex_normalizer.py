@@ -103,3 +103,28 @@ class TestLatexNormalizerOOP:
         assert "(Giá trị chi tiết: 2.556623925...)" in res
         assert "Các giá trị khác: 3.14, 0.5, -2.5, 100." in res
         assert "$" not in res
+
+    def test_root_with_degree(self):
+        text = "Căn bậc 3: $\\sqrt[3]{8} = 2$ và $\\sqrt[3]{x + 1}$"
+        res = latex_to_markdown(text)
+        assert "³√8" in res
+        assert "³√(x + 1)" in res
+
+    def test_is_math_content_edge_cases(self):
+        ln = LatexNormalizer()
+        assert ln._is_math_content("") is False
+        assert ln._is_math_content("   ") is False
+        assert ln._is_math_content("50 và 100") is False
+        assert ln._is_math_content("apple banana") is False
+        assert ln._is_math_content("\\alpha") is True
+        assert ln._is_math_content("x^2") is True
+        assert ln._is_math_content("3.14...") is True
+
+    def test_complex_fraction_parentheses(self):
+        text = "Phân thức $\\frac{a + b}{c + d}$"
+        res = latex_to_markdown(text)
+        assert "(a + b)/(c + d)" in res
+
+    def test_normalize_latex_for_unsupported_client(self):
+        res = normalize_latex_for_unsupported_client("Giá trị $\\alpha$")
+        assert "α" in res

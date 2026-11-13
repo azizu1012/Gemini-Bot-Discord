@@ -90,3 +90,33 @@ if __name__ == "__main__":
     test_search_streams_legacy_env_still_read()
     test_search_streams_default_and_clamp()
     print("ALL PASS")
+
+
+def test_config_get_int_and_float_invalid_and_clamps():
+    from src.core.config import Config
+
+    # invalid int -> default
+    assert _with_env({"TEST_INT_VAR": "not_an_int"}, lambda: Config._get_int("TEST_INT_VAR", 42)) == 42
+    # invalid float -> default
+    assert _with_env({"TEST_FLOAT_VAR": "not_a_float"}, lambda: Config._get_float("TEST_FLOAT_VAR", 3.14)) == 3.14
+    # float max_value clamp
+    assert _with_env({"TEST_FLOAT_VAR": "99.9"}, lambda: Config._get_float("TEST_FLOAT_VAR", 1.0, max_value=5.0)) == 5.0
+    assert _with_env({"TEST_FLOAT_VAR": "0.1"}, lambda: Config._get_float("TEST_FLOAT_VAR", 1.0, min_value=0.5)) == 0.5
+
+
+def test_config_db_pool_accessors():
+    from src.core.config import get_db_pool, set_db_pool
+
+    old = get_db_pool()
+    try:
+        set_db_pool("mock_pool")
+        assert get_db_pool() == "mock_pool"
+    finally:
+        set_db_pool(old)
+
+
+def test_config_resolve_absolute_path(tmp_path):
+    cfg = get_config()
+    abs_path = str(tmp_path / "custom.log")
+    resolved = _with_env({"TEST_ABS_PATH": abs_path}, lambda: cfg._resolve_runtime_path("TEST_ABS_PATH", "default.log"))
+    assert resolved == abs_path

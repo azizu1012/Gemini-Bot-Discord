@@ -183,3 +183,55 @@ def test_next_call_id_sequence():
 def test_raw_client_property():
     c = make_client()
     assert c.raw_client is c._client
+
+
+@pytest.mark.asyncio
+async def test_list_models_success():
+    c = make_client()
+    m1 = SimpleNamespace(id="gpt-4o")
+    m2 = SimpleNamespace(id=None)
+    c._client.models.list = AsyncMock(return_value=SimpleNamespace(data=[m1, m2]))
+    models = await c.list_models()
+    assert len(models) == 1
+    assert models[0]["id"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_list_models_exception():
+    c = make_client()
+    c._client.models.list = AsyncMock(side_effect=RuntimeError("api error"))
+    with pytest.raises(LLMError):
+        await c.list_models()
+
+
+@pytest.mark.asyncio
+async def test_close_methods():
+    c = make_client()
+    c._client.close = AsyncMock()
+    await c.close()
+    c._client.close.assert_awaited_once()
+
+    # close error handled
+    c._client.close = AsyncMock(side_effect=RuntimeError("close fail"))
+    await c.close()  # no raise
+
+
+@pytest.mark.asyncio
+async def test_generate_with_config_params():
+    c = make_client()
+    c._client.chat.completions.create = AsyncMock(
+        return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ans", tool_calls=[]), finish_reason="stop")])
+    )
+    tools = [SimpleNamespace(function_declarations=[SimpleNamespace(name="t1", description="", parameters=None)])]
+    await c.generate(
+        model_id="m1",
+        system_instruction="sys",
+        generation_config={"temperature": 0.3, "top_p": 0.8, "max_output_tokens": 500},
+        messages=[],
+        tools=tools,
+    )
+    call_kwargs = c._client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["temperature"] == 0.3
+    assert call_kwargs["top_p"] == 0.8
+    assert call_kwargs["max_tokens"] == 500
+    assert "tools" in call_kwargs

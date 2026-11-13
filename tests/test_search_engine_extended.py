@@ -256,3 +256,40 @@ async def test_search_single_intent_fallback_when_insufficient(monkeypatch):
     out = await e._search_single_intent("query")
     assert "final2" in out
     e._run_fallback_search_records.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_search_pipeline_multi_intent_with_error():
+    e = make_engine()
+    e._split_multi_intents = MagicMock(return_value=["intent 1", "intent 2"])
+    calls = {"n": 0}
+
+    async def fake_search(intent, fallback):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return "Result for intent 1"
+        raise RuntimeError("intent 2 fail")
+
+    e._search_single_intent = fake_search
+    out = await e._execute_search_pipeline("multi query", False)
+    assert "Result for intent 1" in out
+    assert "Không thể truy xuất dữ liệu" in out
+
+
+@pytest.mark.asyncio
+async def test_run_search_apis_time_sensitive_empty_retries_forced():
+    e = make_engine()
+    e.get_web_search_cache = MagicMock(return_value=None)
+    e._is_time_sensitive_query = MagicMock(return_value=True)
+
+    calls = {"n": 0}
+    async def fake_pipeline(query, force_fallback):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ""  # first empty
+        return "fallback date result"
+
+    e._execute_search_pipeline = fake_pipeline
+    out = await e.run_search_apis("tin tức hôm nay")
+    assert out == "fallback date result"
+    assert calls["n"] == 2

@@ -30,6 +30,8 @@ def make_bc():
     bc.logger = NullLogger()
     bc.db_repo = MagicMock()
     bc.bot = MagicMock()
+    bc.confirmation_pending = {}
+    bc.admin_confirmation_pending = {}
     bc._outgoing_queues = {}
     bc._outgoing_senders = {}
     bc.active_typing_tasks = {}
@@ -383,3 +385,193 @@ async def test_voice_lock_enforce_loop_kicks_non_whitelist():
 
     await bc._voice_lock_enforce_loop()
     member_bad.move_to.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_confirmation_pending_timeout():
+    from datetime import datetime, timedelta
+
+    bc = make_bc()
+    user_id = "100"
+    bc.confirmation_pending[user_id] = {"timestamp": datetime.now() - timedelta(seconds=70)}
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "yes"
+    msg.reply = AsyncMock()
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is True
+    assert user_id not in bc.confirmation_pending
+    assert "Hết thời gian" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_pending_yes():
+    from datetime import datetime
+
+    bc = make_bc()
+    user_id = "100"
+    bc.confirmation_pending[user_id] = {"timestamp": datetime.now()}
+    bc.db_repo.clear_user_data_db = AsyncMock()
+    bc.kafka_service.publish = AsyncMock(return_value=True)
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "có"
+    msg.reply = AsyncMock()
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is True
+    assert user_id not in bc.confirmation_pending
+    bc.db_repo.clear_user_data_db.assert_awaited_once_with(user_id)
+    assert "Đã xóa lịch sử" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_pending_no():
+    from datetime import datetime
+
+    bc = make_bc()
+    user_id = "100"
+    bc.confirmation_pending[user_id] = {"timestamp": datetime.now()}
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "không"
+    msg.reply = AsyncMock()
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is True
+    assert user_id not in bc.confirmation_pending
+    assert "Đã hủy" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_pending_invalid():
+    from datetime import datetime
+
+    bc = make_bc()
+    user_id = "100"
+    bc.confirmation_pending[user_id] = {"timestamp": datetime.now()}
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "random text"
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is False
+    assert user_id not in bc.confirmation_pending
+
+
+@pytest.mark.asyncio
+async def test_admin_confirmation_pending_timeout():
+    from datetime import datetime, timedelta
+
+    bc = make_bc()
+    user_id = "100"
+    bc.admin_confirmation_pending[user_id] = {"timestamp": datetime.now() - timedelta(seconds=70)}
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "yes reset"
+    msg.reply = AsyncMock()
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is True
+    assert user_id not in bc.admin_confirmation_pending
+    assert "Hết thời gian" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_admin_confirmation_pending_yes_reset():
+    from datetime import datetime
+
+    bc = make_bc()
+    user_id = "100"
+    bc.admin_confirmation_pending[user_id] = {"timestamp": datetime.now()}
+    bc._is_admin_user = AsyncMock(return_value=True)
+    bc.db_repo.clear_all_data_db = AsyncMock()
+    bc.kafka_service.publish = AsyncMock(return_value=True)
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "yes reset"
+    msg.reply = AsyncMock()
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is True
+    assert user_id not in bc.admin_confirmation_pending
+    bc.db_repo.clear_all_data_db.assert_awaited_once()
+    assert "Đã xóa toàn bộ" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_admin_confirmation_pending_cancel():
+    from datetime import datetime
+
+    bc = make_bc()
+    user_id = "100"
+    bc.admin_confirmation_pending[user_id] = {"timestamp": datetime.now()}
+    msg = MagicMock()
+    msg.author.id = int(user_id)
+    msg.content = "cancel"
+    msg.reply = AsyncMock()
+    handled = await bc._handle_confirmation_message(msg)
+    assert handled is True
+    assert user_id not in bc.admin_confirmation_pending
+    assert "Đã hủy" in msg.reply.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_bot_core_init_full(monkeypatch):
+    import src.handlers.discord.bot_core as bc_mod
+
+    def fake_m(*a, **kw):
+        return MagicMock()
+    monkeypatch.setattr(bc_mod, "DatabaseRepository", fake_m)
+    monkeypatch.setattr(bc_mod, "CleanupManager", fake_m)
+    monkeypatch.setattr(bc_mod, "get_health_checker", fake_m)
+    monkeypatch.setattr(bc_mod.commands, "Bot", fake_m)
+    monkeypatch.setattr(bc_mod, "RedisStreamService", fake_m)
+    monkeypatch.setattr(bc_mod, "register_slash_commands", lambda *a, **kw: None)
+    monkeypatch.setattr(bc_mod, "RoomLockService", fake_m)
+    monkeypatch.setattr(bc_mod, "RoomToolsService", fake_m)
+    monkeypatch.setattr(bc_mod, "VoiceLockManager", fake_m)
+
+    cfg = type("Config", (), {
+        "DATABASE_URL": "postgresql://mock",
+        "REDIS_URL": "redis://mock",
+        "ADMIN_ID": "123",
+        "ADMIN_USER_IDS": [],
+        "MODERATOR_USER_IDS": [],
+        "VOICE_WHITELIST_FILE": "w",
+        "LOCKED_CHANNELS_FILE": "l",
+        "ENFORCED_NAMES_FILE": "e",
+        "VOICE_LOCK_LOG_FILE": "v",
+    })()
+
+    core = bc_mod.BotCore(cfg)
+    assert core.config is cfg
+
+
+@pytest.mark.asyncio
+async def test_bot_core_init_with_redis(monkeypatch):
+    import src.handlers.discord.bot_core as bc_mod
+    from src.core.config import Config
+
+    monkeypatch.setattr(Config, "_get_str", lambda name, default="": "redis://mock" if name == "REDIS_URL" else default)
+    def fake_m(*a, **kw):
+        return MagicMock()
+    monkeypatch.setattr(bc_mod, "DatabaseRepository", fake_m)
+    monkeypatch.setattr(bc_mod, "CleanupManager", fake_m)
+    monkeypatch.setattr(bc_mod, "get_health_checker", fake_m)
+    monkeypatch.setattr(bc_mod.commands, "Bot", fake_m)
+    monkeypatch.setattr(bc_mod, "RedisStreamService", fake_m)
+    monkeypatch.setattr(bc_mod, "register_slash_commands", lambda *a, **kw: None)
+    monkeypatch.setattr(bc_mod, "RoomLockService", fake_m)
+    monkeypatch.setattr(bc_mod, "RoomToolsService", fake_m)
+    monkeypatch.setattr(bc_mod, "VoiceLockManager", fake_m)
+
+    cfg = type("Config", (), {
+        "DATABASE_URL": "postgresql://mock",
+        "REDIS_URL": "redis://mock",
+        "ADMIN_ID": "123",
+        "ADMIN_USER_IDS": [],
+        "MODERATOR_USER_IDS": [],
+        "VOICE_WHITELIST_FILE": "w",
+        "LOCKED_CHANNELS_FILE": "l",
+        "ENFORCED_NAMES_FILE": "e",
+        "VOICE_LOCK_LOG_FILE": "v",
+    })()
+
+    core = bc_mod.BotCore(cfg)
+    assert core._redis_client is not None

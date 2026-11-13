@@ -1,6 +1,8 @@
 """Offline tests for GeminiPipeline pure helpers and key async control flows."""
+import asyncio
 import sys
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -709,3 +711,203 @@ async def test_call_gemini_api_extra_retrieval_pass():
     )
     assert result == "final answer"
     assert state["calls"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_parsing_error():
+    fc = SimpleNamespace(name="web_search", args={"_parsing_error": "JSON parse error", "_raw_arguments": "{bad"}, id="1")
+    gateway = FakeGateway(lambda: _step_candidate(text=None, finish="STOP", function_call=fc))
+    tools = FakeTools()
+    pipeline = make_pipeline(gateway, tools)
+    result, tool_results = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "q"}]}], "u1", {"is_admin": False}
+    )
+    assert "json_parse_failed" in tool_results
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_search_budget_blocked():
+    fc = SimpleNamespace(name="web_search", args={"query": "test"}, id="1")
+    gateway = FakeGateway(lambda: _step_candidate(text=None, finish="STOP", function_call=fc))
+    tools = FakeTools()
+    cfg = FakeConfig()
+    cfg.MAX_SEARCH_CALLS_PER_TURN = 0  # immediately blocked
+    pipeline = make_pipeline(gateway, tools, config=cfg)
+    result, tool_results = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "q"}]}], "u1", {"is_admin": False}
+    )
+    assert "[web_search|budget]" in tool_results
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_text_parsed_tool_code():
+    text_with_code = "<tool_code>calculate(equation='10+20')</tool_code>"
+    gateway = FakeGateway(lambda: _step_candidate(text=text_with_code, finish="STOP"))
+    tools = FakeTools()
+    pipeline = make_pipeline(gateway, tools)
+    result, tool_results = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "calc"}]}], "u1", {"is_admin": False}
+    )
+    assert "[calculate]" in tool_results
+    assert result == "Reasoning completed"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_text_parsed_tool_call_prefix():
+    text_with_call = 'TOOL_CALL: calculate(equation="5*5")'
+    gateway = FakeGateway(lambda: _step_candidate(text=text_with_call, finish="STOP"))
+    tools = FakeTools()
+    pipeline = make_pipeline(gateway, tools)
+    result, tool_results = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "calc"}]}], "u1", {"is_admin": False}
+    )
+    assert "[calculate]" in tool_results
+    assert result == "Reasoning completed"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_rate_limit_retry(monkeypatch):
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    state = {"n": 0}
+
+    class RLGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise Exception("rate limit hit")
+            return SimpleNamespace(candidates=[_step_candidate(text="ok after retry", finish="STOP")])
+
+        def _is_rate_limit_error(self, s):
+            return "rate limit" in str(s)
+
+        def _is_unavailable_error(self, s):
+            return False
+
+    cfg = FakeConfig()
+    cfg.REASONING_MAX_API_RETRIES = 2
+    pipeline = make_pipeline(RLGateway(None), config=cfg)
+    result, _ = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "hi"}]}], "u1", {"is_admin": False}
+    )
+    assert result == "ok after retry"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_invalid_key_breaks(monkeypatch):
+    class KeyGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            raise Exception("invalid key")
+
+        def _is_invalid_key_error(self, s):
+            return "invalid key" in str(s)
+
+        def _is_rate_limit_error(self, s):
+            return False
+
+        def _is_connection_error(self, s):
+            return False
+
+    pipeline = make_pipeline(KeyGateway(None))
+    result, _ = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "hi"}]}], "u1", {"is_admin": False}
+    )
+    assert result == "Reasoning loop failed"
+
+
+@pytest.mark.asyncio
+async def test_continue_final_output_empty_candidate():
+    # candidate has no parts
+    class EmptyGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[]))])
+
+    pipeline = make_pipeline(EmptyGateway(None))
+    res = await pipeline._continue_final_output(
+        accumulated_text="text so far",
+        system_instruction="sys",
+        generation_config={},
+        slot_role="final",
+        user_id="u1",
+        stage="final",
+    )
+    assert res == "text so far"
+
+
+@pytest.mark.asyncio
+async def test_continue_final_output_empty_text():
+    class EmptyTextGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[SimpleNamespace(text="")]))])
+
+    pipeline = make_pipeline(EmptyTextGateway(None))
+    res = await pipeline._continue_final_output(
+        accumulated_text="text so far",
+        system_instruction="sys",
+        generation_config={},
+        slot_role="final",
+        user_id="u1",
+        stage="final",
+    )
+    assert res == "text so far"
+
+
+@pytest.mark.asyncio
+async def test_continue_final_output_connection_error():
+    state = {"n": 0}
+
+    class ConnGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise ConnectionError("conn down")
+            return SimpleNamespace(candidates=[_step_candidate(text="ok", finish="STOP")])
+
+        def _is_connection_error(self, e):
+            return True
+
+        def _is_invalid_key_error(self, s):
+            return False
+
+        def _is_rate_limit_error(self, s):
+            return False
+
+    pipeline = make_pipeline(ConnGateway(None))
+    res = await pipeline._continue_final_output(
+        accumulated_text="initial",
+        system_instruction="sys",
+        generation_config={},
+        slot_role="final",
+        user_id="u1",
+        stage="final",
+    )
+    assert "ok" in res
+
+
+@pytest.mark.asyncio
+async def test_continue_final_output_generic_exception():
+    class GenGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            raise RuntimeError("other error")
+
+        def _is_connection_error(self, e):
+            return False
+
+        def _is_invalid_key_error(self, s):
+            return False
+
+        def _is_rate_limit_error(self, s):
+            return False
+
+        def log_exception(self, **kw):
+            pass
+
+    pipeline = make_pipeline(GenGateway(None))
+    res = await pipeline._continue_final_output(
+        accumulated_text="initial",
+        system_instruction="sys",
+        generation_config={},
+        slot_role="final",
+        user_id="u1",
+        stage="final",
+    )
+    assert res == "initial"

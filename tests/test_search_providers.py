@@ -248,3 +248,75 @@ def test_fetcher_follows_redirect_then_success(monkeypatch):
     monkeypatch.setattr(fetcher_mod.requests, "get", fake_get)
     text = _await_result(fetcher.fetch_page_evidence("https://example.com/start"))
     assert "final text" in text
+
+
+def test_serpapi_missing_package(monkeypatch):
+    import sys as _sys
+    monkeypatch.setattr(serp_mod, "SERPAPI_API_KEY", "k")
+    monkeypatch.setitem(_sys.modules, "serpapi", None)
+    assert _await_result(serp_mod.search_serpapi("q", logger_override=NullLogger())) == []
+
+
+def test_serpapi_exception(monkeypatch):
+    monkeypatch.setattr(serp_mod, "SERPAPI_API_KEY", "k")
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def search(self, params): raise RuntimeError("serp fail")
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "serpapi", type("M", (), {"Client": FakeClient})())
+    monkeypatch.setattr(serp_mod.asyncio, "to_thread", _sync_to_thread)
+    assert _await_result(serp_mod.search_serpapi("q", logger_override=NullLogger())) == []
+
+
+def test_tavily_missing_package(monkeypatch):
+    import sys as _sys
+    monkeypatch.setattr(tav_mod, "TAVILY_API_KEY", "k")
+    monkeypatch.setitem(_sys.modules, "tavily", None)
+    assert _await_result(tav_mod.search_tavily("q", logger_override=NullLogger())) == []
+
+
+def test_tavily_exception(monkeypatch):
+    monkeypatch.setattr(tav_mod, "TAVILY_API_KEY", "k")
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def search(self, **kw): raise RuntimeError("tavily fail")
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "tavily", type("M", (), {"TavilyClient": FakeClient})())
+    monkeypatch.setattr(tav_mod.asyncio, "to_thread", _sync_to_thread)
+    assert _await_result(tav_mod.search_tavily("q", logger_override=NullLogger())) == []
+
+
+def test_ddg_with_timelimit(monkeypatch):
+    class FakeDDGS:
+        def __init__(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def text(self, query, max_results=5, timelimit=None):
+            return [{"href": "https://example.com/item", "title": "T", "body": "b"}]
+
+    monkeypatch.setattr(ddg_mod, "DDGS", FakeDDGS)
+    monkeypatch.setattr(ddg_mod.asyncio, "to_thread", _sync_to_thread)
+    items = _await_result(ddg_mod.search_duckduckgo("q", timelimit="d"))
+    assert len(items) == 1
+
+
+def test_exa_empty_results(monkeypatch):
+    monkeypatch.setattr(exa_mod, "EXA_API_KEY", "abc")
+    class FakeExa:
+        def __init__(self, **kw):
+            self.search = MagicMock(return_value=type("R", (), {"results": []})())
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "exa_py", type("M", (), {"Exa": FakeExa})())
+    monkeypatch.setattr(exa_mod.asyncio, "to_thread", _sync_to_thread)
+    assert _await_result(exa_mod.search_exa("q")) == []
+
+
+def test_exa_exception(monkeypatch):
+    monkeypatch.setattr(exa_mod, "EXA_API_KEY", "abc")
+    class FakeExa:
+        def __init__(self, **kw):
+            self.search = MagicMock(side_effect=RuntimeError("exa fail"))
+    import sys as _sys
+    monkeypatch.setitem(_sys.modules, "exa_py", type("M", (), {"Exa": FakeExa})())
+    monkeypatch.setattr(exa_mod.asyncio, "to_thread", _sync_to_thread)
+    assert _await_result(exa_mod.search_exa("q", logger_override=NullLogger())) == []

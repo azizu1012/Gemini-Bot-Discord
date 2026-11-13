@@ -71,3 +71,24 @@ def test_set_deep_read_min_ttl():
     c = make_cache()
     c.set_deep_read("http://a", "x", ttl_seconds=10)
     assert c.deep_read_cache["http://a"]["ttl_seconds"] == 60
+
+
+def test_get_web_search_no_expires_at_fresh():
+    c = make_cache()
+    c.web_search_cache[c.normalize_cache_key("q")] = {
+        "data": "fresh_data",
+        "timestamp": datetime.now() - timedelta(hours=1),
+        "expires_at": None,
+    }
+    assert c.get_web_search("q") == "fresh_data"
+
+
+def test_get_web_search_no_expires_at_stale():
+    c = make_cache()
+    c.web_search_cache[c.normalize_cache_key("q")] = {
+        "data": "stale_data",
+        "timestamp": datetime.now() - timedelta(hours=10),
+        "expires_at": None,
+    }
+    assert c.get_web_search("q") is None
+    assert c.normalize_cache_key("q") not in c.web_search_cache
