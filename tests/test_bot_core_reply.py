@@ -1,6 +1,7 @@
 """Offline tests for BotCore outgoing reply processing."""
 import asyncio
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -118,6 +119,49 @@ async def test_process_reply_batch_send_fail_breaks():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["reply", "reply_batch"])
+async def test_failed_delivery_stays_pending_then_redelivers(action):
+    bc = make_bc()
+    bc._outgoing_consumer = MagicMock(ack_id=AsyncMock(return_value=True))
+    bc._send_message_with_retry = AsyncMock(return_value=None)
+    payload = {
+        "action": action, "channel_id": "1", "user_id": "u1",
+        "content": "a", "chunks": ["a"], "reply_group_id": "g1",
+        "_consumer_entry_id": "1-1",
+    }
+    await bc._process_outgoing_payload(payload)
+    bc._outgoing_consumer.ack_id.assert_not_awaited()
+
+    bc._send_message_with_retry.return_value = MagicMock()
+    await bc._process_outgoing_payload(dict(payload))
+    bc._outgoing_consumer.ack_id.assert_awaited_once_with("1-1")
+
+
+@pytest.mark.asyncio
+async def test_batch_redelivery_skips_sent_chunks_and_survives_failed_ack():
+    bc = make_bc()
+    bc._outgoing_consumer = MagicMock(ack_id=AsyncMock(side_effect=[False, True]))
+    bc._send_message_with_retry = AsyncMock(side_effect=[MagicMock(), None, MagicMock(), MagicMock()])
+    payload = {
+        "action": "reply_batch", "channel_id": "1", "user_id": "u1",
+        "chunks": ["a", "b", "c"], "reply_group_id": "g1",
+        "_consumer_entry_id": "1-1",
+    }
+    await bc._process_outgoing_payload(dict(payload))
+    bc._outgoing_consumer.ack_id.assert_not_awaited()
+    assert bc._delivery_state["g1"]["sent"] == {0}
+
+    await bc._process_outgoing_payload(dict(payload))
+    assert [call.kwargs["content"] for call in bc._send_message_with_retry.await_args_list] == ["a", "b", "b", "c"]
+    assert bc._delivery_state["g1"]["sent"] == {0, 1, 2}
+
+    await bc._process_outgoing_payload(dict(payload))
+    assert bc._send_message_with_retry.await_count == 4
+    assert bc._outgoing_consumer.ack_id.await_count == 2
+    assert "g1" not in bc._delivery_state
+
+
+@pytest.mark.asyncio
 async def test_process_reply_success():
     bc = make_bc()
     channel = MagicMock()
@@ -160,6 +204,46 @@ async def test_consume_outgoing_loop_no_consumer():
     bc = make_bc()
     bc.kafka_service.consumers = {}
     await bc.consume_outgoing_loop()
+
+
+@pytest.mark.asyncio
+async def test_bot_dispatches_startup_periodic_and_normal_entries():
+    bc = make_bc()
+    bc.config = SimpleNamespace(RECLAIM_PENDING_INTERVAL_SECONDS=0.001)
+    entries = [SimpleNamespace(
+        value={"action": "reply", "channel_id": "1", "content": str(index)},
+        entry_id=f"{index}-0",
+    ) for index in range(3)]
+    acked = []
+    done = asyncio.Event()
+
+    async def ack(entry_id):
+        acked.append(entry_id)
+        if len(acked) == 3:
+            done.set()
+        return True
+
+    batches = iter([[entries[0]], [entries[1]]])
+
+    async def reclaim(**kwargs):
+        return next(batches, [])
+
+    async def normal_entries():
+        yield entries[2]
+        await done.wait()
+
+    consumer = MagicMock()
+    consumer.ack_id = AsyncMock(side_effect=ack)
+    consumer.reclaim_pending = AsyncMock(side_effect=reclaim)
+    consumer.__aiter__ = lambda self: normal_entries()
+    bc.kafka_service.consumers = {"discord-outgoing": consumer}
+    bc.kafka_service.start_producer = AsyncMock()
+    bc.kafka_service.start_consumer = AsyncMock(return_value=consumer)
+    bc.handle_outgoing_payload = AsyncMock(side_effect=bc._process_outgoing_payload)
+    await bc.setup_redis()
+    await asyncio.wait_for(bc._consume_task, timeout=1)
+    assert sorted(acked) == ["0-0", "1-0", "2-0"]
+    assert bc._send_message_with_retry.await_count == 3
 
 
 @pytest.mark.asyncio

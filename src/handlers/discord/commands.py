@@ -425,7 +425,12 @@ def register_slash_commands(bot_core_instance):
             "channel_id": str(interaction.channel_id),
             "author_display_name": interaction.user.display_name
         }
-        await kafka_service.publish("discord-incoming", payload=payload, key=user_id)
+        if not await kafka_service.publish("discord-incoming", payload=payload, key=user_id):
+            bot_core_instance.active_interactions.pop(interaction_id_str, None)
+            bot_core_instance._interaction_timestamps.pop(interaction_id_str, None)
+            await interaction.followup.send(
+                "❌ Không thể gửi yêu cầu tạo ảnh. Vui lòng thử lại sau.", ephemeral=True
+            )
 
     @bot.tree.command(name="premium", description="Tính năng Premium")
     @app_commands.describe(action="Chọn hành động", user="Người dùng (chỉ dành cho add/check)")

@@ -76,6 +76,7 @@ class MessageHandler:
             int(getattr(self.config, "MAX_CONCURRENT_MESSAGES", 3) or 3)
         )
         self._user_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
+        self._user_lock_refs: Dict[str, int] = {}
         self._http_session: Optional[Any] = None
         self._worker_tasks: set = set()
 
@@ -113,26 +114,18 @@ class MessageHandler:
         if lock is None:
             lock = asyncio.Lock()
             locks[user_id] = lock
-            # FIFO eviction — never evict a lock that is currently held, or
-            # per-user ordering is broken under burst. If every (LRU) lock is
-            # in-use, stop evicting (grow until they become free).
+            # Keep locks referenced by active or waiting processing tasks.
             while len(locks) > self._MAX_USER_LOCKS:
-                oldest_id = next(iter(locks))
-                # Skip in-use locks when sweeping (cheap linear scan in the
-                # rare full-dict case).
-                if locks[oldest_id].locked():
-                    # Locks are O(1) at the head; if the head is busy, scan
-                    # for the first free lock to evict.
-                    freed = False
-                    for candidate_id, candidate_lock in list(locks.items()):
-                        if not candidate_lock.locked():
-                            del locks[candidate_id]
-                            freed = True
-                            break
-                    if not freed:
+                for candidate_id, candidate_lock in list(locks.items()):
+                    if (
+                        candidate_id != user_id
+                        and not candidate_lock.locked()
+                        and not getattr(self, "_user_lock_refs", {}).get(candidate_id, 0)
+                    ):
+                        del locks[candidate_id]
                         break
                 else:
-                    del locks[oldest_id]
+                    break
         elif isinstance(locks, OrderedDict):
             locks.move_to_end(user_id)
         return lock
@@ -383,23 +376,55 @@ class MessageHandler:
         """
         user_id = str((msg.value or {}).get("user_id") or "")
         message_id = str((msg.value or {}).get("message_id") or "")
-        if message_id:
-            claim_once = getattr(getattr(self, "kafka_service", None), "claim_message_once", None)
-            if callable(claim_once) and not await claim_once(message_id):
-                self.logger.warning(f"Skipping duplicate incoming message {message_id} for user {user_id}")
-                consumer = getattr(self, "_incoming_consumer", None)
-                if consumer:
-                    await consumer.ack(msg)
-                return
-        user_lock = self._get_user_lock(user_id) if user_id else None
-
-        if user_lock is not None:
-            async with user_lock:
+        service = getattr(self, "kafka_service", None)
+        claim_once = getattr(service, "claim_message_once", None)
+        token = str(uuid.uuid4())
+        claimed = False
+        user_lock = None
+        try:
+            if message_id and service is not None and callable(claim_once):
+                claimed = await claim_once(message_id, token=token)
+                if not claimed:
+                    # A lease held by another worker is not proof of delivery.
+                    if await service.is_message_completed(message_id):
+                        consumer = getattr(self, "_incoming_consumer", None)
+                        if consumer:
+                            await consumer.ack(msg)
+                    return
+                msg._claim_token = token
+            user_lock = self._get_user_lock(user_id) if user_id else None
+            if user_lock is not None:
+                if not hasattr(self, "_user_lock_refs"):
+                    self._user_lock_refs = {}
+                self._user_lock_refs[user_id] = self._user_lock_refs.get(user_id, 0) + 1
+                async with user_lock:
+                    async with self._worker_semaphore:
+                        await self.process_message(msg)
+            else:
                 async with self._worker_semaphore:
                     await self.process_message(msg)
-        else:
-            async with self._worker_semaphore:
-                await self.process_message(msg)
+        finally:
+            if user_lock is not None:
+                self._user_lock_refs[user_id] -= 1
+                if not self._user_lock_refs[user_id]:
+                    del self._user_lock_refs[user_id]
+            if claimed and service is not None:
+                try:
+                    await service.release_message_claim(message_id, token)
+                except Exception:
+                    self.logger.warning(f"Failed to release processing lease for {message_id}")
+
+    async def _ack_incoming(self, msg: _RedisMsg) -> None:
+        token = getattr(msg, "_claim_token", None)
+        if token:
+            await self.kafka_service.complete_message(str(msg.value["message_id"]), token)
+        if self._incoming_consumer:
+            await self._incoming_consumer.ack(msg)
+
+    def _dispatch_incoming(self, msg: _RedisMsg) -> None:
+        task = asyncio.create_task(self._process_message_guarded(msg))
+        self._worker_tasks.add(task)
+        task.add_done_callback(self._worker_tasks.discard)
 
     async def start_worker(self):
         """Start the Redis Streams consumer and listen for incoming messages."""
@@ -419,6 +444,8 @@ class MessageHandler:
         reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
         if reclaimed:
             self.logger.info(f"Reclaimed {len(reclaimed)} pending messages from dead consumers on startup")
+        for msg in reclaimed:
+            self._dispatch_incoming(msg)
 
         self.logger.info("Worker started. Listening for messages...")
 
@@ -435,6 +462,8 @@ class MessageHandler:
                         self.logger.info(
                             f"Reclaimed {len(reclaimed)} pending messages from crashed consumers"
                         )
+                    for msg in reclaimed:
+                        self._dispatch_incoming(msg)
                 except Exception as e:
                     self.logger.warning(f"Periodic pending reclaim failed: {e}")
 
@@ -444,9 +473,7 @@ class MessageHandler:
 
         try:
             async for msg in consumer:
-                task = asyncio.create_task(self._process_message_guarded(msg))
-                self._worker_tasks.add(task)
-                task.add_done_callback(self._worker_tasks.discard)
+                self._dispatch_incoming(msg)
         except asyncio.CancelledError:
             self.logger.info("Worker task cancelled")
             raise
@@ -493,28 +520,22 @@ class MessageHandler:
             if user_id:
                 self.cache_mgr.invalidate_chat_history(user_id)
                 self.logger.info(f"[CACHE] Invalidated chat history cache for user {user_id} via Redis event.")
-            if self._incoming_consumer:
-                await self._incoming_consumer.ack(msg)
+            await self._ack_incoming(msg)
             return
 
         if msg_type == "invalidate_all_cache":
             self.cache_mgr.clear_all_caches()
             self.logger.info("[CACHE] Cleared all in-memory caches via Redis event.")
-            if self._incoming_consumer:
-                await self._incoming_consumer.ack(msg)
+            await self._ack_incoming(msg)
             return
 
         if not user_id:
-            if self._incoming_consumer:
-                await self._incoming_consumer.ack(msg)
+            await self._ack_incoming(msg)
             return
 
         if msg_type == "slash_command":
-            try:
-                await self.process_slash_command(payload)
-            finally:
-                if self._incoming_consumer:
-                    await self._incoming_consumer.ack(msg)
+            if await self.process_slash_command(payload) is not False:
+                await self._ack_incoming(msg)
             return
 
         content = payload.get('content', '').strip()
@@ -534,18 +555,19 @@ class MessageHandler:
                 "content": "⚠️ Bot chưa được cấu hình. Vui lòng liên hệ admin.",
                 "reference_message_id": payload.get('message_id')
             }, user_id)
-            if self._incoming_consumer:
-                await self._incoming_consumer.ack(msg)
+            await self._ack_incoming(msg)
             return
 
-        # Acquire the atomic PostgreSQL busy-guard before processing (restart-safe
-        # idempotency). Released in the finally block below via
-        # clear_user_processing_state. Best-effort: a state-layer hiccup must not
-        # drop the message — the in-memory lock still orders per-user work.
+        # Only enter processing and cleanup when we own the busy guard.
+        # Contention or database failure leaves this entry pending for retry.
         try:
-            await self.db_repo.set_user_processing_state(user_id, "processing")
+            busy_stage = await self.db_repo.set_user_processing_state(user_id, "processing")
         except Exception:
             self.logger.warning(f"Failed to set processing state for user {user_id}")
+            return
+        if busy_stage is not None:
+            self.logger.info(f"Deferring message for busy user {user_id}: {busy_stage}")
+            return
 
         try:
             is_admin = await self.premium_mgr.is_admin_user(user_id)
@@ -563,6 +585,7 @@ class MessageHandler:
                         "content": "Bạn đã sử dụng hết giới hạn tin nhắn hôm nay (50/50). Hãy nâng cấp Premium bằng lệnh `/premium buy` để tiếp tục dùng không giới hạn nhé! 🛑",
                         "reference_message_id": payload.get('message_id')
                     }, user_id)
+                    await self._ack_incoming(msg)
                     return
 
             # 2. Publish Typing Signal
@@ -793,8 +816,7 @@ class MessageHandler:
             await self._publish_outgoing(reply_payload, user_id)
 
             self.logger.info(f"Published outgoing reply_batch ({len(chunks)} chunks) to Redis for user {user_id}")
-            if self._incoming_consumer:
-                await self._incoming_consumer.ack(msg)
+            await self._ack_incoming(msg)
 
         except Exception:
             self.logger.exception(f"Error processing message for {user_id}")
@@ -808,8 +830,7 @@ class MessageHandler:
                 }, user_id)
                 # The intentional fallback busy reply was published, so the user
                 # got a deliverable response — the message may be ACKed.
-                if self._incoming_consumer:
-                    await self._incoming_consumer.ack(msg)
+                await self._ack_incoming(msg)
             except Exception:
                 # Both the main reply and the busy-reply publish failed. Leave
                 # the message un-ACKed so it stays in the PEL for reclaim
@@ -852,6 +873,8 @@ class MessageHandler:
                 self.logger.warning(f"Unknown slash command: {command}")
         except Exception as e:
             self.logger.error(f"Error handling slash command '{command}': {e}")
+            return False
+        return True
 
     async def _process_imagine_command(self, payload: dict):
         """Process an imagine slash command (AI image generation with Gemini)."""

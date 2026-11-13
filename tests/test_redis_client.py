@@ -178,11 +178,13 @@ async def test_consumer_reclaim_pending_empty():
 @pytest.mark.asyncio
 async def test_consumer_reclaim_pending_selects_idle():
     redis = FakeRedis()
+    redis.xpending = AsyncMock(return_value={"pending": 2, "min": "1-1", "max": "1-2", "consumers": []})
     redis.pending_entries = [
         {b"message_id": b"1-1", b"time_since_delivered": 50000},
         {b"message_id": b"1-2", b"time_since_delivered": 1000},
     ]
-    redis.claimed_entries = [("mystream", [("1-1", {b"key": b"k", b"value": b"{\"x\":1}"})])]
+    # redis-py XCLAIM returns entry/field pairs, without a stream wrapper.
+    redis.claimed_entries = [("1-1", {b"key": b"k", b"value": b"{\"x\":1}"})]
     consumer = await _consumer_with(redis)
     reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
     assert len(reclaimed) == 1
@@ -307,17 +309,35 @@ async def test_claim_message_once_redirects_when_no_redis():
 
 
 @pytest.mark.asyncio
-async def test_claim_message_once_uses_redis_set():
+async def test_claim_message_once_uses_atomic_lease_and_completed_check():
     service = RedisStreamService("redis://x:6379/0", "c1")
     redis = FakeRedis()
+    redis.eval = AsyncMock(return_value=True)
     service._redis = redis
-    assert await service.claim_message_once("m1", ttl_seconds=100) is True
-    assert redis.set_claim is not None
-    key, value, nx, ex = redis.set_claim
-    assert "m1" in key
-    assert value == "1"
-    assert nx is True
-    assert ex == 100
+    assert await service.claim_message_once("m1", ttl_seconds=100, token="owner") is True
+    script, numkeys, lease_key, completed_key, token, ttl = redis.eval.call_args.args
+    assert numkeys == 2
+    assert lease_key == "azuris:incoming:claimed:m1"
+    assert completed_key == "azuris:incoming:completed:m1"
+    assert token == "owner"
+    assert ttl == 100
+    assert "EXISTS" in script and "NX" in script
+
+
+@pytest.mark.asyncio
+async def test_completion_requires_live_lease_and_release_checks_owner():
+    service = RedisStreamService("redis://x:6379/0", "worker")
+    redis = MagicMock()
+    redis.eval = AsyncMock(return_value=0)
+    service._redis = redis
+    with pytest.raises(RuntimeError, match="Lost processing lease"):
+        await service.complete_message("m1", "old-owner")
+    await service.release_message_claim("m1", "old-owner")
+    script, numkeys, key, token = redis.eval.call_args.args
+    assert numkeys == 1
+    assert key == "azuris:incoming:claimed:m1"
+    assert token == "old-owner"
+    assert "GET" in script and "ARGV[1]" in script
 
 
 @pytest.mark.asyncio
@@ -339,7 +359,7 @@ async def test_claim_message_once_exception_handled():
     redis = FakeRedis()
     async def boom(*a, **kw):
         raise ConnectionError("redis down")
-    redis.set = boom
+    redis.eval = boom
     service._redis = redis
     assert await service.claim_message_once("m1") is True
 

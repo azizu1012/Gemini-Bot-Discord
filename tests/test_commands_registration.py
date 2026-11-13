@@ -148,6 +148,35 @@ def test_register_slash_commands_runs_and_registers(monkeypatch):
     assert len(tree._cmd.registered) >= 10
 
 
+@pytest.mark.asyncio
+async def test_imagine_publish_false_unregisters_and_reports_error(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    core, tree = _make_bot_core()
+    core._is_admin_user = AsyncMock(return_value=True)
+    core.kafka_service.publish = AsyncMock(return_value=False)
+    core.active_interactions = {}
+    core._interaction_timestamps = {}
+    interaction = MagicMock()
+    interaction.id = 123
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+
+    def register(key, value):
+        core.active_interactions[key] = value
+        core._interaction_timestamps[key] = 1
+
+    core.register_interaction = register
+    register_slash_commands(core)
+    command = next(cmd for cmd in tree._cmd.registered if cmd.__name__ == "imagine_slash")
+    await command(interaction, SimpleNamespace(value="create"), "a cat")
+
+    assert core.active_interactions == {}
+    assert core._interaction_timestamps == {}
+    assert interaction.followup.send.await_count == 2
+    assert interaction.followup.send.call_args.kwargs["ephemeral"] is True
+    assert "Không thể" in interaction.followup.send.call_args.args[0]
+
+
 def test_on_app_command_error_checkfailure(monkeypatch):
     _install_app_commands_mocks(monkeypatch)
     bot_core, tree = _make_bot_core()
