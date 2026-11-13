@@ -65,7 +65,7 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                 return False, f"Targeting private network address ({ip}) is not allowed"
             if ip.is_link_local:
                 return False, f"Targeting link-local/cloud metadata address ({ip}) is not allowed"
-            if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            if ip.is_multicast or ip.is_reserved or ip.is_unspecified or not ip.is_global:
                 return False, f"Targeting restricted address ({ip}) is not allowed"
         return True, ""
     except ValueError:
@@ -78,7 +78,11 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
 
     if not allow_private:
         # Check RFC test/documentation domains (e.g. api.example.com in test suites)
-        if hostname_lower.endswith(RFC_TEST_DOMAINS) or hostname_lower in RFC_TEST_DOMAINS:
+        if any(
+            hostname_lower == domain.lstrip(".")
+            or hostname_lower.endswith("." + domain.lstrip("."))
+            for domain in RFC_TEST_DOMAINS
+        ):
             return True, ""
 
         try:
@@ -98,7 +102,7 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                     return False, f"Targeting private network address ({ip}) is not allowed"
                 if ip.is_link_local:
                     return False, f"Targeting link-local/cloud metadata address ({ip}) is not allowed"
-                if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                if ip.is_multicast or ip.is_reserved or ip.is_unspecified or not ip.is_global:
                     return False, f"Targeting restricted address ({ip}) is not allowed"
                 if not pinned_ip:
                     pinned_ip = ip_str

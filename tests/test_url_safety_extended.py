@@ -2,6 +2,8 @@
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, ".")
 
 from src.tools.search.url_safety import build_pinned_request, is_safe_url
@@ -64,6 +66,42 @@ def test_unqualified_hostname():
 def test_rfc_test_domain_allowed():
     safe, _ = is_safe_url("http://api.example.com")
     assert safe is True
+
+
+@pytest.mark.parametrize("hostname", ["example.com", "api.example.com", "api.example", "api.test", "api.invalid"])
+def test_rfc_test_domain_label_boundary_allowed(monkeypatch, hostname):
+    resolve = MagicMock(side_effect=AssertionError("Test domains must not require DNS"))
+    monkeypatch.setattr("socket.getaddrinfo", resolve)
+    assert is_safe_url(f"http://{hostname}") == (True, "")
+    resolve.assert_not_called()
+
+
+@pytest.mark.parametrize("hostname", ["evilexample.com", "api.evilexample.com"])
+def test_rfc_test_domain_suffix_bypass_requires_dns(monkeypatch, hostname):
+    resolve = MagicMock(return_value=[(None, None, None, None, ("127.0.0.1", 80))])
+    monkeypatch.setattr("socket.getaddrinfo", resolve)
+    safe, err = is_safe_url(f"http://{hostname}")
+    resolve.assert_called_once_with(hostname, None)
+    assert safe is False
+    assert "loopback" in err
+
+
+def test_shared_address_space_literal_rejected():
+    safe, err = is_safe_url("http://100.64.0.1")
+    assert safe is False
+    assert "restricted" in err
+
+
+def test_dns_shared_address_space_rejected(monkeypatch):
+    resolve = MagicMock(return_value=[
+        (None, None, None, None, ("8.8.8.8", 80)),
+        (None, None, None, None, ("100.64.12.34", 80)),
+    ])
+    monkeypatch.setattr("socket.getaddrinfo", resolve)
+    safe, err = is_safe_url("http://shared-address.org")
+    resolve.assert_called_once_with("shared-address.org", None)
+    assert safe is False
+    assert "restricted" in err
 
 
 def test_allow_private_unlocks_ip():
