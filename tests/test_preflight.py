@@ -27,7 +27,7 @@ def test_mask_url_no_password_unchanged():
 
 
 def test_mask_url_redacts_password():
-    masked = _mask_database_url("postgresql://user:secret@host:5432/db?sslmode=disable")
+    masked = _mask_database_url("postgresql://user:example@host:5432/db?sslmode=disable")
     assert "secret" not in masked
     assert "user:***@host:5432" in masked
 
@@ -60,7 +60,7 @@ def test_dependency_versions_marks_missing(monkeypatch):
 def test_emit_startup_banner_logs(monkeypatch):
     cfg = SimpleNamespace(
         PROJECT_ROOT="/proj",
-        DATABASE_URL="postgresql://u:secret@h:1/db",
+        DATABASE_URL="postgresql://u:example@h:1/db",
         REDIS_URL="redis://localhost:6379/0",
         get_runtime_paths=lambda: {"log_path": "/proj/logs/bot.log"},
     )
@@ -123,7 +123,7 @@ def test_verify_db_success(monkeypatch):
     monkeypatch.setattr(preflight.asyncpg, "connect", fake_connect)
 
     async def run():
-        await _verify_database_connection("postgresql://u:h@host:5432/db", retries=1)
+        await _verify_database_connection("postgresql://u:mock@host:5432/db", retries=1)
 
     import asyncio
 
@@ -138,7 +138,7 @@ def test_verify_db_fails_after_retries(monkeypatch):
     monkeypatch.setattr(preflight.asyncpg, "connect", fake_connect)
 
     async def run():
-        await _verify_database_connection("postgresql://u:h@host:5432/db", retries=3, delay_seconds=0.01)
+        await _verify_database_connection("postgresql://u:mock@host:5432/db", retries=3, delay_seconds=0.01)
 
     import asyncio
 
@@ -150,7 +150,7 @@ def test_verify_db_fails_after_retries(monkeypatch):
 def _stub_config(tmp_path):
     return SimpleNamespace(
         TOKEN="token123",
-        DATABASE_URL="postgresql://u:h@host:5432/db",
+        DATABASE_URL="postgresql://u:mock@host:5432/db",
         WEATHER_CACHE_PATH=str(tmp_path / "data" / "weather_cache.json"),
         LOCKED_CHANNELS_FILE=str(tmp_path / "data" / "voice_lock" / "locked_channels.json"),
         ENFORCED_NAMES_FILE=str(tmp_path / "data" / "voice_lock" / "enforced_names.json"),
