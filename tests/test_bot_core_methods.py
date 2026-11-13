@@ -364,7 +364,8 @@ async def test_edit_message_with_retry_failure():
 
 
 @pytest.mark.asyncio
-async def test_voice_lock_enforce_loop_kicks_non_whitelist():
+@pytest.mark.parametrize("channel_type", [discord.VoiceChannel, discord.StageChannel])
+async def test_voice_lock_enforce_loop_kicks_non_whitelist(channel_type):
     bc = make_bc()
     bc.bot.is_closed = MagicMock(side_effect=[False, True])
     bc.bot.user = MagicMock()
@@ -374,7 +375,7 @@ async def test_voice_lock_enforce_loop_kicks_non_whitelist():
     whitelist = {"5": "A"}
     bc.voice_lock_manager.load_whitelist = MagicMock(return_value=whitelist)
 
-    channel = MagicMock(spec=discord.VoiceChannel)
+    channel = MagicMock(spec=channel_type)
     channel.id = 100
     member_bad = MagicMock()
     member_bad.id = 50
@@ -386,6 +387,8 @@ async def test_voice_lock_enforce_loop_kicks_non_whitelist():
 
     await bc._voice_lock_enforce_loop()
     member_bad.move_to.assert_awaited_once()
+    assert bc.voice_lock_manager.locked_channels == {100}
+    bc.voice_lock_manager.save_locked_channels.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 """Offline tests for calculator.py edge formatting and parsing."""
 import sys
+import json
 import sympy as sp
 import pytest
 
@@ -56,3 +57,30 @@ def test_calculator_empty():
     svc = CalculatorService()
     assert "rỗng" in svc.run_calculator("")
     assert "rỗng" in svc.run_calculator("   ")
+
+
+@pytest.mark.parametrize("expression, expected", [
+    ("Matrix([[1,2],[3,4]]).det()", "-2"),
+    ("det(Matrix([[1,2],[3,4]]))", "-2"),
+    ("2 + Matrix([[1,2],[3,4]]).det()", "0"),
+    ("Matrix([[sqrt(4),2],[3,4]]).det()", "2"),
+    ("Matrix([[1,2],[3,4]]).det() + 1.5", "-0.5"),
+])
+def test_matrix_determinant_without_attribute_evaluation(expression, expected):
+    result = json.loads(CalculatorService().run_calculator(expression))
+    assert result["success"] is True
+    assert result["result"] == expected
+
+
+@pytest.mark.parametrize("expression", [
+    "Matrix([[1]]).det.__call__()",
+    "Matrix([[1]]).det().func",
+    "Matrix([[1]]).inv()",
+    "Matrix([[1]]).rows",
+    "(1).real",
+    "sin.func",
+    "Matrix([[1]]).det(1)",
+])
+def test_calculator_rejects_other_attribute_access(expression):
+    result = json.loads(CalculatorService().run_calculator(expression))
+    assert result["success"] is False

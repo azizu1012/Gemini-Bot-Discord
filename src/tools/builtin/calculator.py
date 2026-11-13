@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import io
 import re
+import tokenize
 from typing import Any
 
 import sympy as sp
@@ -60,6 +62,7 @@ _LOCAL_DICT: dict[str, Any] = {
     "limit": sp.limit, "simplify": sp.simplify, "solve": sp.solve,
     "eq": sp.Eq, "Eq": sp.Eq, "sum": sp.Sum, "Sum": sp.Sum,
     "product": sp.Product, "Product": sp.Product,
+    "matrix": sp.Matrix, "det": sp.det,
 }
 
 _DECIMAL_COMMA_THOUSANDS = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
@@ -136,7 +139,33 @@ def _rewrite_solve_equations(expr: str) -> str:
     return f"solve({', '.join(rewritten)})"
 
 
+def _rewrite_matrix_determinants(expr: str) -> str:
+    """Rewrite only Matrix(...).det() to function form; never evaluate attributes."""
+    start = 0
+    while match := re.search(r"\bmatrix\s*\(", expr[start:], re.IGNORECASE):
+        begin = start + match.start()
+        end = start + match.end()
+        depth = 1
+        while end < len(expr) and depth:
+            if expr[end] == "(":
+                depth += 1
+            elif expr[end] == ")":
+                depth -= 1
+            end += 1
+        method = re.match(r"\s*\.\s*det\s*\(\s*\)", expr[end:]) if depth == 0 else None
+        if method:
+            expr = expr[:begin] + "det(" + expr[begin:end] + ")" + expr[end + method.end():]
+            start = begin + 4
+        else:
+            start = end
+    return expr
+
+
 def _parse(expr: str):
+    expr = _rewrite_matrix_determinants(expr)
+    # Tokenization distinguishes attribute dots from decimal/scientific numbers.
+    if any(token.string == "." for token in tokenize.generate_tokens(io.StringIO(expr).readline)):
+        raise ValueError("Truy cập thuộc tính không được phép.")
     return parse_expr(
         expr,
         local_dict=dict(_LOCAL_DICT),

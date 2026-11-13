@@ -176,6 +176,7 @@ def register_slash_commands(bot_core_instance):
             db_repo=db_repo,
             config=config,
             admin_user_id=str(interaction.user.id),
+            is_admin_user=bot_core_instance._is_admin_user,
         )
         await flow.start(interaction)
 
@@ -230,6 +231,11 @@ def register_slash_commands(bot_core_instance):
                     ephemeral=True,
                 )
                 return
+            if not await bot_core_instance._is_admin_user(str(choice_interaction.user.id)):
+                await choice_interaction.response.send_message(
+                    "❌ Lệnh này chỉ dành cho owner đã cấu hình.", ephemeral=True
+                )
+                return
             ok = await db_repo.set_active_sdk(sdk, updated_by=f"admin:{choice_interaction.user.id}")
             resolver.invalidate()
             if ok:
@@ -277,9 +283,12 @@ def register_slash_commands(bot_core_instance):
             db_repo=db_repo,
             config=config,
             admin_user_id=str(interaction.user.id),
+            is_admin_user=bot_core_instance._is_admin_user,
         )
         slots = await flow.run_slot_pickers(interaction, models)
         if slots is None:
+            return
+        if not await flow.require_admin(interaction, deferred=True):
             return
         await db_repo.upsert_llm_model_slots(active, slots, updated_by=f"admin:{interaction.user.id}")
         resolver.invalidate()

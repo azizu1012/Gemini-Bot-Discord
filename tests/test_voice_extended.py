@@ -108,6 +108,21 @@ def test_is_member_overwrite_member_is_true():
 
 
 # ---------------- RoomLockService basic logic ----------------
+def test_locked_stage_channels_included_for_restoration_and_access():
+    store = StubLockStore()
+    bot = MagicMock()
+    guild = _mock_guild()
+    stage = MagicMock(spec=discord.StageChannel)
+    stage.id = 100
+    stage.guild = guild
+    store.lock(stage.id)
+    bot.get_channel.return_value = stage
+    service = RoomLockService(store, StubWhitelist(), bot, owner_id=999)
+    assert service.all_locked_channels() == [stage]
+    assert service.locked_channels(guild) == [stage]
+    assert service.locked_channels(_mock_guild(gid=2)) == []
+
+
 def _service(store=None, wl=None, member=None, owner=999):
     store = store or StubLockStore()
     wl = wl or StubWhitelist()
