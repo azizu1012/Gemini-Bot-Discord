@@ -16,12 +16,34 @@ from src.tools.search.mixins.data import SearchDataMixin
 
 _VIETNAMESE_FOLD = str.maketrans({"đ": "d", "Đ": "d"})
 
+# Cheap pre-check before the (expensive) dateparser.parse: only invoke it when
+# text plausibly contains a date/time. Over-matching is harmless (dateparser
+# returns None) - under-matching would change results, so this aims to match
+# any string dateparser would resolve to a datetime.
+_DATE_CANDIDATE_RE = re.compile(
+    r"(?:"
+    r"\b\d{4}\b"
+    r"|\b\d{1,4}(?:[-/.]\d{1,2}){1,2}\b"
+    r"|\b\d{1,2}(?:st|nd|rd|th)\b"
+    r"|\b\d{1,2}:\d{2}(?:\s*(?:am|pm))?"
+    r"|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\b(?:noon|midnight|tonight)\b"
+    r"|\b\d{1,3}\s*(?:day|week|month|year|minute|hour|ngày|tuần|tháng|năm|phút|giờ)s?\b"
+    r"|\b(?:today|tomorrow|yesterday|now|ago)\b"
+    r"|\b(?:last|next|this|upcoming|previous|coming|past)\b"
+    r"|\d{1,4}\s*(?:年|月|日)"
+    r"|\b(?:hôm nay|hôm qua|hôm kia|ngày mai|vừa qua|mới đây|cách đây|"
+    r"ngày trước|giờ trước|tháng trước|năm trước|tuần trước|năm ngoái|tháng)\b"
+    r")",
+    re.IGNORECASE,
+)
+
 
 class SearchTextMixin(SearchDataMixin):
     """Provides HTML parsing, date extraction, and multilingual text matching utilities."""
 
     def _extract_date(self, text: str) -> Optional[datetime]:
-        if not text:
+        if not text or not _DATE_CANDIDATE_RE.search(text):
             return None
         try:
             return dateparser.parse(text, languages=["vi", "en"])
@@ -287,15 +309,15 @@ class SearchTextMixin(SearchDataMixin):
                 return True
         return False
 
-    def _query_overlap_count(self, query: str, text: str) -> int:
-        q_tokens = set(self._normalize_query_tokens(query))
-        if not q_tokens:
+    def _query_overlap_count(self, query: str, text: str, q_tokens: Optional[List[str]] = None) -> int:
+        q_token_set = set(q_tokens) if q_tokens is not None else set(self._normalize_query_tokens(query))
+        if not q_token_set:
             return 0
         t_tokens = set(self._normalize_query_tokens(text))
-        return len(q_tokens.intersection(t_tokens))
+        return len(q_token_set.intersection(t_tokens))
 
-    def _query_coverage_score(self, query: str, text: str) -> float:
-        q_tokens = self._normalize_query_tokens(query)
+    def _query_coverage_score(self, query: str, text: str, q_tokens: Optional[List[str]] = None) -> float:
+        q_tokens = q_tokens if q_tokens is not None else self._normalize_query_tokens(query)
         if not q_tokens:
             return 0.0
 

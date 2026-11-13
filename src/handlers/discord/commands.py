@@ -413,7 +413,7 @@ def register_slash_commands(bot_core_instance):
         await interaction.followup.send("⏳ Đang gửi yêu cầu tạo ảnh...")
 
         interaction_id_str = str(interaction.id)
-        bot_core_instance.active_interactions[interaction_id_str] = interaction
+        bot_core_instance.register_interaction(interaction_id_str, interaction)
 
         payload = {
             "type": "slash_command",

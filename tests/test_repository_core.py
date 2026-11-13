@@ -38,16 +38,30 @@ async def test_init_db_skips_when_ready(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_close_resets_pool():
+async def test_close_resets_owned_pool():
     repo = make_repo()
     pool = MagicMock()
     pool.close = AsyncMock()
     repo.pool = pool
+    repo._owns_pool = True
     repo._schema_ready = True
     await repo.close()
     pool.close.assert_awaited_once()
     assert repo.pool is None
     assert repo._schema_ready is False
+
+@pytest.mark.asyncio
+async def test_close_preserves_shared_pool():
+    repo = make_repo()
+    pool = MagicMock()
+    pool.close = AsyncMock()
+    repo.pool = pool
+    repo._owns_pool = False
+    repo._schema_ready = True
+    await repo.close()
+    pool.close.assert_not_awaited()
+    assert repo.pool is pool
+    assert repo._schema_ready is True
 
 
 @pytest.mark.asyncio

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import aiohttp
 import csv
@@ -85,11 +86,11 @@ class FileParserService:
         
         try:
             if file_extension in {'.txt', '.md'}:
-                extracted_text, was_truncated = self._read_text_file(local_path)
+                extracted_text, was_truncated = await asyncio.to_thread(self._read_text_file, local_path)
                 self.logger.info(f"Extracted text from text file: {filename}")
 
             elif file_extension == '.csv':
-                extracted_text, was_truncated = self._read_csv_file(local_path)
+                extracted_text, was_truncated = await asyncio.to_thread(self._read_csv_file, local_path)
                 self.logger.info(f"Extracted text from CSV: {filename}")
 
             elif file_extension == '.pdf':
@@ -97,19 +98,24 @@ class FileParserService:
                     extracted_text = "[LỖI: pypdf library not installed for PDF parsing]"
                 else:
                     try:
-                        reader = pypdf.PdfReader(local_path)
-                        for page in reader.pages:
-                            extracted_text += page.extract_text() + "\n"
-                            if len(extracted_text) >= self.MAX_TEXT_LENGTH:
-                                was_truncated = True
-                                break
+                        def _read_pdf():
+                            text = ""
+                            truncated = False
+                            reader = pypdf.PdfReader(local_path)
+                            for page in reader.pages:
+                                text += page.extract_text() + "\n"
+                                if len(text) >= self.MAX_TEXT_LENGTH:
+                                    truncated = True
+                                    break
+                            return text, truncated
+                        extracted_text, was_truncated = await asyncio.to_thread(_read_pdf)
                         self.logger.info(f"Extracted text from PDF: {filename}")
                     except Exception as e:
                         self.logger.error(f"Error reading PDF {filename}: {e}")
                         extracted_text = f"[LỖI: Không thể đọc nội dung file PDF '{filename}'. Có thể file bị hỏng hoặc được bảo vệ.]"
             
             else:
-                extracted_text, was_truncated = self._read_text_file(local_path)
+                extracted_text, was_truncated = await asyncio.to_thread(self._read_text_file, local_path)
                 if self._looks_binary(extracted_text):
                     extracted_text = (
                         f"[LỖI: File '{filename}' có định dạng '{file_extension}' không thể đọc như văn bản. "
@@ -162,7 +168,8 @@ class FileParserService:
         file_extension = os.path.splitext(filename)[1].lower()
 
         try:
-            chunk_manifest, security_report, truncated = self._build_chunk_manifest(
+            chunk_manifest, security_report, truncated = await asyncio.to_thread(
+                self._build_chunk_manifest,
                 local_path,
                 file_extension,
                 resolved_chunk_dir,
@@ -193,18 +200,21 @@ class FileParserService:
 
         try:
             required_space_mb = (size // (1024 * 1024)) + 10
-            if self.cleanup_mgr.get_disk_free_space_mb() < required_space_mb:
+            if await asyncio.to_thread(self.cleanup_mgr.get_disk_free_space_mb) < required_space_mb:
                 self.logger.warning(f"Disk full. Cannot download new file. Need {required_space_mb}MB.")
                 return None, "[LỖI: Server sắp hết bộ nhớ. Vui lòng thử lại sau.]"
 
-            os.makedirs(self.storage_path, exist_ok=True)
+            await asyncio.to_thread(os.makedirs, self.storage_path, exist_ok=True)
+
+            def _write_file(path, data):
+                with open(path, 'wb') as f:
+                    f.write(data)
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(download_url) as resp:
                     if resp.status == 200:
                         data = await resp.read()
-                        with open(local_path, 'wb') as f:
-                            f.write(data)
+                        await asyncio.to_thread(_write_file, local_path, data)
                         self.logger.info(f"Saved local file: {local_path}")
                         return local_path, None
                     raise Exception(f"HTTP Error {resp.status}")

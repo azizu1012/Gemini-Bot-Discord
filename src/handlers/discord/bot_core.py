@@ -1,6 +1,7 @@
 import asyncio
 import random
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -43,6 +44,9 @@ class BotCore:
         self.bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
         self.kafka_service = RedisStreamService(redis_url=self.config.REDIS_URL, client_id="bot-core")
         self.active_interactions: Dict[str, discord.Interaction] = {}
+        self._interaction_timestamps: Dict[str, float] = {}
+        self._interaction_ttl: float = 300.0
+        self._pending_outgoing_tasks: set = set()
         self.active_typing_tasks: Dict[str, asyncio.Task] = {}
         self._outgoing_consumer: Optional[RedisStreamConsumer] = None
         self._outgoing_queues: Dict[str, asyncio.Queue] = {}
@@ -422,13 +426,33 @@ class BotCore:
             async for msg in consumer:
                 payload = msg.value
                 payload['_consumer_entry_id'] = msg.entry_id
-                asyncio.create_task(self.handle_outgoing_payload(payload))
+                task = asyncio.create_task(self.handle_outgoing_payload(payload))
+                self._pending_outgoing_tasks.add(task)
+                task.add_done_callback(self._pending_outgoing_tasks.discard)
         except asyncio.CancelledError:
             self.logger.info("BotCore Redis consumer loop cancelled")
         except Exception as e:
             self.logger.error(f"Error in BotCore Redis consumer loop: {e}")
 
+    def register_interaction(self, interaction_id: str, interaction: discord.Interaction) -> None:
+        """Record an active interaction with a timestamp for TTL sweeping."""
+        self.active_interactions[interaction_id] = interaction
+        self._interaction_timestamps[interaction_id] = time.monotonic()
+
+    def _sweep_stale_interactions(self) -> None:
+        """Discard interaction entries older than the TTL threshold."""
+        if not self._interaction_timestamps:
+            return
+        cutoff = time.monotonic() - self._interaction_ttl
+        stale = [it for it, ts in self._interaction_timestamps.items() if ts < cutoff]
+        for interaction_id in stale:
+            self.active_interactions.pop(interaction_id, None)
+            self._interaction_timestamps.pop(interaction_id, None)
+        if stale:
+            self.logger.info(f"Swept {len(stale)} stale interactions")
+
     async def handle_outgoing_payload(self, payload: dict):
+        self._sweep_stale_interactions()
         action = payload.get("action")
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
@@ -478,6 +502,7 @@ class BotCore:
                             embed.set_footer(text=payload.get("embed_footer"))
 
                 interaction = self.active_interactions.pop(interaction_id, None)
+                self._interaction_timestamps.pop(interaction_id, None)
                 if interaction:
                     self.logger.info(f"Delivering slash_reply for interaction {interaction_id} to user {interaction.user.id}")
                     if content:
@@ -790,6 +815,14 @@ class BotCore:
                 await self._consume_task
             except asyncio.CancelledError:
                 pass
+
+        for task in list(self._pending_outgoing_tasks):
+            if not task.done():
+                task.cancel()
+            self._pending_outgoing_tasks.discard(task)
+        if self._pending_outgoing_tasks:
+            await asyncio.gather(*self._pending_outgoing_tasks, return_exceptions=True)
+            self._pending_outgoing_tasks.clear()
 
         await self.kafka_service.stop()
 

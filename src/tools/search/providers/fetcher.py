@@ -17,11 +17,11 @@ class PageEvidenceFetcher:
         self.deep_read_max_chars = deep_read_max_chars
 
     async def fetch_page_evidence(self, url: str) -> str:
-        safe, _ = is_safe_url(url, allow_private=False)
+        safe, _ = await asyncio.to_thread(is_safe_url, url, allow_private=False)
         if not safe:
             return ""
 
-        def _fetch_once(timeout_sec: float) -> str:
+        async def _fetch_once(timeout_sec: float) -> str:
             headers = {
                 "User-Agent": "Mozilla/5.0 (AzurisBot/1.0)",
                 "Accept": "text/html,application/xhtml+xml",
@@ -30,10 +30,13 @@ class PageEvidenceFetcher:
             target_url = url
             response = None
             for _ in range(3):
-                safe_hop, _ = is_safe_url(target_url, allow_private=False)
+                safe_hop, _ = await asyncio.to_thread(
+                    is_safe_url, target_url, allow_private=False
+                )
                 if not safe_hop:
                     return ""
-                response = requests.get(
+                response = await asyncio.to_thread(
+                    requests.get,
                     target_url,
                     headers=headers,
                     timeout=timeout_sec,
@@ -57,7 +60,7 @@ class PageEvidenceFetcher:
         for attempt in range(2):
             timeout_sec = 3.0 if attempt == 0 else 5.0
             try:
-                text = await asyncio.to_thread(_fetch_once, timeout_sec)
+                text = await _fetch_once(timeout_sec)
                 if text:
                     return text
             except Exception:

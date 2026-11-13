@@ -190,11 +190,12 @@ class SearchRankingMixin(SearchTextMixin):
         evidence = record.get("evidence") or ""
 
         score = 0.0
-        score += self._query_coverage_score(query, f"{title} {snippet}")
+        q_tokens = self._normalize_query_tokens(query)
+        score += self._query_coverage_score(query, f"{title} {snippet}", q_tokens)
         if evidence:
-            score += 0.75 * self._query_coverage_score(query, f"{title} {evidence}")
+            score += 0.75 * self._query_coverage_score(query, f"{title} {evidence}", q_tokens)
 
-        overlap_snippet = self._query_overlap_count(query, f"{title} {snippet}")
+        overlap_snippet = self._query_overlap_count(query, f"{title} {snippet}", q_tokens)
         if overlap_snippet >= 4:
             score += 1.0
         elif overlap_snippet == 3:
@@ -205,7 +206,7 @@ class SearchRankingMixin(SearchTextMixin):
             score += 0.2
 
         if evidence:
-            overlap_evidence = self._query_overlap_count(query, f"{title} {evidence}")
+            overlap_evidence = self._query_overlap_count(query, f"{title} {evidence}", q_tokens)
             if overlap_evidence >= 3:
                 score += 0.75
             elif overlap_evidence == 2:

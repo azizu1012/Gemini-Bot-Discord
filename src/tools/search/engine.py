@@ -71,9 +71,9 @@ class SearchEngine:
         self.fetcher = PageEvidenceFetcher(deep_read_max_chars=deep_read_max_chars)
 
         self.cache_lock = asyncio.Lock()
-        self.search_lock = asyncio.Lock()
         self.inflight_search_tasks: Dict[str, asyncio.Task] = {}
         self.failed_search_cooldowns: Dict[str, float] = {}
+        self._failed_cooldown_max_entries = 2000
 
     # Backward-compatible cache property access
     @property
@@ -95,6 +95,25 @@ class SearchEngine:
 
     def _get_deep_read_cache(self, url: str) -> Optional[str]:
         return self.cache.get_deep_read(url)
+
+    def _purge_failed_cooldowns(self) -> None:
+        """Purge expired cooldown entries and cap the dict size.
+
+        Caller must hold ``self.cache_lock``. Expired entries are dropped
+        first; if the dict still exceeds the cap, oldest (lowest deadline)
+        surviving entries are dropped until it fits. This keeps the mapping
+        bounded without changing cooldown gating behavior.
+        """
+        now = time.time()
+        for key in [k for k, deadline in self.failed_search_cooldowns.items() if deadline <= now]:
+            del self.failed_search_cooldowns[key]
+
+        over = len(self.failed_search_cooldowns) - self._failed_cooldown_max_entries
+        if over <= 0:
+            return
+        # Drop the lowest deadlines (oldest) first to keep the newest failures.
+        for key, _ in sorted(self.failed_search_cooldowns.items(), key=lambda kv: kv[1])[:over]:
+            del self.failed_search_cooldowns[key]
 
     def _set_deep_read_cache(self, url: str, text: str, ttl_seconds: int = 7200):
         self.cache.set_deep_read(url, text, ttl_seconds)
@@ -309,6 +328,7 @@ class SearchEngine:
 
         if not force_fallback and not time_sensitive and self.search_failed_query_cooldown_seconds > 0:
             async with self.cache_lock:
+                self._purge_failed_cooldowns()
                 cooldown_until = self.failed_search_cooldowns.get(normalized_key, 0)
             if cooldown_until > time.time():
                 self.logger.info(f"Search cooldown active for key={normalized_key[:80]}")
@@ -341,6 +361,7 @@ class SearchEngine:
 
             if not time_sensitive and self.search_failed_query_cooldown_seconds > 0:
                 async with self.cache_lock:
+                    self._purge_failed_cooldowns()
                     self.failed_search_cooldowns[normalized_key] = time.time() + self.search_failed_query_cooldown_seconds
                 self.logger.info(f"Search failed, cooldown set for key={normalized_key[:60]}")
             return ""

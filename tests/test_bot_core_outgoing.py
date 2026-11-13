@@ -18,6 +18,9 @@ def _make_bot_core():
     bc._outgoing_senders = {}
     bc.active_typing_tasks = {}
     bc.active_interactions = {}
+    bc._interaction_timestamps = {}
+    bc._interaction_ttl = 300.0
+    bc._pending_outgoing_tasks = set()
     bc._active_user_locks = {}
     bc._delivery_state = {}
     bc._redis_client = None

@@ -4,6 +4,7 @@ import uuid
 import asyncio
 import unicodedata
 from datetime import datetime
+from collections import OrderedDict
 from typing import Dict, Any, Optional, List, Tuple
 
 from src.core.config import logger, Config
@@ -42,6 +43,8 @@ class MessageHandler:
     interact directly with Discord APIs.
     """
 
+    _MAX_USER_LOCKS = 4096
+
     def __init__(self, config: Config):
         self.config = config
         self.logger = logger
@@ -72,7 +75,8 @@ class MessageHandler:
         self._worker_semaphore = asyncio.Semaphore(
             int(getattr(self.config, "MAX_CONCURRENT_MESSAGES", 3) or 3)
         )
-        self._user_locks: Dict[str, asyncio.Lock] = {}
+        self._user_locks: OrderedDict[str, asyncio.Lock] = OrderedDict()
+        self._http_session: Optional[Any] = None
         self._worker_tasks: set = set()
 
 
@@ -83,17 +87,38 @@ class MessageHandler:
             raise RuntimeError(f"Failed to publish outgoing Redis payload action={action} user={user_id}")
         return ok
 
+    async def _get_http_session(self):
+        import aiohttp
+        session = getattr(self, "_http_session", None)
+        if session is None or session.closed:
+            session = aiohttp.ClientSession()
+            self._http_session = session
+        return session
+
     async def _download_file(self, url: str) -> Optional[bytes]:
         try:
             import aiohttp
-            async with aiohttp.ClientSession() as session:
-                timeout_obj = aiohttp.ClientTimeout(total=15)
-                async with session.get(url, timeout=timeout_obj) as response:
-                    if response.status == 200:
-                        return await response.read()
+            session = await self._get_http_session()
+            timeout_obj = aiohttp.ClientTimeout(total=15)
+            async with session.get(url, timeout=timeout_obj) as response:
+                if response.status == 200:
+                    return await response.read()
         except Exception as e:
             self.logger.error(f"Failed to download attachment: {e}")
         return None
+
+    def _get_user_lock(self, user_id: str) -> asyncio.Lock:
+        locks = self._user_locks
+        lock = locks.get(user_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            locks[user_id] = lock
+            while len(locks) > self._MAX_USER_LOCKS:
+                # FIFO eviction — works on plain dict and OrderedDict alike.
+                del locks[next(iter(locks))]
+        elif isinstance(locks, OrderedDict):
+            locks.move_to_end(user_id)
+        return lock
 
     async def _download_file_with_sem(self, url: str) -> Optional[bytes]:
         async with self._image_download_sem:
@@ -349,7 +374,7 @@ class MessageHandler:
                 if consumer:
                     await consumer.ack(msg)
                 return
-        user_lock = self._user_locks.setdefault(user_id, asyncio.Lock()) if user_id else None
+        user_lock = self._get_user_lock(user_id) if user_id else None
 
         if user_lock is not None:
             async with user_lock:
@@ -405,6 +430,14 @@ class MessageHandler:
             await self.search_subtask_client.close()
         except Exception:
             pass
+
+        session = getattr(self, "_http_session", None)
+        if session is not None and not session.closed:
+            try:
+                await session.close()
+            except Exception:
+                pass
+            self._http_session = None
         await self.kafka_service.stop()
 
         try:
@@ -861,19 +894,22 @@ class MessageHandler:
                 await asyncio.sleep(1.5 * attempt)
 
         if success and image_bytes:
-            # 1. Encode image to base64
-            base64_image_str = base64.b64encode(image_bytes).decode("utf-8")
-
-            # 2. Save physical file locally so history command can access it
-            os.makedirs(self.config.FILE_STORAGE_PATH, exist_ok=True)
+            # 1-2. Encode image + save file (CPU/disk-bound) in a worker thread
             local_filename = f"imagine_{interaction_id}.png"
             local_filepath = str(Path(self.config.FILE_STORAGE_PATH) / local_filename)
-            try:
-                with open(local_filepath, "wb") as f:
-                    f.write(image_bytes)
-                self.logger.info(f"Saved generated image locally to: {local_filepath}")
-            except Exception as fe:
-                self.logger.error(f"Failed to save generated image to disk: {fe}")
+
+            def _encode_and_save():
+                encoded = base64.b64encode(image_bytes).decode("utf-8")
+                os.makedirs(self.config.FILE_STORAGE_PATH, exist_ok=True)
+                try:
+                    with open(local_filepath, "wb") as f:
+                        f.write(image_bytes)
+                    self.logger.info(f"Saved generated image locally to: {local_filepath}")
+                except Exception as fe:
+                    self.logger.error(f"Failed to save generated image to disk: {fe}")
+                return encoded
+
+            base64_image_str = await asyncio.to_thread(_encode_and_save)
 
             # 3. Save to database
             # We save the local file path as image_url in the database so that bot_core can read and upload it during history retrieval

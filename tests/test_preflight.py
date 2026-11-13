@@ -57,18 +57,33 @@ def test_dependency_versions_marks_missing(monkeypatch):
 
 
 # --- emit_startup_banner ---
-def test_emit_startup_banner_logs(caplog, monkeypatch):
+def test_emit_startup_banner_logs(monkeypatch):
     cfg = SimpleNamespace(
         PROJECT_ROOT="/proj",
         DATABASE_URL="postgresql://u:secret@h:1/db",
         REDIS_URL="redis://localhost:6379/0",
         get_runtime_paths=lambda: {"log_path": "/proj/logs/bot.log"},
     )
-    with caplog.at_level(logging.INFO, logger="bot_gemini"):
+    # The "bot_gemini" logger sets propagateate=False (config._setup_logger), so
+    # caplog (root logger) never sees its records. Attach a handler directly to
+    # that logger to capture the banner output.
+    records: list = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger = logging.getLogger("bot_gemini")
+    handler = _Capture()
+    logger.addHandler(handler)
+    try:
         emit_startup_banner(cfg)
-    assert any("AZURIS STARTUP CONTEXT" in r.message for r in caplog.records)
+    finally:
+        logger.removeHandler(handler)
+
+    assert any("AZURIS STARTUP CONTEXT" in r.getMessage() for r in records)
     # Password must never appear in logs.
-    assert not any("secret" in r.message for r in caplog.records)
+    assert not any("secret" in r.getMessage() for r in records)
 
 
 # --- writable path/dir helpers ---

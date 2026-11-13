@@ -8,7 +8,7 @@ from typing import Optional
 
 import asyncpg
 
-from src.core.config import get_config, logger
+from src.core.config import get_config, get_db_pool, logger, set_db_pool
 from src.database.mixins import (
     SchemaMixin,
     StateMixin,
@@ -37,6 +37,7 @@ class DatabaseRepository(
         self.pool: Optional[asyncpg.Pool] = None
         self._init_lock = asyncio.Lock()
         self._schema_ready = False
+        self._owns_pool = False
 
     async def init_db(self) -> None:
         if self.pool is not None and self._schema_ready:
@@ -44,36 +45,42 @@ class DatabaseRepository(
 
         async with self._init_lock:
             if self.pool is None:
-                async def init_connection(conn):
-                    # Register JSON/JSONB codecs for automatic python dict <-> postgres jsonb translation
-                    await conn.set_type_codec(
-                        "json",
-                        encoder=json.dumps,
-                        decoder=json.loads,
-                        schema="pg_catalog"
-                    )
-                    await conn.set_type_codec(
-                        "jsonb",
-                        encoder=json.dumps,
-                        decoder=json.loads,
-                        schema="pg_catalog"
-                    )
+                shared_pool = get_db_pool()
+                if shared_pool is not None:
+                    self.pool = shared_pool
+                else:
+                    async def init_connection(conn):
+                        # Register JSON/JSONB codecs for automatic python dict <-> postgres jsonb translation
+                        await conn.set_type_codec(
+                            "json",
+                            encoder=json.dumps,
+                            decoder=json.loads,
+                            schema="pg_catalog"
+                        )
+                        await conn.set_type_codec(
+                            "jsonb",
+                            encoder=json.dumps,
+                            decoder=json.loads,
+                            schema="pg_catalog"
+                        )
 
-                self.pool = await asyncpg.create_pool(
-                    dsn=self.db_url,
-                    min_size=2,
-                    max_size=10,
-                    max_inactive_connection_lifetime=300.0,
-                    command_timeout=60.0,
-                    ssl=False,
-                    init=init_connection,
-                )
+                    self.pool = await asyncpg.create_pool(
+                        dsn=self.db_url,
+                        min_size=2,
+                        max_size=10,
+                        max_inactive_connection_lifetime=300.0,
+                        command_timeout=60.0,
+                        ssl=False,
+                        init=init_connection,
+                    )
+                    self._owns_pool = True
+                    set_db_pool(self.pool)
             if not self._schema_ready:
                 await self._initialize_schema()
                 self._schema_ready = True
 
     async def close(self) -> None:
-        if self.pool is not None:
+        if self.pool is not None and self._owns_pool:
             await self.pool.close()
             self.pool = None
             self._schema_ready = False

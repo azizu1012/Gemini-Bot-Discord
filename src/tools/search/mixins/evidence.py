@@ -15,11 +15,11 @@ class SearchEvidenceMixin:
     """Provides safe web page fetching and deep evidence extraction."""
 
     async def _fetch_page_data(self, url: str) -> Tuple[str, Dict[str, Any]]:
-        safe, _ = is_safe_url(url, allow_private=False)
+        safe, _ = await asyncio.to_thread(is_safe_url, url, allow_private=False)
         if not safe:
             return "", {}
 
-        def _fetch_once(timeout_sec: float) -> Tuple[str, Dict[str, Any]]:
+        async def _fetch_once(timeout_sec: float) -> Tuple[str, Dict[str, Any]]:
             headers = {
                 "User-Agent": "Mozilla/5.0 (AzurisBot/1.0)",
                 "Accept": "text/html,application/xhtml+xml",
@@ -28,10 +28,13 @@ class SearchEvidenceMixin:
             target_url = url
             response = None
             for _ in range(3):
-                safe_hop, _ = is_safe_url(target_url, allow_private=False)
+                safe_hop, _ = await asyncio.to_thread(
+                    is_safe_url, target_url, allow_private=False
+                )
                 if not safe_hop:
                     return "", {}
-                response = requests.get(
+                response = await asyncio.to_thread(
+                    requests.get,
                     target_url,
                     headers=headers,
                     timeout=timeout_sec,
@@ -57,7 +60,7 @@ class SearchEvidenceMixin:
 
         for timeout_sec in (3.0, 5.0):
             try:
-                text, meta = await asyncio.to_thread(_fetch_once, timeout_sec)
+                text, meta = await _fetch_once(timeout_sec)
                 if text:
                     return text, meta
             except Exception:

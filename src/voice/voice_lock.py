@@ -32,6 +32,8 @@ class VoiceLockManager:
         self.whitelist_store = WhitelistStore(Path(whitelist_file))
         self.ignore_next_updates: Set[int] = set()
 
+        self._voice_log_dir_ready = False
+
     @property
     def locked_channels(self) -> Set[int]:
         return self.lock_store.channel_ids()
@@ -63,14 +65,36 @@ class VoiceLockManager:
         self.whitelist_store._flush()
 
     def log_action(self, message: str) -> None:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_line = f"[{timestamp}] {message}"
-        try:
-            os.makedirs(os.path.dirname(self.voice_lock_log_file), exist_ok=True)
-            with open(self.voice_lock_log_file, "a", encoding="utf-8") as f:
-                f.write(log_line + "\n")
-        except Exception:
-            pass
+        # Ensure the log directory exactly once (lazily), not on every call.
+        if not self._voice_log_dir_ready:
+            directory = os.path.dirname(self.voice_lock_log_file)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            self._voice_log_dir_ready = True
+
+        log_line = f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n"
+        # Cap the file at 5MB; when exceeded, rewrite with the newest half so the
+        # log never grows unbounded.
+        if os.path.exists(self.voice_lock_log_file) and os.path.getsize(self.voice_lock_log_file) > 5 * 1024 * 1024:
+            try:
+                size = os.path.getsize(self.voice_lock_log_file)
+                keep = size // 2
+                with open(self.voice_lock_log_file, "rb") as rf:
+                    rf.seek(-keep, os.SEEK_END)
+                    chunk = rf.read()
+                # Drop the partial line at the front of the kept tail.
+                nl = chunk.find(b"\n")
+                if nl != -1:
+                    chunk = chunk[nl + 1:]
+                tail = chunk.decode("utf-8", errors="replace")
+                with open(self.voice_lock_log_file, "w", encoding="utf-8") as wf:
+                    wf.write(tail)
+            except OSError:
+                # If we can't prune (e.g. file locked), fall through and append;
+                # the next call will retry.
+                pass
+        with open(self.voice_lock_log_file, "a", encoding="utf-8") as f:
+            f.write(log_line)
 
     def is_owner_check(self):
         owner_id = self.owner_id

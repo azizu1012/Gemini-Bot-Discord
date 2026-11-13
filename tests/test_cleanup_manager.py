@@ -71,7 +71,7 @@ async def test_cleanup_deletes_old_files(monkeypatch, tmp_path):
 
     # free space is low so cleanup starts, then recovers after deletion
     space = {"current": 3}
-    mgr = CleanupManager(storage_path=str(tmp_path), min_free_mb=100)
+    mgr = CleanupManager(storage_path=str(tmp_path), min_free_mb=100, min_age_hours=0)
     mgr.logger = NullLogger()
     mgr.get_disk_free_space_mb = MagicMock(side_effect=lambda: space["current"])
 
@@ -94,7 +94,7 @@ async def test_cleanup_stops_when_threshold_reached(monkeypatch, tmp_path):
         calls["n"] += 1
         return 3 if calls["n"] == 1 else 200
 
-    mgr = CleanupManager(storage_path=str(tmp_path), min_free_mb=100)
+    mgr = CleanupManager(storage_path=str(tmp_path), min_free_mb=100, min_age_hours=0)
     mgr.logger = NullLogger()
     mgr.get_disk_free_space_mb = MagicMock(side_effect=fake_free)
 
@@ -113,7 +113,7 @@ async def test_cleanup_handles_delete_error(monkeypatch, tmp_path):
             raise PermissionError("locked")
 
     monkeypatch.setattr(os, "remove", fake_remove)
-    mgr = CleanupManager(storage_path=str(tmp_path), min_free_mb=100)
+    mgr = CleanupManager(storage_path=str(tmp_path), min_free_mb=100, min_age_hours=0)
     mgr.logger = NullLogger()
     mgr.get_disk_free_space_mb = MagicMock(return_value=1)
 

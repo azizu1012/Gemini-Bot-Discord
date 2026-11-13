@@ -87,7 +87,7 @@ def to_json_schema(parameters: Any) -> Dict[str, Any]:
     if parameters is None:
         return {"type": "object", "properties": {}}
     if isinstance(parameters, dict):
-        return normalize_schema(json.loads(json.dumps(parameters)))
+        return normalize_schema(parameters)
     dump = getattr(parameters, "model_dump", None)
     if callable(dump):
         return normalize_schema(dump(exclude_none=True))

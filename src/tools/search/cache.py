@@ -85,6 +85,9 @@ class SearchCache:
         return item.get("text", "")
 
     def set_deep_read(self, url: str, text: str, ttl_seconds: int = 7200) -> None:
+        if len(self.deep_read_cache) >= MAX_CACHE_SIZE:
+            oldest_key = min(self.deep_read_cache, key=lambda k: self.deep_read_cache[k]["timestamp"])
+            del self.deep_read_cache[oldest_key]
         self.deep_read_cache[url] = {
             "text": text,
             "timestamp": datetime.now(),

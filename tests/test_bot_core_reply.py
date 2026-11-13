@@ -26,6 +26,7 @@ def make_bc():
     bc.logger = NullLogger()
     bc._outgoing_queues = {}
     bc._outgoing_senders = {}
+    bc._pending_outgoing_tasks = set()
     bc.active_typing_tasks = {}
     bc._active_user_locks = {}
     bc._redis_client = None
