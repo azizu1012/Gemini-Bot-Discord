@@ -9,8 +9,10 @@ from urllib.parse import urljoin
 import aiohttp
 
 from src.core.config import logger
-from src.tools.search.url_safety import is_safe_url
+from src.tools.search.download import DownloadTooLarge, read_limited_response
+from src.tools.search.url_safety import build_pinned_request, is_safe_url
 
+DOWNLOAD_TOTAL_SECONDS = 20.0
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_CACHE_ENTRIES = 1000
 MAX_REDIRECTS = 3
@@ -104,6 +106,10 @@ class VisionTool:
         return url
 
     async def _download_image(self, image_url: str) -> Tuple[Optional[bytes], str, Optional[str]]:
+        async with asyncio.timeout(DOWNLOAD_TOTAL_SECONDS):
+            return await self._download_image_with_deadline(image_url)
+
+    async def _download_image_with_deadline(self, image_url: str) -> Tuple[Optional[bytes], str, Optional[str]]:
         """Tải ảnh và trả về (bytes, mime_type, error_message)."""
         clean_key = (image_url or "").split("?")[0]
         cached_turn = self._turn_images.get(image_url) or self._turn_images.get(clean_key)
@@ -122,14 +128,17 @@ class VisionTool:
         mime_type = self._guess_mime_type(target_url)
         refreshed_on_404 = False
 
-        async with aiohttp.ClientSession() as session:
-            for _ in range(MAX_REDIRECTS + 1):
-                safe, reason = await asyncio.to_thread(is_safe_url, target_url)
-                if not safe:
-                    return None, "", f"Lỗi: URL hình ảnh không hợp lệ hoặc bị chặn ({reason})."
-
+        for _ in range(MAX_REDIRECTS + 1):
+            safe, reason = await asyncio.to_thread(is_safe_url, target_url)
+            if not safe:
+                return None, "", f"Lỗi: URL hình ảnh không hợp lệ hoặc bị chặn ({reason})."
+            request_url, connector = build_pinned_request(target_url, reason)
+            async with aiohttp.ClientSession(
+                connector=connector, auto_decompress=False,
+                headers={"Accept-Encoding": "gzip, deflate"},
+            ) as session:
                 async with session.get(
-                    target_url,
+                    request_url,
                     timeout=aiohttp.ClientTimeout(total=20),
                     allow_redirects=False,
                 ) as resp:
@@ -164,7 +173,10 @@ class VisionTool:
                     if declared_size and declared_size.isdigit() and int(declared_size) > MAX_IMAGE_BYTES:
                         return None, "", "Lỗi: Hình ảnh vượt quá giới hạn 20 MB."
 
-                    image_bytes = await resp.read()
+                    try:
+                        image_bytes = await read_limited_response(resp, MAX_IMAGE_BYTES)
+                    except DownloadTooLarge:
+                        return None, "", "Lỗi: Hình ảnh vượt quá giới hạn 20 MB."
 
                 if not image_bytes:
                     return None, "", "Lỗi: Hình ảnh tải về rỗng."

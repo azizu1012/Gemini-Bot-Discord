@@ -141,21 +141,17 @@ def test_is_safe_url_ip_literal_returns_empty_ip():
     assert pinned_ip == ""
 
 # ---------------- build_pinned_request ----------------
-def test_build_pinned_request_v4_replaces_host():
-    connectable, headers = build_pinned_request("https://example.com:8443/path?q=1#frag", "8.8.8.8")
-    assert connectable == "https://8.8.8.8:8443/path?q=1#frag"
-    assert headers == {"Host": "example.com"}
-
-def test_build_pinned_request_empty_ip_returns_unchanged():
-    url = "https://example.com/path"
-    connectable, headers = build_pinned_request(url, "")
-    assert connectable == url
-    assert headers == {}
-
-def test_build_pinned_request_ipv6_bracketed_netloc():
-    connectable, headers = build_pinned_request("https://example.com/path", "::1")
-    assert connectable == "https://[::1]/path"
-    assert headers == {"Host": "example.com"}
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ip", ["8.8.8.8", "2606:4700:4700::1111", ""])
+async def test_build_pinned_request_preserves_hostname(ip):
+    url = "https://example.com:8443/path?q=1#frag"
+    request_url, connector = build_pinned_request(url, ip)
+    try:
+        assert request_url == url
+        assert connector._ssl is True
+        assert connector._resolver.pinned_ip == ip
+    finally:
+        await connector.close()
 
 
 def test_dns_private_ips_rejected(monkeypatch):

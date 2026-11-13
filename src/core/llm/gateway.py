@@ -23,6 +23,7 @@ from src.core.llm.base import (
     is_unavailable_error,
 )
 from src.core.llm.genai_client import GenAIClient
+from src.core.llm.redaction import redact_diagnostic
 from src.core.llm.openai_client import OpenAIClient
 from src.core.llm.resolver import EndpointResolver, get_endpoint_resolver, normalize_base_url
 
@@ -105,10 +106,14 @@ class LLMGateway:
                     tools=tools,
                 )
             except Exception as e:
-                err = e if isinstance(e, LLMError) else LLMError(classify_error(e), str(e), raw=e)
+                err = LLMError(
+                    e.kind if isinstance(e, LLMError) else classify_error(e),
+                    self._redact(e, (getattr(client, "api_key", ""),)),
+                    status_code=e.status_code if isinstance(e, LLMError) else None,
+                )
                 last_error = err
                 if err.kind == "auth":
-                    raise
+                    raise err from None
                 is_last = idx == len(attempts) - 1
                 if is_last:
                     self.logger.warning(
@@ -119,7 +124,7 @@ class LLMGateway:
                         f"[LLM] {slot_model.sdk}:{slot_model.model_id} (role={slot_model.role}) lỗi {err.kind}; "
                         f"thử fallback cùng provider: {attempts[-1].model_id}"
                     )
-        raise last_error or LLMError("other", "LLM call failed")
+        raise last_error or LLMError("other", "LLM call failed") from None
 
     async def list_models_for(self, *, sdk: str, base_url: str, api_key: str) -> List[Dict[str, str]]:
         client = self._client_factory(sdk, normalize_base_url(sdk, base_url), api_key)
@@ -166,11 +171,20 @@ class LLMGateway:
         client = await self._get_client("genai")
         return client.raw_client
 
+    def _redact(self, value: object, secrets: Tuple[str, ...] = ()) -> str:
+        with self._lock:
+            keys = tuple(key[2] for key in self._clients)
+        configured = tuple(
+            value for name, value in vars(self.config).items()
+            if "KEY" in name.upper() or "TOKEN" in name.upper()
+        )
+        return redact_diagnostic(value, (*keys, *configured, *secrets))
+
     def log_exception(self, *, stage: str, error: Exception, user_id: str, role: str, attempt: int, max_attempts: int) -> None:
         kind = classify_error(error)
         self.logger.error(
             f"[LLM][{stage}] role={role} kind={kind} attempt={attempt}/{max_attempts} "
-            f"user={user_id} error={type(error).__name__}: {str(error)[:300]}"
+            f"user={user_id} error={type(error).__name__}: {self._redact(error)[:300]}"
         )
 
     @staticmethod

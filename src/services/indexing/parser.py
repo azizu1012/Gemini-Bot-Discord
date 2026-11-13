@@ -4,7 +4,7 @@ import aiohttp
 import csv
 import re
 import unicodedata
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Tuple, Any, Iterator
 from src.core.config import logger, FILE_STORAGE_PATH, MIN_FREE_SPACE_MB
 from src.managers.cleanup_manager import CleanupManager
 
@@ -59,7 +59,20 @@ class FileParserService:
         self._compiled_injection_patterns = [
             re.compile(pattern, re.IGNORECASE) for pattern in self._injection_patterns
         ]
-        self._html_comment_pattern = re.compile(r"<!--(.*?)-->", re.DOTALL)
+
+    @staticmethod
+    def _html_comments(text: str) -> Iterator[str]:
+        """Find non-overlapping complete comments with a single forward scan."""
+        offset = 0
+        while True:
+            start = text.find("<!--", offset)
+            if start < 0:
+                return
+            end = text.find("-->", start + 4)
+            if end < 0:
+                return
+            yield text[start + 4:end]
+            offset = end + 3
 
     def _safe_filename(self, filename: str) -> str:
         name = self._safe_name_pattern.sub("_", filename).strip("._")
@@ -299,7 +312,7 @@ class FileParserService:
                 f"[SECURITY NOTE] Hidden/control characters removed: {hidden_removed}"
             )
 
-        hidden_sections = self._html_comment_pattern.findall(cleaned_text)
+        hidden_sections = list(self._html_comments(cleaned_text))
         if hidden_sections:
             sample = " | ".join(section.strip()[:200] for section in hidden_sections[:3])
             report_lines.append(
@@ -375,7 +388,7 @@ class FileParserService:
         if state["scanned_lines"] < self.MAX_SCAN_LINES:
             state["scanned_lines"] += 1
             if cleaned_line.strip():
-                if self._html_comment_pattern.search(cleaned_line):
+                if next(self._html_comments(cleaned_line), None) is not None:
                     state["html_comment_count"] += 1
                     if len(state["html_comment_samples"]) < 3:
                         state["html_comment_samples"].append(cleaned_line.strip()[:200])
@@ -428,54 +441,56 @@ class FileParserService:
         state: Dict[str, Any],
     ) -> Tuple[List[Dict[str, Any]], bool]:
         manifest: List[Dict[str, Any]] = []
-        chunk_lines: List[str] = []
-        chunk_char_count = 0
-        chunk_index = 0
-        truncated = False
+        chunk_parts: List[str] = []
+        chunk_size = 0
         line_start = 1
-        current_line = 0
+        current_line = 1
+        continuing_line = False
+        limit = self.INDEX_CHUNK_CHAR_LIMIT
 
-        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-            for raw_line in f:
-                current_line += 1
-                cleaned_line = self._scan_security_line(raw_line.rstrip("\n"), f"line {current_line}", state)
-                chunk_lines.append(cleaned_line)
-                chunk_char_count += len(cleaned_line) + 1
-
-                if chunk_char_count >= self.INDEX_CHUNK_CHAR_LIMIT:
-                    chunk_index += 1
-                    chunk_id = f"chunk_{chunk_index:05d}"
-                    chunk_text = "\n".join(chunk_lines)
-                    chunk_path = self._write_chunk(chunk_dir, chunk_id, chunk_text)
-                    manifest.append({
-                        "chunk_id": chunk_id,
-                        "chunk_path": chunk_path,
-                        "source": {"line_start": line_start, "line_end": current_line},
-                        "char_count": len(chunk_text),
-                    })
-                    chunk_lines = []
-                    chunk_char_count = 0
-                    line_start = current_line + 1
-
-                    if chunk_index >= self.MAX_INDEX_CHUNKS:
-                        truncated = True
-                        break
-
-        if chunk_lines and chunk_index < self.MAX_INDEX_CHUNKS:
-            chunk_index += 1
-            chunk_id = f"chunk_{chunk_index:05d}"
-            chunk_text = "\n".join(chunk_lines)
-            chunk_path = self._write_chunk(chunk_dir, chunk_id, chunk_text)
+        def flush() -> None:
+            nonlocal chunk_size, chunk_parts
+            chunk_id = f"chunk_{len(manifest) + 1:05d}"
+            text = "".join(chunk_parts)
+            chunk_path = self._write_chunk(chunk_dir, chunk_id, text)
             manifest.append({
                 "chunk_id": chunk_id,
                 "chunk_path": chunk_path,
                 "source": {"line_start": line_start, "line_end": current_line},
-                "char_count": len(chunk_text),
+                "char_count": len(text),
             })
-        elif chunk_lines:
-            truncated = True
+            chunk_parts = []
+            chunk_size = 0
 
-        return manifest, truncated
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            while raw_line := f.readline(limit):
+                # readline(size) bounds memory even for files with no newlines.
+                cleaned = self._scan_security_line(raw_line.rstrip("\n"), f"line {current_line}", state)
+                if chunk_parts and not continuing_line:
+                    cleaned = "\n" + cleaned
+                if not cleaned and not continuing_line:
+                    chunk_parts.append("")
+                offset = 0
+                while offset < len(cleaned):
+                    count = min(limit - chunk_size, len(cleaned) - offset)
+                    chunk_parts.append(cleaned[offset:offset + count])
+                    chunk_size += count
+                    offset += count
+                    if chunk_size == limit:
+                        flush()
+                        line_start = current_line
+                        if len(manifest) >= self.MAX_INDEX_CHUNKS:
+                            return manifest, bool(offset < len(cleaned) or f.read(1))
+                continuing_line = not raw_line.endswith("\n")
+                if not continuing_line:
+                    current_line += 1
+                    if not chunk_parts:
+                        line_start = current_line
+            if chunk_parts:
+                if not continuing_line:
+                    current_line -= 1
+                flush()
+        return manifest, False
 
     def _chunk_csv_file(
         self,

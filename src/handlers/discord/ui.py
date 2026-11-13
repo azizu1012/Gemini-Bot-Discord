@@ -4,6 +4,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 import discord
 from src.database.repository import DatabaseRepository
 from src.core.llm.endpoint_url import validate_endpoint_url
+from src.core.llm.redaction import redact_diagnostic
 from src.core.llm.resolver import DEFAULT_BASE_URLS, encrypt_api_key, is_valid_fernet_key, normalize_base_url
 
 
@@ -546,8 +547,11 @@ class EndpointConfigFlow:
 
         try:
             raw_models = await self.gateway.list_models_for(sdk=sdk, base_url=base_url, api_key=api_key)
-        except Exception:
-            logger.exception("Endpoint config failed while listing models (sdk=%s url=%s)", sdk, base_url)
+        except Exception as exc:
+            logger.error(
+                "Endpoint config failed while listing models (sdk=%s url=%s): %s",
+                sdk, redact_diagnostic(base_url, (api_key,)), redact_diagnostic(exc, (api_key,)),
+            )
             await interaction.followup.send(
                 "❌ Không kết nối/không lấy được model list từ endpoint. "
                 "Cấu hình CHƯA được lưu. Kiểm tra log server để biết chi tiết.",
@@ -570,8 +574,11 @@ class EndpointConfigFlow:
         updated_by = f"admin:{self.admin_user_id}"
         try:
             await self.db_repo.save_endpoint_config(sdk, base_url, encrypted, slots, updated_by)
-        except Exception:
-            logger.exception("Endpoint config failed while saving to DB (sdk=%s)", sdk)
+        except Exception as exc:
+            logger.error(
+                "Endpoint config failed while saving to DB (sdk=%s): %s",
+                sdk, redact_diagnostic(exc, (api_key, encrypted)),
+            )
             await interaction.followup.send(
                 "❌ Lỗi lưu DB. Cấu hình CHƯA được lưu. Kiểm tra log server để biết chi tiết.",
                 ephemeral=True,
