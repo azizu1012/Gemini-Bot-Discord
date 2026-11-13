@@ -4,7 +4,11 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from collections import OrderedDict
 
 from src.handlers.message_handler import MessageHandler
 
@@ -108,3 +112,59 @@ def test_duplicate_message_is_claimed_once():
 
     asyncio.run(run())
     assert len(calls) == 1
+
+
+def make_lock_handler(max_locks):
+    handler = make_handler(limit=1)
+    handler._MAX_USER_LOCKS = max_locks
+    handler._user_locks = OrderedDict()
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_eviction_preserves_held_lock():
+    """Eviction must not remove a lock that is currently held (locked)."""
+    handler = make_lock_handler(max_locks=2)
+    lock_a = handler._get_user_lock("u1")
+    await lock_a.acquire()
+    try:
+        handler._get_user_lock("u2")
+        # Fill past the cap; u1 is held, so it must survive eviction.
+        handler._get_user_lock("u3")
+        handler._get_user_lock("u4")
+        assert "u1" in handler._user_locks
+        assert lock_a.locked()
+    finally:
+        lock_a.release()
+
+
+@pytest.mark.asyncio
+async def test_eviction_stops_when_all_locks_are_held():
+    """When every lock is in use, eviction stops rather than shrinking below the held count."""
+    handler = make_lock_handler(max_locks=2)
+    lock_a = handler._get_user_lock("u1")
+    lock_b = handler._get_user_lock("u2")
+    await lock_a.acquire()
+    await lock_b.acquire()
+    try:
+        # Both u1/u2 are held, so neither can be evicted. Adding a third lock
+        # must NOT evict a held one — the dict stays at the held-count size.
+        handler._get_user_lock("u3")
+        handler._get_user_lock("u4")
+        assert list(handler._user_locks.keys()) == ["u1", "u2"]
+        assert lock_a.locked()
+        assert lock_b.locked()
+    finally:
+        lock_a.release()
+        lock_b.release()
+
+
+def test_lru_move_to_end_still_works():
+    """Re-requesting a lock moves it to the end of the OrderedDict (LRU)."""
+    handler = make_lock_handler(max_locks=10)
+    handler._get_user_lock("u1")
+    handler._get_user_lock("u2")
+    handler._get_user_lock("u3")
+    assert list(handler._user_locks.keys()) == ["u1", "u2", "u3"]
+    handler._get_user_lock("u1")
+    assert list(handler._user_locks.keys()) == ["u2", "u3", "u1"]

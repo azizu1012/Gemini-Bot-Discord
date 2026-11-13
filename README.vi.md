@@ -163,6 +163,10 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 API key của endpoint được mã hóa trước khi lưu vào PostgreSQL. Mặc định hệ thống từ chối lưu plaintext; chỉ bật ALLOW_PLAINTEXT_ENDPOINT_KEYS=true khi đã chấp nhận rõ rủi ro trong môi trường local.
 
+Biến env tuỳ chỉnh bổ sung:
+- `RECLAIM_PENDING_INTERVAL_SECONDS` (mặc định `60`): khoảng thời gian reclaim định kỳ các message Redis pending (crash/chưa ACK) của message worker.
+- `AZURIS_SEARCH_RESULTS_GROUP` (mặc định `azuris_search_results`): consumer-group id ổn định cho kết quả search, giúp restart không tích luỹ nhóm mồ côi.
+
 ## LLM Endpoint
 
 Azuris lưu cả hai cấu hình provider trong PostgreSQL nhưng chỉ active một SDK tại một thời điểm. Mỗi endpoint có ba model slot:

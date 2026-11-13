@@ -134,6 +134,99 @@ async def test_payload_slash_reply_with_file(monkeypatch):
     assert args.kwargs.get("embed") is not None
 
 
+# ---------------- egress backpressure & sender resilience ----------------
+def test_get_outgoing_queue_is_bounded():
+    bc = _make_bot_core()
+    queue = bc._get_outgoing_queue("u1")
+    assert queue.maxsize == 100
+    assert bc._outgoing_queues["u1"] is queue
+    # repeated calls reuse the same queue
+    assert bc._get_outgoing_queue("u1") is queue
+
+@pytest.mark.asyncio
+async def test_payload_full_queue_drops_oldest_keeps_latest():
+    bc = _make_bot_core()
+    bc._ensure_sender_task = MagicMock()
+    queue = asyncio.Queue(maxsize=100)
+    for i in range(100):
+        queue.put_nowait({"action": "reply", "user_id": "u1", "seq": i})
+    bc._outgoing_queues["u1"] = queue
+
+    await bc.handle_outgoing_payload(
+        {"action": "reply", "user_id": "u1", "seq": 100}
+    )
+
+    # queue stays bounded and the newest payload is present
+    assert queue.qsize() == 100
+    bc.logger.warning.assert_called()
+
+    seqs = []
+    while not queue.empty():
+        seqs.append(queue.get_nowait()["seq"])
+    # oldest (seq 0) was dropped; newest (seq 100) is queued
+    assert seqs[0] == 1
+    assert 100 in seqs
+    assert 0 not in seqs
+
+@pytest.mark.asyncio
+async def test_sender_loop_survives_payload_exception():
+    bc = _make_bot_core()
+    queue = asyncio.Queue()
+    bc._outgoing_queues["u1"] = queue
+    await queue.put({"action": "reply", "user_id": "u1", "seq": 1})
+    await queue.put({"action": "reply", "user_id": "u1", "seq": 2})
+
+    processed = []
+    calls = {"n": 0}
+
+    async def flaky(payload):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        processed.append(payload["seq"])
+
+    bc._process_outgoing_payload = flaky
+
+    # After the queue is drained, raise TimeoutError with an empty queue so the
+    # loop exits fast instead of blocking on the real 15s timeout.
+    original_get = queue.get
+
+    async def get_with_timeout_after_drain():
+        if queue.empty():
+            raise asyncio.TimeoutError
+        return await original_get()
+
+    queue.get = get_with_timeout_after_drain
+
+    await bc._outgoing_sender_loop("u1")
+
+    # first payload raised, loop kept going and processed the next one
+    assert calls["n"] == 2
+    assert processed == [2]
+    # fully drained -> cleanup removes queue and sender
+    assert queue.empty()
+    assert "u1" not in bc._outgoing_queues
+    assert "u1" not in bc._outgoing_senders
+
+@pytest.mark.asyncio
+async def test_sender_loop_exit_leaves_queue_in_place_when_nonempty():
+    bc = _make_bot_core()
+    queue = asyncio.Queue()
+    bc._outgoing_queues["u1"] = queue
+    queue.put_nowait({"action": "reply", "user_id": "u1", "seq": 1})
+
+    # Force get() to raise a non-timeout error so the loop exits early while
+    # items are still queued (simulating an abnormal exit).
+    queue.get = AsyncMock(side_effect=RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError):
+        await bc._outgoing_sender_loop("u1")
+
+    # queue is left in place, not popped, so _ensure_sender_task can recreate
+    assert "u1" in bc._outgoing_queues
+    assert bc._outgoing_queues["u1"] is queue
+    assert not queue.empty()
+
 # ---------------- setup_redis ----------------
 @pytest.mark.asyncio
 async def test_setup_redis_starts_consumer_and_loop():

@@ -1,5 +1,6 @@
 """Offline tests for search text mixin helpers and evidence fetching."""
 import sys
+from unittest.mock import MagicMock
 
 
 sys.path.insert(0, ".")
@@ -382,3 +383,34 @@ def test_fetch_page_data_short_text_returns_meta_only(monkeypatch):
     text, meta = _await(owner._fetch_page_data("http://example.com/short"))
     assert text == ""
     assert meta == {}
+
+def test_fetch_page_data_dials_pinned_ip(monkeypatch):
+    # Verify the evidence fetcher dials the pinned IP (IP-URL + Host header).
+    owner = E()
+
+    class FakeResponse:
+        status_code = 200
+        text = "<html><body><article><p>" + "pinned " * 60 + "</p></article></body></html>"
+        encoding = None
+        apparent_encoding = "utf-8"
+        headers = {}
+        is_redirect = False
+
+    captured = {}
+    def fake_get(url, headers, timeout, allow_redirects):
+        captured["url"] = url
+        captured["host_header"] = headers.get("Host")
+        return FakeResponse()
+
+    import src.tools.search.mixins.evidence as ev_mod
+
+    # is_safe_url resolves example.net to a public IP -> pinned IP returned.
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        MagicMock(return_value=[(None, None, None, None, ("8.8.8.8", 80))]),
+    )
+    monkeypatch.setattr(ev_mod.requests, "get", fake_get)
+    text, meta = _await(owner._fetch_page_data("https://example.net/article"))
+    assert "pinned" in text
+    assert captured["url"] == "https://8.8.8.8/article"
+    assert captured["host_header"] == "example.net"

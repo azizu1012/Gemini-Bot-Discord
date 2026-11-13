@@ -58,8 +58,13 @@ Runner trực tiếp cũ + toàn bộ `src/.runtime/` (~1GB) đã xóa. Docker l
 - CD = pull-based, không SSH: trên máy deploy đặt `BOT_IMAGE=ghcr.io/<owner>/<repo>:<tag>` vào `.env` rồi `docker compose pull && docker compose up -d`. Không cần Docker Hub.
 - Muốn merge an toàn: bật branch protection yêu cầu 3 check (CI, Secret Scan, Docker) pass.
 
-### Chi tiết lỗi & chẩn đoán
-Xem [`docs/incidents.md`](incidents.md) để biết các sự cố đã gặp (CPU 100%, re-read vô hạn, RESP3), nguyên nhân và cách khắc phục.
+### Hành vi vận hành (Redis worker — sau fix commit gần đây)
+
+- **Single-worker Redis instance-lock**: `run_bot.py` giành khoá Redis NX EX (key `azuris:worker:instance-lock`, TTL 3600s) khi khởi động. Nếu instance khác đang giữ khoá, bot log lỗi rõ ràng và thoát với status code 1. Fail-open khi Redis không khả dụng (cảnh báo và tiếp tục) để hỗ trợ dev local. Khoá được giải phóng khi shutdown.
+- **Periodic pending reclaim**: `message_handler` chạy reclaim định kỳ các message Redis pending (crash/chưa ACK) mỗi `RECLAIM_PENDING_INTERVAL_SECONDS` (mặc định 60s) bên cạnh reclaim lúc khởi động — giảm cửa sổ mất message sau khi worker crash.
+- **ACK semantics**: một message chỉ được ACK sau khi publish reply thành công (hoặc sau khi publish fallback busy-reply thành công). Nếu cả hai thất bại, message được để lại un-ACKed cho reclaim thay vì bị drop im lặng (at-least-once).
+- **Search subtask group id ổn định** (`azuris_search_results`): restart không tích luỹ consumer group mồ côi; subtask worker ACK sau khi publish kết quả.
+- **Egress**: hàng đợi reply outgoing bị giới hạn (100), drop item cũ nhất khi overflow; vòng lặp sender sống sót qua lỗi từng payload.
 
 ### Bảo trì DB
 ```sql

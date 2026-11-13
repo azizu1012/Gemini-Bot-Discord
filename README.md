@@ -161,6 +161,10 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 Endpoint API keys are encrypted before being stored in PostgreSQL. Plaintext endpoint-key storage is disabled by default; only enable ALLOW_PLAINTEXT_ENDPOINT_KEYS=true for an explicitly accepted local-development risk.
 
+Optional tuning env vars:
+- `RECLAIM_PENDING_INTERVAL_SECONDS` (default `60`): interval for the periodic reclaim of pending (crashed/un-ACKed) Redis messages by the message worker.
+- `AZURIS_SEARCH_RESULTS_GROUP` (default `azuris_search_results`): stable consumer-group id for search results, so restarts don't accumulate orphaned groups.
+
 ## LLM Endpoints
 
 Azuris stores both provider configurations in PostgreSQL and activates one SDK at a time. Each endpoint has three model slots:

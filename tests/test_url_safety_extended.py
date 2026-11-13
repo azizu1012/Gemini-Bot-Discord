@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, ".")
 
-from src.tools.search.url_safety import is_safe_url
+from src.tools.search.url_safety import build_pinned_request, is_safe_url
 
 
 def test_url_required():
@@ -75,8 +75,49 @@ def test_public_url_allowed(monkeypatch):
     # mock socket.getaddrinfo to return a public IP
     fake = MagicMock(return_value=[(None, None, None, None, ("8.8.8.8", 80))])
     monkeypatch.setattr("socket.getaddrinfo", fake)
-    safe, _ = is_safe_url("http://example.org/path")
+    safe, pinned_ip = is_safe_url("http://example.org/path")
     assert safe is True
+    assert pinned_ip == "8.8.8.8"
+
+def test_public_url_returns_first_validated_ip(monkeypatch):
+    # multiple public resolved IPs -> the first is returned as the pinned IP
+    fake = MagicMock(
+        return_value=[
+            (None, None, None, None, ("8.8.8.8", 80)),   # public -> pinned
+            (None, None, None, None, ("1.1.1.1", 80)),   # public, not first
+        ]
+    )
+    monkeypatch.setattr("socket.getaddrinfo", fake)
+    safe, pinned_ip = is_safe_url("http://example.org")
+    assert safe is True
+    assert pinned_ip == "8.8.8.8"
+
+def test_is_safe_url_rfc_domain_returns_empty_ip():
+    safe, pinned_ip = is_safe_url("http://api.example.com")
+    assert safe is True
+    assert pinned_ip == ""
+
+def test_is_safe_url_ip_literal_returns_empty_ip():
+    safe, pinned_ip = is_safe_url("http://172.16.0.5", allow_private=True)
+    assert safe is True
+    assert pinned_ip == ""
+
+# ---------------- build_pinned_request ----------------
+def test_build_pinned_request_v4_replaces_host():
+    connectable, headers = build_pinned_request("https://example.com:8443/path?q=1#frag", "8.8.8.8")
+    assert connectable == "https://8.8.8.8:8443/path?q=1#frag"
+    assert headers == {"Host": "example.com"}
+
+def test_build_pinned_request_empty_ip_returns_unchanged():
+    url = "https://example.com/path"
+    connectable, headers = build_pinned_request(url, "")
+    assert connectable == url
+    assert headers == {}
+
+def test_build_pinned_request_ipv6_bracketed_netloc():
+    connectable, headers = build_pinned_request("https://example.com/path", "::1")
+    assert connectable == "https://[::1]/path"
+    assert headers == {"Host": "example.com"}
 
 
 def test_dns_private_ips_rejected(monkeypatch):
