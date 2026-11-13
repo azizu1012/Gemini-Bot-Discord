@@ -2,6 +2,8 @@ import asyncio
 import uuid
 from typing import Any, Dict, Optional
 
+from src.core.config import Config
+
 from src.core.config import logger
 from src.services.messaging.redis_client import RedisStreamConsumer
 from src.services.redis_service import RedisStreamService
@@ -12,7 +14,7 @@ class SearchSubtaskClient:
 
     def __init__(self, kafka_service: RedisStreamService, group_id: Optional[str] = None):
         self.kafka_service = kafka_service
-        self.group_id = group_id or f"azuris_search_results_{uuid.uuid4()}"
+        self.group_id = group_id or str(Config._get_str("AZURIS_SEARCH_RESULTS_GROUP", "azuris_search_results"))
         self._consumer: Optional[RedisStreamConsumer] = None
         self._listener_task: Optional[asyncio.Task] = None
         self._pending: Dict[str, asyncio.Future] = {}
@@ -82,8 +84,13 @@ class SearchSubtaskClient:
             result_payload: Dict[str, Any] = await asyncio.wait_for(future, timeout=timeout)
             return str(result_payload.get("result") or "")
         except asyncio.TimeoutError:
+            # The subtask is still in-flight / timed out. Let the caller decide how to
+            # handle it (it MUST NOT run an inline fallback, which would double-execute
+            # the same query). Clean up the pending future and re-raise.
             self._pending.pop(correlation_id, None)
-            return None
+            raise
         except Exception:
+            # Genuine failure to obtain the result (e.g. publish error): report as
+            # "no result" so the caller may fall back to inline execution.
             self._pending.pop(correlation_id, None)
             return None

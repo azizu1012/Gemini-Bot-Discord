@@ -7,7 +7,7 @@ import urllib.parse
 
 import requests
 from src.tools.helpers import HtmlParser
-from src.tools.search.url_safety import is_safe_url
+from src.tools.search.url_safety import build_pinned_request, is_safe_url
 
 
 class PageEvidenceFetcher:
@@ -30,15 +30,16 @@ class PageEvidenceFetcher:
             target_url = url
             response = None
             for _ in range(3):
-                safe_hop, _ = await asyncio.to_thread(
+                safe_hop, pinned_ip = await asyncio.to_thread(
                     is_safe_url, target_url, allow_private=False
                 )
                 if not safe_hop:
                     return ""
+                dial_url, pinned_headers = build_pinned_request(target_url, pinned_ip)
                 response = await asyncio.to_thread(
                     requests.get,
-                    target_url,
-                    headers=headers,
+                    dial_url,
+                    headers={**headers, **pinned_headers},
                     timeout=timeout_sec,
                     allow_redirects=False,
                 )

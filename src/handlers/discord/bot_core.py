@@ -24,6 +24,13 @@ from src.handlers.discord.commands import register_slash_commands
 class BotCore:
     """Core bot initialization and event handling for Redis Streams-based architecture."""
 
+    # Bounded size of the per-user outgoing reply queue. When full, the oldest
+    # enqueued item is dropped to keep the most recent reply (see
+    # handle_outgoing_payload) — backpressure by waiting would stall the Redis
+    # consumer for every user, which is worse for a chat bot than dropping an
+    # already-stale reply.
+    _OUTGOING_QUEUE_MAXSIZE = 100
+
     def __init__(self, config: Config):
         self.config = config
         self.logger = logger
@@ -463,6 +470,21 @@ class BotCore:
 
         if action in ("reply", "reply_batch"):
             queue = self._get_outgoing_queue(user_id)
+            if queue.full():
+                # Backpressure: drop the oldest queued item to keep the latest
+                # reply. Waiting for a free slot would stall the shared Redis
+                # consumer for every user, so dropping an already-stale item is
+                # the safer choice for a chat bot.
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                else:
+                    queue.task_done()
+                self.logger.warning(
+                    f"[EGRESS] Reply queue for user {user_id} is full "
+                    f"(maxsize={queue.maxsize}); dropped oldest item to keep latest reply"
+                )
             await queue.put(payload)
             self._ensure_sender_task(user_id)
             return
@@ -522,7 +544,7 @@ class BotCore:
     def _get_outgoing_queue(self, user_id: str) -> asyncio.Queue:
         queue = self._outgoing_queues.get(user_id)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = asyncio.Queue(maxsize=self._OUTGOING_QUEUE_MAXSIZE)
             self._outgoing_queues[user_id] = queue
         return queue
 
@@ -556,9 +578,18 @@ class BotCore:
 
                 try:
                     await self._process_outgoing_payload(payload)
+                except Exception as e:
+                    # A failure on one payload must not kill the drain loop or
+                    # drop queued replies — log and continue draining.
+                    self.logger.error(
+                        f"[EGRESS] Failed to process outgoing payload for user {user_id}: {e}"
+                    )
                 finally:
                     queue.task_done()
         finally:
+            # If the loop exits while items are still queued, leave the queue in
+            # place so a later _ensure_sender_task() recreates the sender and
+            # drains them. Only clean up when the queue is truly empty.
             if queue.empty():
                 self._outgoing_queues.pop(user_id, None)
                 self._outgoing_senders.pop(user_id, None)
@@ -752,7 +783,10 @@ class BotCore:
         try:
             return await self._run_with_retry(_do_send, label, max_attempts, base_delay)
         except Exception as e:
-            self.logger.error(f"Failed to {label}: {e}")
+            self.logger.error(
+                f"[EGRESS] Failed to {label} after {max_attempts} attempts "
+                f"(reply chunk dropped): {e}"
+            )
             return None
 
     async def _edit_message_with_retry(

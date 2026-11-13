@@ -38,6 +38,7 @@ def make_handler():
     h.db_repo.has_other_users_history_db = AsyncMock(return_value=False)
     h.db_repo.get_user_history_from_db = AsyncMock(return_value=[])
     h.db_repo.clear_user_processing_state = AsyncMock()
+    h.db_repo.set_user_processing_state = AsyncMock(return_value=None)
     h.resolver = MagicMock()
     h.resolver.is_configured = AsyncMock(return_value=True)
     h.premium_mgr = MagicMock()

@@ -27,4 +27,6 @@ class TestFileParserService:
 class TestMessagingSubtaskServices:
     def test_subtask_client_shape(self):
         client = SearchSubtaskClient(kafka_service=None)
-        assert client.group_id.startswith("azuris_search_results_")
+        # Group id is now stable/deterministic (not uuid4) so restarts do not
+        # accumulate orphaned consumer groups.
+        assert client.group_id == "azuris_search_results"

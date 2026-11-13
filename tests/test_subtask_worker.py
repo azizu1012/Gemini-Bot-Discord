@@ -30,7 +30,7 @@ def make_worker():
 @pytest.mark.asyncio
 async def test_process_subtask_missing_correlation_returns():
     worker = make_worker()
-    await worker._process_subtask({"query": "q"})
+    await worker._process_subtask(MagicMock(), MagicMock(), {"query": "q"})
     worker.kafka_service.publish.assert_not_called()
 
 
@@ -38,9 +38,14 @@ async def test_process_subtask_missing_correlation_returns():
 async def test_process_subtask_publishes_result():
     worker = make_worker()
     worker.tools_mgr.run_search_apis = AsyncMock(return_value="answer")
-    worker.kafka_service.publish = AsyncMock()
+    worker.kafka_service.publish = AsyncMock(return_value=True)
+    msg = MagicMock()
+    consumer = MagicMock()
+    consumer.ack = AsyncMock(return_value=True)
     await worker._process_subtask(
-        {"correlation_id": "c1", "query": "hello", "mode": "general", "user_id": "u1"}
+        consumer,
+        msg,
+        {"correlation_id": "c1", "query": "hello", "mode": "general", "user_id": "u1"},
     )
     worker.tools_mgr.run_search_apis.assert_awaited_once_with("hello", "general")
     worker.kafka_service.publish.assert_awaited_once()
@@ -48,17 +53,31 @@ async def test_process_subtask_publishes_result():
     assert payload.args[0] == "search-results"
     assert payload.kwargs["payload"]["result"] == "answer"
     assert payload.kwargs["payload"]["correlation_id"] == "c1"
+    consumer.ack.assert_awaited_once_with(msg)
 
 
 @pytest.mark.asyncio
 async def test_process_subtask_error_captured():
     worker = make_worker()
     worker.tools_mgr.run_search_apis = AsyncMock(side_effect=RuntimeError("boom"))
-    worker.kafka_service.publish = AsyncMock()
-    await worker._process_subtask({"correlation_id": "c2", "query": "q"})
+    worker.kafka_service.publish = AsyncMock(return_value=True)
+    consumer = MagicMock()
+    consumer.ack = AsyncMock(return_value=True)
+    await worker._process_subtask(consumer, MagicMock(), {"correlation_id": "c2", "query": "q"})
     payload = worker.kafka_service.publish.call_args.kwargs["payload"]
     assert "boom" in payload["error"]
     assert payload["result"] == ""
+    consumer.ack.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_process_subtask_no_ack_on_publish_failure():
+    worker = make_worker()
+    worker.tools_mgr.run_search_apis = AsyncMock(return_value="answer")
+    worker.kafka_service.publish = AsyncMock(return_value=False)
+    consumer = MagicMock()
+    consumer.ack = AsyncMock(return_value=True)
+    await worker._process_subtask(consumer, MagicMock(), {"correlation_id": "c3", "query": "q"})
+    consumer.ack.assert_not_called()
 
 
 @pytest.mark.asyncio

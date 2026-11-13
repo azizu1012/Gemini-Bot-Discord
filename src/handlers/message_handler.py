@@ -113,9 +113,26 @@ class MessageHandler:
         if lock is None:
             lock = asyncio.Lock()
             locks[user_id] = lock
+            # FIFO eviction — never evict a lock that is currently held, or
+            # per-user ordering is broken under burst. If every (LRU) lock is
+            # in-use, stop evicting (grow until they become free).
             while len(locks) > self._MAX_USER_LOCKS:
-                # FIFO eviction — works on plain dict and OrderedDict alike.
-                del locks[next(iter(locks))]
+                oldest_id = next(iter(locks))
+                # Skip in-use locks when sweeping (cheap linear scan in the
+                # rare full-dict case).
+                if locks[oldest_id].locked():
+                    # Locks are O(1) at the head; if the head is busy, scan
+                    # for the first free lock to evict.
+                    freed = False
+                    for candidate_id, candidate_lock in list(locks.items()):
+                        if not candidate_lock.locked():
+                            del locks[candidate_id]
+                            freed = True
+                            break
+                    if not freed:
+                        break
+                else:
+                    del locks[oldest_id]
         elif isinstance(locks, OrderedDict):
             locks.move_to_end(user_id)
         return lock
@@ -405,6 +422,26 @@ class MessageHandler:
 
         self.logger.info("Worker started. Listening for messages...")
 
+        async def _periodic_reclaim() -> None:
+            """Reclaim pending (crashed/un-ACKed) messages while running."""
+            interval = float(
+                getattr(self.config, "RECLAIM_PENDING_INTERVAL_SECONDS", 60) or 60
+            )
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
+                    if reclaimed:
+                        self.logger.info(
+                            f"Reclaimed {len(reclaimed)} pending messages from crashed consumers"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"Periodic pending reclaim failed: {e}")
+
+        reclaim_task = asyncio.create_task(_periodic_reclaim())
+        self._worker_tasks.add(reclaim_task)
+        reclaim_task.add_done_callback(self._worker_tasks.discard)
+
         try:
             async for msg in consumer:
                 task = asyncio.create_task(self._process_message_guarded(msg))
@@ -500,6 +537,15 @@ class MessageHandler:
             if self._incoming_consumer:
                 await self._incoming_consumer.ack(msg)
             return
+
+        # Acquire the atomic PostgreSQL busy-guard before processing (restart-safe
+        # idempotency). Released in the finally block below via
+        # clear_user_processing_state. Best-effort: a state-layer hiccup must not
+        # drop the message — the in-memory lock still orders per-user work.
+        try:
+            await self.db_repo.set_user_processing_state(user_id, "processing")
+        except Exception:
+            self.logger.warning(f"Failed to set processing state for user {user_id}")
 
         try:
             is_admin = await self.premium_mgr.is_admin_user(user_id)
@@ -760,10 +806,18 @@ class MessageHandler:
                     "content": "Hệ thống đang bận, vui lòng thử lại sau! 😓",
                     "reference_message_id": payload.get('message_id')
                 }, user_id)
+                # The intentional fallback busy reply was published, so the user
+                # got a deliverable response — the message may be ACKed.
+                if self._incoming_consumer:
+                    await self._incoming_consumer.ack(msg)
             except Exception:
-                pass
-            if self._incoming_consumer:
-                await self._incoming_consumer.ack(msg)
+                # Both the main reply and the busy-reply publish failed. Leave
+                # the message un-ACKed so it stays in the PEL for reclaim
+                # (at-least-once), instead of silently dropping it.
+                self.logger.warning(
+                    f"Failed to publish busy reply for user {user_id}; "
+                    "leaving message un-ACKed for reclaim"
+                )
         finally:
             if user_id:
                 try:

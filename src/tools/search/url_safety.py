@@ -88,6 +88,7 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                     return True, ""
                 return False, f"Could not resolve hostname '{hostname}'"
 
+            pinned_ip = None
             for _, _, _, _, sockaddr in addr_info:
                 ip_str = sockaddr[0]
                 ip = ipaddress.ip_address(ip_str)
@@ -99,6 +100,9 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                     return False, f"Targeting link-local/cloud metadata address ({ip}) is not allowed"
                 if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
                     return False, f"Targeting restricted address ({ip}) is not allowed"
+                if pinned_ip is None:
+                    pinned_ip = ip_str
+            return True, pinned_ip or ""
         except socket.gaierror:
             if bool(os.environ.get("PYTEST_CURRENT_TEST")):
                 return True, ""
@@ -109,4 +113,25 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
     return True, ""
 
 
-__all__ = ["is_safe_url"]
+def build_pinned_request(url: str, pinned_ip: str) -> Tuple[str, dict]:
+    """Build ``(connectable_url, extra_headers)`` for a request that dials
+    ``pinned_ip`` directly instead of re-resolving the URL's hostname. The
+    original Host header is preserved so virtual-host routing still works.
+    If ``pinned_ip`` is empty (e.g. IP literals, RFC test domains), the URL is
+    returned unchanged with no extra headers.
+    """
+    if not pinned_ip:
+        return url, {}
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.hostname:
+        return url, {}
+    ip_for_netloc = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
+    port = parsed.port
+    netloc = f"{ip_for_netloc}:{port}" if port is not None else ip_for_netloc
+    connectable = urllib.parse.urlunparse(
+        (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
+    )
+    return connectable, {"Host": parsed.hostname}
+
+
+__all__ = ["is_safe_url", "build_pinned_request"]

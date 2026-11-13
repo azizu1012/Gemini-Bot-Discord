@@ -1,4 +1,5 @@
 """Offline tests for ToolsManager — tool dispatch, config loaders, mention tracking."""
+import asyncio
 import sys
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -135,6 +136,17 @@ def test_call_web_search_uses_subtask_client():
     result = _await(mgr.call_tool(_fn("web_search", {"query": "a b c"}), "u1"))
     assert result == "subtask result"
     sub.search_subtask_client.request_search.assert_awaited_once()
+
+def test_call_web_search_subtask_timeout_uses_inline_fallback():
+    mgr, sub = make_manager()
+    mgr.search_subtasks_enabled = True
+    sub.search_subtask_client.request_search = AsyncMock(side_effect=asyncio.TimeoutError())
+    result = _await(mgr.call_tool(_fn("web_search", {"query": "weather today"}), "u1"))
+    # On timeout the inline fallback is the single execution path, not a double run.
+    assert result == "search results"
+    sub.search_subtask_client.request_search.assert_awaited_once()
+    sub.search_engine.run_search_apis.assert_awaited_once_with("weather today", "general")
+    sub.db_repo.log_web_search.assert_awaited_once()
 
 
 def test_call_get_weather():

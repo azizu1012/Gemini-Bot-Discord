@@ -264,3 +264,30 @@ Không migrate vì:
 4. **Rủi ro đã đo, lợi ích chưa thấy.** Biến thể 1-model multi-pass của ADK còn lộ lỗi cấu trúc (pass cuối trả lời nhầm meta-prompt thay vì câu user); 2-tier hiện tại neo đáp án tốt hơn.
 
 Giữ pipeline hiện tại; đầu tư vào đường tắt EASY (NLP gate) thay vì thay core loop. Chi tiết so sánh xem `docs/operations.md` (Session 18) và `tests/test_nlp_gate.py`.
+
+## Mở rộng (Scale-out) — ràng buộc một replica
+
+Hệ thống hiện tại chạy như **một tiến trình đơn** (single process): `run_bot.py` khởi động `bot_core` (gateway), `message_handler` (worker) và tùy chọn `SearchSubtaskWorker` trong cùng một vòng lặp `asyncio` (`run_bot_only`). Đã có sẵn một Redis lock `azuris:worker:instance-lock` (`_acquire_worker_lock`, NX EX) chặn việc khởi động worker thứ hai — phần xác nhận ràng buộc một replica.
+
+### Vì sao không thể chạy nhiều replica trên cùng consumer group
+
+Mọi invariant "một user, một luồng xử lý" hiện tại là **process-local**:
+
+- **Per-user ordering lock**: `_get_user_lock` trong `message_handler.py` dùng `asyncio.Lock` trong bộ nhớ của tiến trình (`self._user_locks`). Hai replica sẽ không chia sẻ lock này → hai message của cùng một user có thể được xử lý song song trên hai replica, phá vỡ thứ tự trả lời.
+- **In-memory cache**: `CacheManager` (RAM KV cache TTL/LRU) là singleton trong tiến trình; mỗi replica có bản sao riêng → cache incoherence (miss/out-of-date giữa các replica).
+- **Outgoing queue**: `_outgoing_sender_loop` trong `bot_core.py` (queue tuần tự tránh rate limit) nằm trong tiến trình gateway; nhiều replica cùng consume `discord-outgoing` sẽ gửi xen kẽ/trùng, phá vỡ điều tiết rate limit.
+- **User processing state**: bảng `user_processing_states` dùng atomic `UPDATE ... WHERE is_busy = false` — đúng cho single-writer; nếu nhiều replica cùng chạy, cần khóa phân tán để tránh race.
+
+### Lộ trình scale-out (khi cần)
+
+Để thêm replica mà không phá invariant, cần đưa các cơ chế trên về dạng **distributed**:
+
+1. **Distributed lock per-user**: thay `asyncio.Lock` bằng khóa phân tán dựa trên Redis (`SET NX EX`) hoặc atomic state Postgres qua `set_user_processing_state` (`src/database/mixins/state.py`) — giữ nguyên semantics "một user chỉ một luồng xử lý".
+2. **Shared cache**: thay `CacheManager` RAM bằng cache dùng chung (ví dụ Redis) hoặc cơ chế invalidation chéo.
+3. **Outgoing ordering**: tách gateway điều tiết rate limit ra khỏi worker, hoặc dùng producer key-ordering để bảo toàn thứ tự gửi.
+
+Cơ chế Redis claim/dedup hiện có (`reclaim_pending()`/XCLAIM trên `discord-incoming`/`discord-outgoing`, ACK chỉ sau khi publish thành công) đã sẵn sàng cho mô hình nhiều consumer trên cùng group; phần còn thiếu là các khóa/cache nêu trên.
+
+### Khuyến nghị
+
+Giữ nguyên **replicas: 1** cho đến khi các invariant trên được đưa về dạng phân tán. Không scale-out trước khi distributed lock + shared cache + outgoing ordering sẵn sàng.

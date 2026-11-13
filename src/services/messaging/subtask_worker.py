@@ -30,7 +30,7 @@ class SearchSubtaskWorker:
         try:
             async for msg in consumer:
                 payload = msg.value or {}
-                asyncio.create_task(self._process_subtask(payload))
+                asyncio.create_task(self._process_subtask(consumer, msg, payload))
         except asyncio.CancelledError:
             self.logger.info("SearchSubtaskWorker task cancelled")
             raise
@@ -39,7 +39,9 @@ class SearchSubtaskWorker:
         finally:
             await self.shutdown()
 
-    async def _process_subtask(self, payload: Dict[str, Any]) -> None:
+    async def _process_subtask(
+        self, consumer, msg, payload: Dict[str, Any]
+    ) -> None:
         correlation_id = str(payload.get("correlation_id") or "")
         query = str(payload.get("query") or "").strip()
         mode = str(payload.get("mode") or "general").strip() or "general"
@@ -64,7 +66,11 @@ class SearchSubtaskWorker:
             "error": error_text,
         }
 
-        await self.kafka_service.publish("search-results", payload=response_payload, key=user_id or correlation_id)
+        published = await self.kafka_service.publish(
+            "search-results", payload=response_payload, key=user_id or correlation_id
+        )
+        if published:
+            await consumer.ack(msg)
 
     async def shutdown(self) -> None:
         await self.kafka_service.stop()

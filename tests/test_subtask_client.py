@@ -29,9 +29,15 @@ def make_client(kafka=None):
 
 
 @pytest.mark.asyncio
-async def test_init_generates_group_id():
+async def test_init_uses_stable_group_id():
     client, _ = make_client()
-    assert client.group_id.startswith("azuris_search_results_")
+    assert client.group_id == "azuris_search_results"
+
+@pytest.mark.asyncio
+async def test_init_generates_same_group_id_for_separate_instances():
+    client1, _ = make_client()
+    client2, _ = make_client()
+    assert client1.group_id == client2.group_id
 
 
 @pytest.mark.asyncio
@@ -127,7 +133,7 @@ async def test_request_search_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_request_search_timeout_returns_none(monkeypatch):
+async def test_request_search_timeout_raises(monkeypatch):
     client, kafka = make_client()
     kafka.start_producer = AsyncMock()
     kafka.start_consumer = AsyncMock(return_value=MagicMock())
@@ -139,8 +145,10 @@ async def test_request_search_timeout_returns_none(monkeypatch):
     monkeypatch.setattr(asyncio, "wait_for", fake_wait_for)
     kafka.publish = AsyncMock(return_value=True)
 
-    result = await client.request_search("u1", "query", timeout=1)
-    assert result is None
+    with pytest.raises(asyncio.TimeoutError):
+        await client.request_search("u1", "query", timeout=1)
+    # The pending future must be cleaned up so a late result can't be delivered.
+    assert client._pending == {}
 
 
 @pytest.mark.asyncio

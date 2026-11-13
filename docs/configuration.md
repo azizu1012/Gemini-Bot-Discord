@@ -35,6 +35,7 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `CITY` | Thành phố mặc định tra cứu thời tiết |
 | `SEARCH_PARALLEL_STREAMS` | Số luồng search song song (1–2, mặc định 1). Biến cũ `GOOGLE_SEARCH_STREAMS` vẫn được đọc |
 | `SEARCH_FALLBACK_PROVIDER_LIMIT` | Số provider fallback tối đa khi search fail (mặc định 2) |
+| `AZURIS_SEARCH_RESULTS_GROUP` | Tên Redis consumer group cố định cho luồng kết quả subtask (mặc định `azuris_search_results`). Dùng giá trị cố định để tránh orphaned group mỗi lần restart |
 
 ### Rate Limit & Anti-Spam
 
@@ -67,6 +68,7 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `FINAL_CONTINUATION_MAX_CALLS` | 5 | 1-8 |
 | `MAX_SEARCH_CALLS_PER_TURN` | 5 | 1-20 |
 | `MIN_FREE_SPACE_MB` | 100 | Ngưỡng dọn file upload cũ |
+| `RECLAIM_PENDING_INTERVAL_SECONDS` | 60 | 10-3600 (chu kỳ reclaim tin pending mỗi 60s) |
 
 ### NLP gate (hằng số code trong `src/core/nlp_gate.py`, không env)
 

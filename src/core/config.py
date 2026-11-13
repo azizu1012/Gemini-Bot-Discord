@@ -139,6 +139,7 @@ class Config:
 
         # --- PRODUCTION STABILITY TUNING ---
         self.MAX_CONCURRENT_MESSAGES = self._get_int("MAX_CONCURRENT_MESSAGES", 3, min_value=1, max_value=10)
+        self.RECLAIM_PENDING_INTERVAL_SECONDS = self._get_int("RECLAIM_PENDING_INTERVAL_SECONDS", 60, min_value=10, max_value=3600)
         self.REASONING_MAX_API_RETRIES = self._get_int("REASONING_MAX_API_RETRIES", 5, min_value=1, max_value=6)
         self.REASONING_MAX_LOOPS = self._get_int("REASONING_MAX_LOOPS", 3, min_value=1, max_value=6)
         self.FINAL_MAX_API_RETRIES = self._get_int("FINAL_MAX_API_RETRIES", 3, min_value=1, max_value=6)

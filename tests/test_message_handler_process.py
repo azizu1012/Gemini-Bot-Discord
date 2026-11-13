@@ -35,6 +35,7 @@ def make_handler():
     h._image_download_sem = asyncio.Semaphore(1)
     h.kafka_service = MagicMock()
     h.db_repo.clear_user_processing_state = AsyncMock()
+    h.db_repo.set_user_processing_state = AsyncMock(return_value=None)
     return h
 
 

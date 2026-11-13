@@ -180,12 +180,23 @@ class ToolsManager:
                     num_intents = len(intents) if intents else 1
                     dynamic_timeout = max(self.search_subtask_timeout_seconds, num_intents * 8)
                     self.logger.info(f"Dynamic timeout calculated: {dynamic_timeout}s for {num_intents} intents.")
-                    subtask_result = await self.search_subtask_client.request_search(
-                        user_id=user_id,
-                        query=query,
-                        mode="general",
-                        timeout=dynamic_timeout,
-                    )
+                    try:
+                        subtask_result = await self.search_subtask_client.request_search(
+                            user_id=user_id,
+                            query=query,
+                            mode="general",
+                            timeout=dynamic_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        # The subtask timed out and may still be in-flight. Treat the
+                        # inline fallback as the single execution path and ignore any
+                        # late-arriving subtask result so the query is never executed
+                        # twice. The client already discarded its pending future.
+                        self.logger.warning(
+                            f"Search subtask timed out after {dynamic_timeout}s; "
+                            "running inline fallback as the single execution path."
+                        )
+                        subtask_result = None
                     if subtask_result:
                         result = subtask_result
 

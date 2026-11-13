@@ -80,6 +80,55 @@ def _mask_database_url(database_url: str) -> str:
         return "<masked>"
 
 
+_WORKER_LOCK_KEY = "azuris:worker:instance-lock"
+_WORKER_LOCK_VALUE = os.getenv("AZURIS_INSTANCE_ID") or str(os.getpid())
+
+
+async def _acquire_worker_lock(config):
+    """Acquire a Redis lock (NX EX) representing the single worker instance.
+
+    Returns a callable that releases the lock, or None if the lock was not
+    acquired (either it is held by another instance, or Redis is unavailable and
+    we proceed fail-open for local dev).
+    """
+    try:
+        import redis.asyncio as aioredis
+
+        redis_client = aioredis.from_url(config.REDIS_URL, decode_responses=True)
+    except Exception as e:
+        logger.warning(f"Redis unavailable for worker lock ({e}); proceeding fail-open.")
+        return None
+
+    try:
+        acquired = await redis_client.set(_WORKER_LOCK_KEY, _WORKER_LOCK_VALUE, nx=True, ex=3600)
+        if not acquired:
+            logger.error(
+                "Another worker instance appears to be running (Redis lock "
+                f"'{_WORKER_LOCK_KEY}' is held). Refusing to start a second worker "
+                "to preserve per-user ordering and cache coherence."
+            )
+            await redis_client.close()
+            sys.exit(1)
+        logger.info("Acquired single-worker Redis lock.")
+    except Exception as e:
+        logger.warning(f"Could not acquire worker lock ({e}); proceeding fail-open.")
+        await redis_client.close()
+        return None
+
+    async def _release():
+        try:
+            # Only release if we still own the lock.
+            owned = await redis_client.get(_WORKER_LOCK_KEY)
+            if owned == _WORKER_LOCK_VALUE:
+                await redis_client.delete(_WORKER_LOCK_KEY)
+        except Exception as e:
+            logger.warning(f"Failed to release worker lock ({e}).")
+        finally:
+            await redis_client.close()
+
+    return _release
+
+
 async def run_bot_only(config):
     """Run bot without web server."""
     bot_core = None
@@ -87,8 +136,11 @@ async def run_bot_only(config):
     worker_task = None
     search_worker = None
     search_task = None
+    release_worker_lock = None
 
     try:
+        release_worker_lock = await _acquire_worker_lock(config)
+
         bot_core = BotCore(config)
         logger.info("BotCore initialized")
 
@@ -135,6 +187,9 @@ async def run_bot_only(config):
 
         if bot_core is not None:
             await bot_core.shutdown()
+
+        if release_worker_lock is not None:
+            await release_worker_lock()
 
 
 def main():
