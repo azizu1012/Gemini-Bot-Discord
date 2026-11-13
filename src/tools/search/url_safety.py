@@ -88,9 +88,9 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                     return True, ""
                 return False, f"Could not resolve hostname '{hostname}'"
 
-            pinned_ip = None
+            pinned_ip: str = ""
             for _, _, _, _, sockaddr in addr_info:
-                ip_str = sockaddr[0]
+                ip_str = str(sockaddr[0])
                 ip = ipaddress.ip_address(ip_str)
                 if ip.is_loopback:
                     return False, f"Targeting loopback address ({ip}) is not allowed"
@@ -100,9 +100,9 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                     return False, f"Targeting link-local/cloud metadata address ({ip}) is not allowed"
                 if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
                     return False, f"Targeting restricted address ({ip}) is not allowed"
-                if pinned_ip is None:
+                if not pinned_ip:
                     pinned_ip = ip_str
-            return True, pinned_ip or ""
+            return True, pinned_ip
         except socket.gaierror:
             if bool(os.environ.get("PYTEST_CURRENT_TEST")):
                 return True, ""
