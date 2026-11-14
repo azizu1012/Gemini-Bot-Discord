@@ -41,12 +41,26 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 
 | Biến | Mặc định | Mô tả |
 |------|----------|-------|
+| `CHAT_LIMITS_ENABLED` | `true` | Đặt `false` để tắt anti-spam, rate limit và giới hạn DM/ngày; không đọc/ghi bộ đếm Redis |
 | `SPAM_THRESHOLD` | `3` | Số tin nhắn spam tối đa trong window |
 | `SPAM_WINDOW` | `30` | Cửa sổ thời gian (giây) |
 | `DEFAULT_RATE_LIMIT` | `10/60` | 10 messages / 60s |
 | `PREMIUM_RATE_LIMIT` | `20/60` | 20 messages / 60s |
 | `DEFAULT_DM_LIMIT` | `5` | DM tối đa/ngày (free user) |
 | `PREMIUM_DM_LIMIT` | `15` | DM tối đa/ngày (premium) |
+
+Các giới hạn áp dụng cho tin nhắn DM và tin nhắn mention bot, trước khi xếp hàng xử lý.
+Admin và Moderator (cả cấu hình tĩnh lẫn role trong DB) được miễn các giới hạn này.
+Redis dùng bộ đếm nguyên tử dùng chung giữa các tiến trình: kiểm tra anti-spam → rate limit → DM.
+Mỗi bước đếm cả lần thử bị từ chối tại bước đó; bước sau chỉ đếm khi bước trước cho phép.
+Tin nhắn bị chặn vì bot đang bận cũng tính vào giới hạn. Tin nhắn server không mention bot không tính.
+Anti-spam và rate limit dùng cửa sổ cố định bắt đầu từ lần thử đầu tiên; các lần thử sau không gia hạn cửa sổ.
+Giới hạn DM đặt lại lúc 00:00 UTC. Khi Redis lỗi, bot yêu cầu thử lại thay vì bỏ qua giới hạn.
+
+Giới hạn **50 messages/ngày** hiện có của Free User vẫn được worker kiểm tra từ lịch sử PostgreSQL,
+cho tổng tin nhắn chat (DM + server). Giới hạn DM **5/ngày** là giới hạn bổ sung, không thay thế 50/ngày.
+Premium không có trần chat tổng mỗi ngày nhưng vẫn chịu anti-spam, rate limit và **15 DM/ngày**.
+Với mặc định 3 tin/30s, anti-spam có thể chặn trước mức 10/60s hoặc 20/60s; mọi giới hạn đều phải thỏa.
 
 ### Phân quyền tĩnh
 
@@ -222,7 +236,7 @@ PostgreSQL 16, database `azuris` (trong Docker: service `postgres`, cổng nội
 |---------|----------|-------|----------|
 | Admin | .env (tĩnh) + admin_users (động) | Toàn quyền | Không |
 | Moderator | .env (tĩnh) + moderator_users (động) | health_check, endpoint (xem) | Không reset-all, moderator, premium add |
-| Premium | premium_users (động) | Chat unlimited, imagine | Không quyền quản trị |
+| Premium | premium_users (động) | Chat không trần tổng/ngày, imagine | Anti-spam, rate limit, 15 DM/ngày; không quyền quản trị |
 | Free User | Mặc định | 50 messages/ngày | Không imagine |
 
 ### Cơ chế bảo vệ

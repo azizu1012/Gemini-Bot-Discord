@@ -264,6 +264,16 @@ class RedisStreamService:
             self.logger.warning(f"Failed to claim incoming message {message_id}: {e}")
             return True
 
+    async def increment_counter(self, key: str, ttl_seconds: int) -> int:
+        """Atomically increment an expiring counter without extending its window."""
+        if self._redis is None:
+            raise RuntimeError("Redis not connected")
+        async with self._redis.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, max(1, int(ttl_seconds)), nx=True)
+            result = await pipe.execute()
+        return int(result[0])
+
     async def stop(self) -> None:
         """Stop all consumers and close Redis connection."""
         self.logger.info(f"Stopping RedisStreamService for {self.client_id}...")

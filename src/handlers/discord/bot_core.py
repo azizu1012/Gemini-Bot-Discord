@@ -2,7 +2,7 @@ import asyncio
 import random
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import discord
@@ -105,6 +105,36 @@ class BotCore:
             return True
         return await self.db_repo.is_moderator_user(str(user_id))
 
+    async def _chat_limit_reply(self, user_id: str, *, is_dm: bool) -> Optional[str]:
+        if not self.config.CHAT_LIMITS_ENABLED:
+            return None
+        # Keep the existing unlimited admin/moderator tiers, including DB roles.
+        if await self._is_admin_user(user_id) or await self._is_moderator_user(user_id):
+            return None
+        premium = await self.db_repo.is_premium_user(user_id)
+        prefix = f"azuris:chat-limits:{user_id}"
+        spam_window = self.config.SPAM_WINDOW
+        count = await self.kafka_service.increment_counter(f"{prefix}:spam", spam_window)
+        if count > self.config.SPAM_THRESHOLD:
+            return f"Bạn nhắn quá nhanh rồi. Vui lòng thử lại sau {spam_window} giây nhé! ⏳"
+
+        rate = self.config.PREMIUM_RATE_LIMIT if premium else self.config.DEFAULT_RATE_LIMIT
+        limit, window = (int(part) for part in rate.split("/"))
+        count = await self.kafka_service.increment_counter(f"{prefix}:rate:{window}", window)
+        if count > limit:
+            return f"Bạn đã sử dụng hết giới hạn tin nhắn ({limit}/{window}s). Vui lòng thử lại sau nhé! ⏳"
+
+        if is_dm:
+            limit = self.config.PREMIUM_DM_LIMIT if premium else self.config.DEFAULT_DM_LIMIT
+            now = datetime.now(timezone.utc)
+            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            count = await self.kafka_service.increment_counter(
+                f"{prefix}:dm:{now.date().isoformat()}", int((midnight - now).total_seconds()) + 1
+            )
+            if count > limit:
+                return f"Bạn đã sử dụng hết giới hạn DM hôm nay ({limit}/{limit}). Vui lòng thử lại vào ngày mai nhé! 🛑"
+        return None
+
     def _build_voice_lock_manager(self) -> Optional[VoiceLockManager]:
         try:
             owner_id = int(self.config.ADMIN_ID)
@@ -126,7 +156,7 @@ class BotCore:
             return []
         channels = []
         for ch in interaction.guild.channels:
-            if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+            if isinstance(ch, discord.VoiceChannel):
                 prefix = "🔒 " if ch.id in lm.locked_channels else ""
                 name = f"{prefix}{ch.name}"
                 if current.lower() in name.lower():
@@ -949,6 +979,16 @@ class BotCore:
             is_mentioned = self.bot.user in message.mentions
 
             if not is_dm and not is_mentioned:
+                return
+
+            try:
+                limit_reply = await self._chat_limit_reply(user_id, is_dm=is_dm)
+            except Exception as e:
+                self.logger.error(f"Chat limit check failed for {user_id}: {e}")
+                await message.reply("🚨 Hệ thống Redis đang lỗi. Vui lòng thử lại sau.", mention_author=False)
+                return
+            if limit_reply:
+                await message.reply(limit_reply, mention_author=False)
                 return
 
             import time
