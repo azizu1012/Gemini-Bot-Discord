@@ -213,7 +213,7 @@ python -m pytest -q
 python -m compileall -q src scripts tests
 ```
 
-The CI workflow runs compilation, PostgreSQL/Redis-backed tests, and the secret scan on every pull request.
+CI runs Ruff, mypy, compilation, and offline, mock-only tests on Python 3.13; no PostgreSQL or Redis services are needed. A separate workflow scans for secrets on every pull request. The Docker runtime uses Python 3.12.
 
 ## Security Notes
 
@@ -234,6 +234,8 @@ The CI workflow runs compilation, PostgreSQL/Redis-backed tests, and the secret 
 - [README.vi.md](README.vi.md) — Vietnamese documentation
 
 ## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for offline development setup, checks, and private security reporting.
 
 1. Create a focused branch from main.
 2. Add or update tests in tests/.

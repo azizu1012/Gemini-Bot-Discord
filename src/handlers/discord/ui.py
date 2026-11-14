@@ -494,12 +494,23 @@ class EndpointConfigModal(discord.ui.Modal, title="Cấu hình Endpoint"):
 class EndpointConfigFlow:
     """Điều phối /endpoint config: SDK → modal URL/Key → validate + fetch models → picker 3 slot → lưu DB."""
 
-    def __init__(self, *, gateway, resolver, db_repo, config, admin_user_id: str):
+    def __init__(self, *, gateway, resolver, db_repo, config, admin_user_id: str, is_admin_user=None):
         self.gateway = gateway
         self.resolver = resolver
         self.db_repo = db_repo
         self.config = config
         self.admin_user_id = admin_user_id
+        self.is_admin_user = is_admin_user or self._is_admin_user
+
+    async def _is_admin_user(self, user_id: str) -> bool:
+        return user_id in getattr(self.config, "ADMIN_USER_IDS", []) or await self.db_repo.is_admin_user(user_id)
+
+    async def require_admin(self, interaction: discord.Interaction, *, deferred: bool = False) -> bool:
+        if await self.is_admin_user(str(interaction.user.id)):
+            return True
+        sender = interaction.followup.send if deferred else interaction.response.send_message
+        await sender("❌ Lệnh này chỉ dành cho owner đã cấu hình.", ephemeral=True)
+        return False
 
     async def start(self, interaction: discord.Interaction) -> None:
         await interaction.followup.send(
@@ -513,6 +524,8 @@ class EndpointConfigFlow:
         await interaction.response.send_modal(EndpointConfigModal(flow=self, sdk=sdk, default_url=default_url))
 
     async def configure(self, interaction: discord.Interaction, sdk: str, base_url: str, api_key: str) -> None:
+        if not await self.require_admin(interaction):
+            return
         base_url = normalize_base_url(sdk, base_url)
         url_ok, url_error = validate_endpoint_url(base_url)
         if not url_ok:
@@ -567,7 +580,9 @@ class EndpointConfigFlow:
             return
 
         encrypted = encrypt_api_key(api_key, fernet_key)
-        updated_by = f"admin:{self.admin_user_id}"
+        updated_by = f"admin:{interaction.user.id}"
+        if not await self.require_admin(interaction, deferred=True):
+            return
         try:
             await self.db_repo.save_endpoint_config(sdk, base_url, encrypted, slots, updated_by)
         except Exception:

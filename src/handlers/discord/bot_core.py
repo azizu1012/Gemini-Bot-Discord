@@ -268,7 +268,7 @@ class BotCore:
             whitelist = lm.load_whitelist()
             for channel_id in list(lm.locked_channels):
                 channel = self.bot.get_channel(channel_id)
-                if not isinstance(channel, discord.VoiceChannel):
+                if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                     lm.locked_channels.discard(channel_id)
                     lm.save_locked_channels()
                     if channel_id in lm.enforced_names:
@@ -963,7 +963,7 @@ class BotCore:
             if message.author.bot:
                 return
 
-            if self.room_lock_service and isinstance(message.channel, discord.VoiceChannel):
+            if self.room_lock_service and isinstance(message.channel, (discord.VoiceChannel, discord.StageChannel)):
                 if self.room_lock_service.is_locked(message.channel.id) and not self.room_lock_service.is_allowed(message.author.id):
                     try:
                         await message.delete()
@@ -1141,7 +1141,7 @@ class BotCore:
 
             if after.id in lm.ignore_next_updates:
                 return
-            if not isinstance(after, discord.VoiceChannel) or after.id not in lm.locked_channels:
+            if not isinstance(after, (discord.VoiceChannel, discord.StageChannel)) or after.id not in lm.locked_channels:
                 return
 
             is_bot_edit = False

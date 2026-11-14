@@ -193,7 +193,8 @@ async def test_on_voice_state_update_no_lock_manager():
 
 
 @pytest.mark.asyncio
-async def test_on_guild_channel_update_anti_edit():
+@pytest.mark.parametrize("channel_type", [discord.VoiceChannel, discord.StageChannel])
+async def test_on_guild_channel_update_anti_edit(channel_type):
     bc = make_bc()
     bc.bot.user.id = 1
     bc.voice_lock_manager = MagicMock()
@@ -204,7 +205,7 @@ async def test_on_guild_channel_update_anti_edit():
     bc.bot.loop.create_task = MagicMock()
 
     events = _capture_events(bc)
-    after = MagicMock(spec=discord.VoiceChannel)
+    after = MagicMock(spec=channel_type)
     after.id = 100
     after.name = "renamed"
     after.guild = MagicMock()
@@ -401,9 +402,10 @@ async def test_on_ready_full_flow(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_on_message_locked_voice_channel_deletes():
+@pytest.mark.parametrize("channel_type", [discord.VoiceChannel, discord.StageChannel])
+async def test_on_message_locked_voice_channel_deletes(channel_type):
     bc = make_bc()
-    v_channel = MagicMock(spec=discord.VoiceChannel)
+    v_channel = MagicMock(spec=channel_type)
     v_channel.id = 555
     bc.room_lock_service = MagicMock()
     bc.room_lock_service.is_locked = MagicMock(return_value=True)
