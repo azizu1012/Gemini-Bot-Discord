@@ -337,8 +337,13 @@ class SecretRedactionTests(unittest.IsolatedAsyncioTestCase):
             gateway=SimpleNamespace(list_models_for=AsyncMock(side_effect=RuntimeError(self.diagnostic))),
             resolver=None, db_repo=None,
             config=SimpleNamespace(DONATE_ENCRYPTION_KEY="", ALLOW_PLAINTEXT_ENDPOINT_KEYS=True), admin_user_id="1",
+            is_admin_user=AsyncMock(return_value=True),
         )
-        interaction = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()))
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id="1"),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
         with patch("src.handlers.discord.ui.validate_endpoint_url", return_value=(True, "")), \
                 self.assertLogs("src.handlers.discord.ui", level=logging.ERROR) as logs:
             await flow.configure(interaction, "genai", "https://alice:password@router.org/?key=query-secret", self.secret)
@@ -353,9 +358,14 @@ class SecretRedactionTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=RuntimeError(self.diagnostic + "\nencrypted-secret")
             )),
             config=SimpleNamespace(DONATE_ENCRYPTION_KEY="", ALLOW_PLAINTEXT_ENDPOINT_KEYS=True), admin_user_id="1",
+            is_admin_user=AsyncMock(return_value=True),
         )
         flow.run_slot_pickers = AsyncMock(return_value={"final": "m"})
-        interaction = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()), followup=SimpleNamespace(send=AsyncMock()))
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id="1"),
+            response=SimpleNamespace(defer=AsyncMock()),
+            followup=SimpleNamespace(send=AsyncMock()),
+        )
         with patch("src.handlers.discord.ui.validate_endpoint_url", return_value=(True, "")), \
                 patch("src.handlers.discord.ui.encrypt_api_key", return_value="encrypted-secret"), \
                 self.assertLogs("src.handlers.discord.ui", level=logging.ERROR) as logs:
