@@ -447,6 +447,8 @@ class BotCore:
             reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
             if reclaimed:
                 self.logger.info(f"Reclaimed {len(reclaimed)} pending outgoing messages on startup")
+            for msg in reclaimed:
+                self._dispatch_outgoing(msg)
             self._consume_task = asyncio.create_task(self.consume_outgoing_loop())
         except Exception as e:
             self.logger.error(f"Failed to start BotCore Redis services: {e}")
@@ -459,17 +461,34 @@ class BotCore:
             self.logger.error("Consumer for 'discord-outgoing' not found in RedisStreamService")
             return
 
+        async def _periodic_reclaim():
+            interval = float(getattr(self.config, "RECLAIM_PENDING_INTERVAL_SECONDS", 60) or 60)
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    for msg in await consumer.reclaim_pending(min_idle_ms=30000):
+                        self._dispatch_outgoing(msg)
+                except Exception as e:
+                    self.logger.warning(f"Outgoing pending reclaim failed: {e}")
+
+        reclaim_task = asyncio.create_task(_periodic_reclaim())
         try:
             async for msg in consumer:
-                payload = msg.value
-                payload['_consumer_entry_id'] = msg.entry_id
-                task = asyncio.create_task(self.handle_outgoing_payload(payload))
-                self._pending_outgoing_tasks.add(task)
-                task.add_done_callback(self._pending_outgoing_tasks.discard)
+                self._dispatch_outgoing(msg)
         except asyncio.CancelledError:
             self.logger.info("BotCore Redis consumer loop cancelled")
         except Exception as e:
             self.logger.error(f"Error in BotCore Redis consumer loop: {e}")
+        finally:
+            reclaim_task.cancel()
+            await asyncio.gather(reclaim_task, return_exceptions=True)
+
+    def _dispatch_outgoing(self, msg) -> None:
+        payload = dict(msg.value)
+        payload['_consumer_entry_id'] = msg.entry_id
+        task = asyncio.create_task(self.handle_outgoing_payload(payload))
+        self._pending_outgoing_tasks.add(task)
+        task.add_done_callback(self._pending_outgoing_tasks.discard)
 
     def register_interaction(self, interaction_id: str, interaction: discord.Interaction) -> None:
         """Record an active interaction with a timestamp for TTL sweeping."""
@@ -629,31 +648,33 @@ class BotCore:
         if action not in ("reply", "reply_batch"):
             return
 
-        entry_id_str = payload.pop('_consumer_entry_id', None)
+        entry_id_str = payload.get('_consumer_entry_id')
 
         try:
             if action == "reply_batch":
-                await self._process_reply_batch(payload)
+                delivered = await self._process_reply_batch(payload)
             else:
-                await self._process_reply(payload)
+                delivered = await self._process_reply(payload)
         except Exception:
             raise
         else:
-            if entry_id_str and self._outgoing_consumer:
-                await self._outgoing_consumer.ack_id(entry_id_str)
+            if delivered and entry_id_str and self._outgoing_consumer:
+                if await self._outgoing_consumer.ack_id(entry_id_str) and action == "reply_batch":
+                    reply_group_id = str(payload.get("reply_group_id") or payload.get("reference_message_id") or "unknown")
+                    self._delivery_state.pop(reply_group_id, None)
 
-    async def _process_reply(self, payload: dict) -> None:
+    async def _process_reply(self, payload: dict) -> bool:
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
         if not channel_id_str:
-            return
+            return False
 
         channel_id = int(channel_id_str)
         channel = self.bot.get_channel(channel_id)
         if not channel:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
-            return
+            return False
 
         content = payload.get("content")
         if content:
@@ -679,19 +700,21 @@ class BotCore:
         )
         if sent_message:
             self._cancel_typing_task(user_id)
+            return True
+        return False
 
-    async def _process_reply_batch(self, payload: dict) -> None:
+    async def _process_reply_batch(self, payload: dict) -> bool:
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
         if not channel_id_str:
-            return
+            return False
 
         channel_id = int(channel_id_str)
         channel = self.bot.get_channel(channel_id)
         if not channel:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
-            return
+            return False
 
         self._cancel_typing_task(user_id)
 
@@ -715,7 +738,7 @@ class BotCore:
             items = [{"index": idx, "content": chunk} for idx, chunk in enumerate(chunks)]
 
         if not items:
-            return
+            return True
 
         items.sort(key=lambda x: x.get("index", 0))
         chunk_total = int(payload.get("chunk_total") or len(items))
@@ -782,7 +805,7 @@ class BotCore:
                 sent_ok = sent_message is not None
 
             if not sent_ok:
-                break
+                return False
 
             if idx == 0:
                 self._cancel_typing_task(user_id)
@@ -790,8 +813,7 @@ class BotCore:
             sent_set.add(idx)
             state["last_index"] = idx
 
-        if int(state.get("last_index", -1)) >= chunk_total - 1:
-            self._delivery_state.pop(reply_group_id, None)
+        return int(state.get("last_index", -1)) >= chunk_total - 1
 
     async def _send_message_with_retry(
         self,
@@ -815,7 +837,7 @@ class BotCore:
         except Exception as e:
             self.logger.error(
                 f"[EGRESS] Failed to {label} after {max_attempts} attempts "
-                f"(reply chunk dropped): {e}"
+                f"(reply left pending): {e}"
             )
             return None
 

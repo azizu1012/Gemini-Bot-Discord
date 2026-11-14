@@ -13,6 +13,7 @@ class _RedisMsg:
         self.value = value
         self.key = key
         self.entry_id = entry_id
+        self._claim_token: Optional[str] = None
 
 
 class RedisStreamConsumer:
@@ -101,7 +102,8 @@ class RedisStreamConsumer:
         reclaimed: list[_RedisMsg] = []
         try:
             result = await self._redis.xpending(self._stream, self._group)
-            if not result or result[0] == 0:
+            pending_count = result.get("pending", 0) if isinstance(result, dict) else result[0] if result else 0
+            if not pending_count:
                 return reclaimed
 
             entries = await self._redis.xpending_range(
@@ -128,23 +130,20 @@ class RedisStreamConsumer:
                 self._stream, self._group, self._consumer_name, min_idle_ms, msg_ids
             )
 
-            for stream_entry in claimed:
-                _ = stream_entry[0]
-                entries_list = stream_entry[1]
-                for eid, fields in entries_list:
-                    raw_key = fields.get(b'key') or fields.get('key') or b''
-                    if isinstance(raw_key, bytes):
-                        key = raw_key.decode('utf-8')
-                    else:
-                        key = str(raw_key)
-                    raw_value = fields.get(b'value') or fields.get('value')
-                    if raw_value is None:
-                        continue
-                    if isinstance(raw_value, bytes):
-                        raw_value = raw_value.decode('utf-8')
-                    value = json.loads(str(raw_value))
-                    eid_str = eid.decode('utf-8') if isinstance(eid, bytes) else str(eid)
-                    reclaimed.append(_RedisMsg(value, key, eid_str))
+            for eid, fields in claimed:
+                raw_key = fields.get(b'key') or fields.get('key') or b''
+                if isinstance(raw_key, bytes):
+                    key = raw_key.decode('utf-8')
+                else:
+                    key = str(raw_key)
+                raw_value = fields.get(b'value') or fields.get('value')
+                if raw_value is None:
+                    continue
+                if isinstance(raw_value, bytes):
+                    raw_value = raw_value.decode('utf-8')
+                value = json.loads(str(raw_value))
+                eid_str = eid.decode('utf-8') if isinstance(eid, bytes) else str(eid)
+                reclaimed.append(_RedisMsg(value, key, eid_str))
 
             self._logger.info(f"Reclaimed {len(reclaimed)} pending entries on '{self._stream}'")
         except Exception as e:
@@ -253,13 +252,17 @@ class RedisStreamService:
 
         return False
 
-    async def claim_message_once(self, message_id: str, ttl_seconds: int = 900) -> bool:
-        """Claim an incoming Discord message once across worker processes."""
+    async def claim_message_once(self, message_id: str, ttl_seconds: int = 900, *, token: str = "1") -> bool:
+        """Acquire an expiring processing lease, unless already completed."""
         if self._redis is None:
             return True
         key = f"azuris:incoming:claimed:{message_id}"
         try:
-            return bool(await self._redis.set(key, "1", nx=True, ex=max(60, int(ttl_seconds))))
+            return bool(await self._redis.eval(
+                "if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end "
+                "return redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2])",
+                2, key, f"azuris:incoming:completed:{message_id}", token, max(60, int(ttl_seconds)),
+            ))
         except Exception as e:
             self.logger.warning(f"Failed to claim incoming message {message_id}: {e}")
             return True
@@ -273,6 +276,32 @@ class RedisStreamService:
             pipe.expire(key, max(1, int(ttl_seconds)), nx=True)
             result = await pipe.execute()
         return int(result[0])
+
+    async def is_message_completed(self, message_id: str) -> bool:
+        if self._redis is None:
+            return False
+        return bool(await self._redis.exists(f"azuris:incoming:completed:{message_id}"))
+
+    async def complete_message(self, message_id: str, token: str, ttl_seconds: int = 900) -> None:
+        """Mark success only while this worker still owns the processing lease."""
+        if self._redis is not None:
+            completed = await self._redis.eval(
+                "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end "
+                "redis.call('SET', KEYS[2], '1', 'EX', ARGV[2]); "
+                "redis.call('DEL', KEYS[1]); return 1",
+                2, f"azuris:incoming:claimed:{message_id}", f"azuris:incoming:completed:{message_id}",
+                token, max(60, int(ttl_seconds)),
+            )
+            if not completed:
+                raise RuntimeError(f"Lost processing lease for message {message_id}")
+
+    async def release_message_claim(self, message_id: str, token: str) -> None:
+        """Never release a replacement worker's lease after our own lease expires."""
+        if self._redis is not None:
+            await self._redis.eval(
+                "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+                1, f"azuris:incoming:claimed:{message_id}", token,
+            )
 
     async def stop(self) -> None:
         """Stop all consumers and close Redis connection."""
