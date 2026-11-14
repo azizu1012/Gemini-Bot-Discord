@@ -1,6 +1,6 @@
 """Offline tests for the web search providers and page evidence fetcher."""
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 
 sys.path.insert(0, ".")
@@ -210,24 +210,15 @@ def test_fetcher_success_fetch(monkeypatch):
         headers = {}
         is_redirect = False
 
-    def fake_get(url, headers, timeout, allow_redirects):
-        return FakeResponse()
-
     import src.tools.search.providers.fetcher as fetcher_mod
 
-    monkeypatch.setattr(fetcher_mod.requests, "get", fake_get)
+    monkeypatch.setattr(fetcher_mod, "fetch_page_html", AsyncMock(return_value=FakeResponse.text))
     text = _await_result(fetcher.fetch_page_evidence("https://example.com/article"))
     assert "main content" in text
 
 
-def test_fetcher_follows_redirect_then_success(monkeypatch):
+def test_fetcher_parses_shared_fetch_result(monkeypatch):
     fetcher = PageEvidenceFetcher(deep_read_max_chars=400)
-
-    class RedirectResponse:
-        status_code = 302
-        text = ""
-        headers = {"Location": "/next"}
-        is_redirect = True
 
     class FinalResponse:
         status_code = 200
@@ -237,15 +228,9 @@ def test_fetcher_follows_redirect_then_success(monkeypatch):
         headers = {}
         is_redirect = False
 
-    calls = {"n": 0}
-
-    def fake_get(url, headers, timeout, allow_redirects):
-        calls["n"] += 1
-        return RedirectResponse() if calls["n"] == 1 else FinalResponse()
-
     import src.tools.search.providers.fetcher as fetcher_mod
 
-    monkeypatch.setattr(fetcher_mod.requests, "get", fake_get)
+    monkeypatch.setattr(fetcher_mod, "fetch_page_html", AsyncMock(return_value=FinalResponse.text))
     text = _await_result(fetcher.fetch_page_evidence("https://example.com/start"))
     assert "final text" in text
 

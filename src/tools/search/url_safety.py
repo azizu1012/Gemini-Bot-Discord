@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import os
 import socket
 import urllib.parse
 from typing import Tuple
+
+import aiohttp
+from aiohttp.abc import AbstractResolver, ResolveResult
 
 BLOCKED_HOSTNAMES = {
     "localhost",
@@ -65,7 +69,7 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                 return False, f"Targeting private network address ({ip}) is not allowed"
             if ip.is_link_local:
                 return False, f"Targeting link-local/cloud metadata address ({ip}) is not allowed"
-            if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            if ip.is_multicast or ip.is_reserved or ip.is_unspecified or not ip.is_global:
                 return False, f"Targeting restricted address ({ip}) is not allowed"
         return True, ""
     except ValueError:
@@ -78,7 +82,11 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
 
     if not allow_private:
         # Check RFC test/documentation domains (e.g. api.example.com in test suites)
-        if hostname_lower.endswith(RFC_TEST_DOMAINS) or hostname_lower in RFC_TEST_DOMAINS:
+        if any(
+            hostname_lower == domain.lstrip(".")
+            or hostname_lower.endswith("." + domain.lstrip("."))
+            for domain in RFC_TEST_DOMAINS
+        ):
             return True, ""
 
         try:
@@ -98,7 +106,7 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
                     return False, f"Targeting private network address ({ip}) is not allowed"
                 if ip.is_link_local:
                     return False, f"Targeting link-local/cloud metadata address ({ip}) is not allowed"
-                if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+                if ip.is_multicast or ip.is_reserved or ip.is_unspecified or not ip.is_global:
                     return False, f"Targeting restricted address ({ip}) is not allowed"
                 if not pinned_ip:
                     pinned_ip = ip_str
@@ -113,25 +121,50 @@ def is_safe_url(url: str, allow_private: bool = False) -> Tuple[bool, str]:
     return True, ""
 
 
-def build_pinned_request(url: str, pinned_ip: str) -> Tuple[str, dict]:
-    """Build ``(connectable_url, extra_headers)`` for a request that dials
-    ``pinned_ip`` directly instead of re-resolving the URL's hostname. The
-    original Host header is preserved so virtual-host routing still works.
-    If ``pinned_ip`` is empty (e.g. IP literals, RFC test domains), the URL is
-    returned unchanged with no extra headers.
+class PinnedResolver(AbstractResolver):
+    """Resolve only the validated host/IP; never perform a second DNS lookup."""
+
+    def __init__(self, hostname: str, pinned_ip: str):
+        self.hostname = hostname.encode("idna").decode("ascii").lower()
+        self.pinned_ip = pinned_ip
+
+    async def resolve(self, host: str, port: int = 0, family: int = socket.AF_INET) -> list[ResolveResult]:
+        if host.lower() != self.hostname:
+            raise OSError("Unexpected hostname for pinned connection")
+        addresses = [self.pinned_ip] if self.pinned_ip else [
+            str(info[4][0]) for info in await asyncio.to_thread(
+                socket.getaddrinfo, host, port, type=socket.SOCK_STREAM
+            )
+        ]
+        # The legacy validator can return no IP for documentation/test domains.
+        # Validate those here and fail closed, even when running under pytest.
+        ips = [ipaddress.ip_address(ip) for ip in addresses]
+        if not ips or any(
+            not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+            or ip.is_loopback or ip.is_private or ip.is_link_local
+            for ip in ips
+        ):
+            raise OSError("Target resolves to a restricted address")
+        return [ResolveResult(
+            hostname=host, host=ip, port=port,
+            family=socket.AF_INET6 if ":" in ip else socket.AF_INET,
+            proto=socket.IPPROTO_TCP, flags=socket.AI_NUMERICHOST,
+        ) for ip in dict.fromkeys(addresses)]
+
+    async def close(self) -> None:
+        pass
+
+
+def build_pinned_request(url: str, pinned_ip: str) -> Tuple[str, aiohttp.TCPConnector]:
+    """Keep the URL hostname for TLS/Host and pin DNS at the transport layer.
+
+    The returned connector must be owned by a per-hop ClientSession, preventing
+    connection pooling or DNS cache reuse across separately validated redirects.
     """
-    if not pinned_ip:
-        return url, {}
-    parsed = urllib.parse.urlparse(url)
-    if not parsed.hostname:
-        return url, {}
-    ip_for_netloc = f"[{pinned_ip}]" if ":" in pinned_ip else pinned_ip
-    port = parsed.port
-    netloc = f"{ip_for_netloc}:{port}" if port is not None else ip_for_netloc
-    connectable = urllib.parse.urlunparse(
-        (parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment)
-    )
-    return connectable, {"Host": parsed.hostname}
+    hostname = urllib.parse.urlparse(url).hostname
+    if not hostname:
+        raise ValueError("URL missing hostname")
+    return url, aiohttp.TCPConnector(resolver=PinnedResolver(hostname, pinned_ip), use_dns_cache=False)
 
 
 __all__ = ["is_safe_url", "build_pinned_request"]

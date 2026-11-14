@@ -2,6 +2,8 @@
 import sys
 from unittest.mock import MagicMock
 
+import pytest
+
 sys.path.insert(0, ".")
 
 from src.tools.search.url_safety import build_pinned_request, is_safe_url
@@ -66,6 +68,42 @@ def test_rfc_test_domain_allowed():
     assert safe is True
 
 
+@pytest.mark.parametrize("hostname", ["example.com", "api.example.com", "api.example", "api.test", "api.invalid"])
+def test_rfc_test_domain_label_boundary_allowed(monkeypatch, hostname):
+    resolve = MagicMock(side_effect=AssertionError("Test domains must not require DNS"))
+    monkeypatch.setattr("socket.getaddrinfo", resolve)
+    assert is_safe_url(f"http://{hostname}") == (True, "")
+    resolve.assert_not_called()
+
+
+@pytest.mark.parametrize("hostname", ["evilexample.com", "api.evilexample.com"])
+def test_rfc_test_domain_suffix_bypass_requires_dns(monkeypatch, hostname):
+    resolve = MagicMock(return_value=[(None, None, None, None, ("127.0.0.1", 80))])
+    monkeypatch.setattr("socket.getaddrinfo", resolve)
+    safe, err = is_safe_url(f"http://{hostname}")
+    resolve.assert_called_once_with(hostname, None)
+    assert safe is False
+    assert "loopback" in err
+
+
+def test_shared_address_space_literal_rejected():
+    safe, err = is_safe_url("http://100.64.0.1")
+    assert safe is False
+    assert "restricted" in err
+
+
+def test_dns_shared_address_space_rejected(monkeypatch):
+    resolve = MagicMock(return_value=[
+        (None, None, None, None, ("8.8.8.8", 80)),
+        (None, None, None, None, ("100.64.12.34", 80)),
+    ])
+    monkeypatch.setattr("socket.getaddrinfo", resolve)
+    safe, err = is_safe_url("http://shared-address.org")
+    resolve.assert_called_once_with("shared-address.org", None)
+    assert safe is False
+    assert "restricted" in err
+
+
 def test_allow_private_unlocks_ip():
     safe, _ = is_safe_url("http://127.0.0.1", allow_private=True)
     assert safe is True
@@ -103,21 +141,17 @@ def test_is_safe_url_ip_literal_returns_empty_ip():
     assert pinned_ip == ""
 
 # ---------------- build_pinned_request ----------------
-def test_build_pinned_request_v4_replaces_host():
-    connectable, headers = build_pinned_request("https://example.com:8443/path?q=1#frag", "8.8.8.8")
-    assert connectable == "https://8.8.8.8:8443/path?q=1#frag"
-    assert headers == {"Host": "example.com"}
-
-def test_build_pinned_request_empty_ip_returns_unchanged():
-    url = "https://example.com/path"
-    connectable, headers = build_pinned_request(url, "")
-    assert connectable == url
-    assert headers == {}
-
-def test_build_pinned_request_ipv6_bracketed_netloc():
-    connectable, headers = build_pinned_request("https://example.com/path", "::1")
-    assert connectable == "https://[::1]/path"
-    assert headers == {"Host": "example.com"}
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ip", ["8.8.8.8", "2606:4700:4700::1111", ""])
+async def test_build_pinned_request_preserves_hostname(ip):
+    url = "https://example.com:8443/path?q=1#frag"
+    request_url, connector = build_pinned_request(url, ip)
+    try:
+        assert request_url == url
+        assert connector._ssl is True
+        assert connector._resolver.pinned_ip == ip
+    finally:
+        await connector.close()
 
 
 def test_dns_private_ips_rejected(monkeypatch):

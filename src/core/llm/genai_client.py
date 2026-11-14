@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types as genai_types
 
 from src.core.llm.base import LLMError, LLMResponse, classify_error
+from src.core.llm.redaction import redact_diagnostic
 
 DEFAULT_GENAI_BASE_URL = "https://generativelanguage.googleapis.com"
 
@@ -255,7 +256,7 @@ class GenAIClient:
                 config=config,
             )
         except Exception as e:
-            raise LLMError(classify_error(e), str(e), raw=e) from e
+            raise LLMError(classify_error(e), redact_diagnostic(e, (self.api_key,))) from None
         return LLMResponse(candidates=list(response.candidates or []), raw=response)
 
     async def _generate_custom_endpoint(
@@ -294,12 +295,12 @@ class GenAIClient:
             async with httpx.AsyncClient(timeout=timeout_s) as client:
                 response = await client.post(url, headers=headers, json=request_body)
             if response.is_error:
-                detail = response.text[:800]
+                detail = redact_diagnostic(response.text, (self.api_key,))[:800]
                 raise RuntimeError(f"GenAI endpoint HTTP {response.status_code}: {detail}")
             payload = response.json()
             parsed = genai_types.GenerateContentResponse.model_validate(payload)
         except Exception as e:
-            raise LLMError(classify_error(e), str(e), raw=e) from e
+            raise LLMError(classify_error(e), redact_diagnostic(e, (self.api_key,))) from None
         return LLMResponse(candidates=list(parsed.candidates or []), raw=parsed)
 
     async def list_models(self) -> List[Dict[str, str]]:
@@ -317,7 +318,7 @@ class GenAIClient:
         try:
             return await asyncio.to_thread(_list)
         except Exception as e:
-            raise LLMError(classify_error(e), str(e), raw=e) from e
+            raise LLMError(classify_error(e), redact_diagnostic(e, (self.api_key,))) from None
 
     async def close(self) -> None:
         return None

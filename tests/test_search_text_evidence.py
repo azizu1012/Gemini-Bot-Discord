@@ -1,6 +1,6 @@
 """Offline tests for search text mixin helpers and evidence fetching."""
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock
 
 
 sys.path.insert(0, ".")
@@ -224,12 +224,9 @@ def test_fetch_page_data_success(monkeypatch):
         headers = {}
         is_redirect = False
 
-    def fake_get(url, headers, timeout, allow_redirects):
-        return FakeResponse()
-
     import src.tools.search.mixins.evidence as ev_mod
 
-    monkeypatch.setattr(ev_mod.requests, "get", fake_get)
+    monkeypatch.setattr(ev_mod, "fetch_page_html", AsyncMock(return_value=FakeResponse.text))
     text, meta = _await(owner._fetch_page_data("https://example.com/article"))
     assert "main content" in text
 
@@ -245,12 +242,9 @@ def test_fetch_page_data_keeps_metadata(monkeypatch):
         headers = {}
         is_redirect = False
 
-    def fake_get(url, headers, timeout, allow_redirects):
-        return FakeResponse()
-
     import src.tools.search.mixins.evidence as ev_mod
 
-    monkeypatch.setattr(ev_mod.requests, "get", fake_get)
+    monkeypatch.setattr(ev_mod, "fetch_page_html", AsyncMock(return_value=FakeResponse.text))
     text, meta = _await(owner._fetch_page_data("https://example.com/article"))
     assert "main content" in text
     assert meta["has_verified_date"] is True
@@ -269,7 +263,7 @@ def test_fetch_page_evidence_returns_text(monkeypatch):
 
     import src.tools.search.mixins.evidence as ev_mod
 
-    monkeypatch.setattr(ev_mod.requests, "get", lambda *a, **kw: FakeResponse())
+    monkeypatch.setattr(ev_mod, "fetch_page_html", AsyncMock(return_value=FakeResponse.text))
     text = _await(owner._fetch_page_evidence("https://example.com/e"))
     assert "evidence" in text
 
@@ -330,14 +324,8 @@ def test_query_coverage_score_all_ratios():
     assert s_20 == 0.2
 
 
-def test_fetch_page_data_redirect(monkeypatch):
+def test_fetch_page_data_parses_shared_fetch_result(monkeypatch):
     owner = E()
-
-    class RedirectResp:
-        status_code = 302
-        is_redirect = True
-        headers = {"Location": "http://example.com/target"}
-        text = ""
 
     class FinalResp:
         status_code = 200
@@ -346,26 +334,16 @@ def test_fetch_page_data_redirect(monkeypatch):
         encoding = "utf-8"
         text = "<html><body><article><p>" + "evidence text " * 30 + "</p></article></body></html>"
 
-    calls = {"n": 0}
-    def fake_get(url, **kw):
-        calls["n"] += 1
-        return RedirectResp() if calls["n"] == 1 else FinalResp()
-
     import src.tools.search.mixins.evidence as ev_mod
-    monkeypatch.setattr(ev_mod.requests, "get", fake_get)
+    monkeypatch.setattr(ev_mod, "fetch_page_html", AsyncMock(return_value=FinalResp.text))
     text, meta = _await(owner._fetch_page_data("http://example.com/start"))
     assert "evidence text" in text
 
 
 def test_fetch_page_data_non_200(monkeypatch):
     owner = E()
-    class ErrResp:
-        status_code = 404
-        is_redirect = False
-        text = "Not found"
-        headers = {}
     import src.tools.search.mixins.evidence as ev_mod
-    monkeypatch.setattr(ev_mod.requests, "get", lambda *a, **kw: ErrResp())
+    monkeypatch.setattr(ev_mod, "fetch_page_html", AsyncMock(return_value=""))
     text, meta = _await(owner._fetch_page_data("http://example.com/notfound"))
     assert text == ""
 
@@ -379,38 +357,18 @@ def test_fetch_page_data_short_text_returns_meta_only(monkeypatch):
         encoding = "utf-8"
         text = '<html><head><meta name="date" content="2026-01-01"></head><body><p>short</p></body></html>'
     import src.tools.search.mixins.evidence as ev_mod
-    monkeypatch.setattr(ev_mod.requests, "get", lambda *a, **kw: ShortResp())
+    monkeypatch.setattr(ev_mod, "fetch_page_html", AsyncMock(return_value=ShortResp.text))
     text, meta = _await(owner._fetch_page_data("http://example.com/short"))
     assert text == ""
     assert meta == {}
 
-def test_fetch_page_data_dials_pinned_ip(monkeypatch):
-    # Verify the evidence fetcher dials the pinned IP (IP-URL + Host header).
+def test_fetch_page_data_uses_shared_safe_fetcher(monkeypatch):
     owner = E()
-
-    class FakeResponse:
-        status_code = 200
-        text = "<html><body><article><p>" + "pinned " * 60 + "</p></article></body></html>"
-        encoding = None
-        apparent_encoding = "utf-8"
-        headers = {}
-        is_redirect = False
-
-    captured = {}
-    def fake_get(url, headers, timeout, allow_redirects):
-        captured["url"] = url
-        captured["host_header"] = headers.get("Host")
-        return FakeResponse()
-
+    html = "<html><body><article><p>" + "pinned " * 60 + "</p></article></body></html>"
     import src.tools.search.mixins.evidence as ev_mod
 
-    # is_safe_url resolves example.net to a public IP -> pinned IP returned.
-    monkeypatch.setattr(
-        "socket.getaddrinfo",
-        MagicMock(return_value=[(None, None, None, None, ("8.8.8.8", 80))]),
-    )
-    monkeypatch.setattr(ev_mod.requests, "get", fake_get)
+    fetch_html = AsyncMock(return_value=html)
+    monkeypatch.setattr(ev_mod, "fetch_page_html", fetch_html)
     text, meta = _await(owner._fetch_page_data("https://example.net/article"))
     assert "pinned" in text
-    assert captured["url"] == "https://8.8.8.8/article"
-    assert captured["host_header"] == "example.net"
+    fetch_html.assert_awaited_once_with("https://example.net/article", text_extractor=owner._extract_main_text)

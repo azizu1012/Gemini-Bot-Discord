@@ -6,6 +6,7 @@ import json
 import io
 import re
 import tokenize
+from types import ModuleType
 from typing import Any
 
 import sympy as sp
@@ -40,11 +41,19 @@ _BLOCKED_GLOBAL_NAMES = {
     "sympify", "S", "parse_expr", "lambdify", "init_printing", "preview",
     "plot", "plot3d", "plot_implicit", "plot_parametric", "interactive",
     "session", "test", "doctest", "source", "jit",
+    # Interactive sessions, namespace mutation, dynamic imports and output helpers.
+    "init_session", "interactive_traversal", "var", "lazy_function", "public",
+    "pager_print", "pprint", "pretty_print", "pprint_try_use_unicode", "pprint_use_unicode",
+    "print_ccode", "print_fcode", "print_glsl", "print_gtk", "print_jscode",
+    "print_latex", "print_maple_code", "print_mathml", "print_python", "print_rcode", "print_tree",
+    "textplot", "plot_backends",
 }
 _GLOBAL_DICT: dict[str, Any] = {
     name: getattr(sp, name)
     for name in dir(sp)
     if not name.startswith("_") and name not in _BLOCKED_GLOBAL_NAMES
+    # Modules would expose blocked helpers again through attributes.
+    and not isinstance(getattr(sp, name), ModuleType)
 }
 _GLOBAL_DICT["__builtins__"] = {}
 
@@ -267,7 +276,9 @@ class CalculatorService:
             .replace("−", "-").replace("–", "-")
         )
 
-        if _BLOCKED_PATTERN.search(cleaned_eq):
+        if _BLOCKED_PATTERN.search(cleaned_eq) or _BLOCKED_GLOBAL_NAMES.intersection(
+            re.findall(r"\b[a-z_]\w*\b", cleaned_eq)
+        ):
             return _error(equation_str, "Biểu thức chứa thành phần không được phép.")
 
         try:
@@ -301,5 +312,5 @@ class CalculatorService:
                 {"equation": equation_str, "result": result_str, "success": True},
                 ensure_ascii=False,
             )
-        except Exception as exc:  # SymPy raises many concrete error types
+        except (Exception, SystemExit, KeyboardInterrupt) as exc:
             return _error(equation_str, str(exc))
