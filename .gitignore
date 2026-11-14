@@ -78,6 +78,7 @@ src/.runtime/kafka-data/
 
 # Graphify index (nội bộ — KHÔNG commit, KHÔNG chia sẻ ra ngoài)
 graphify-out/
+.graphifyignore
 
 # Internal project docs (AI agent handoff, not for public)
 CLAUDE.md
