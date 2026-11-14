@@ -3,6 +3,8 @@
 import asyncio
 import os
 import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -39,6 +41,7 @@ class FakeFollowup:
 
 class FakeInteraction:
     def __init__(self):
+        self.user = SimpleNamespace(id=123)
         self.response = FakeResponse()
         self.followup = FakeFollowup()
 
@@ -96,6 +99,7 @@ def _make_flow(gateway, repo, config=None):
         db_repo=repo,
         config=config or FakeConfig(),
         admin_user_id="123",
+        is_admin_user=AsyncMock(return_value=True),
     )
 
     async def fake_pickers(interaction, models):
@@ -169,6 +173,30 @@ def test_refuses_plaintext_key_without_encryption_key():
     assert repo.endpoint is None
     assert len(interaction.response.messages) == 1
     assert "DONATE_ENCRYPTION_KEY" in interaction.response.messages[0]
+
+
+def test_modal_rechecks_admin_after_pickers():
+    interaction = FakeInteraction()
+    repo = FakeRepo()
+    flow = _make_flow(FakeGateway(), repo)
+    flow.is_admin_user = AsyncMock(side_effect=[True, False])
+    asyncio.run(flow.configure(interaction, "openai", "http://127.0.0.1:58100", "key"))
+    assert repo.endpoint is None
+    assert not flow.resolver.invalidated
+    assert "owner" in interaction.followup.messages[-1]
+    assert flow.is_admin_user.await_count == 2
+
+
+def test_modal_rechecks_admin_before_network():
+    interaction = FakeInteraction()
+    gateway = FakeGateway()
+    repo = FakeRepo()
+    flow = _make_flow(gateway, repo)
+    flow.is_admin_user = AsyncMock(return_value=False)
+    asyncio.run(flow.configure(interaction, "openai", "http://127.0.0.1:58100", "key"))
+    assert gateway.list_calls == 0
+    assert repo.endpoint is None
+    assert "owner" in interaction.response.messages[-1]
 
 
 if __name__ == "__main__":

@@ -19,9 +19,10 @@ class FakeResponse:
         if headers:
             self.headers.update(headers)
         self._body = body
+        self.content = self
 
-    async def read(self):
-        return self._body
+    async def iter_chunked(self, size):
+        yield self._body
 
     async def __aenter__(self):
         return self
@@ -34,12 +35,14 @@ class FakeSession:
     response = FakeResponse()
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.connector = kwargs.get("connector")
 
     async def __aenter__(self):
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
+        if self.connector:
+            await self.connector.close()
         return False
 
     def get(self, url, timeout=None, allow_redirects=True):
@@ -171,12 +174,14 @@ def test_vision_refreshes_discord_cdn_url_on_404():
 
     class RefreshingSession:
         def __init__(self, *args, **kwargs):
-            pass
+            self.connector = kwargs.get("connector")
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, exc_type, exc, tb):
+            if self.connector:
+                await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=True):

@@ -8,6 +8,14 @@ sys.path.insert(0, ".")
 from src.tools.builtin.vision import VisionTool
 
 
+class FakeContent:
+    def __init__(self, body):
+        self.body = body
+
+    async def iter_chunked(self, size):
+        yield self.body
+
+
 class NullLogger:
     def info(self, *a, **k):
         pass
@@ -70,8 +78,7 @@ async def test_download_image_success(monkeypatch):
         status = 200
         headers = {"Content-Type": "image/png", "Content-Length": "4"}
 
-        async def read(self):
-            return b"imgdata"
+        content = FakeContent(b"imgdata")
 
         async def __aenter__(self):
             return self
@@ -80,13 +87,14 @@ async def test_download_image_success(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            pass
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):
@@ -108,8 +116,7 @@ async def test_download_image_redirect(monkeypatch):
         status = 302
         headers = {"Location": "http://example.com/final.png"}
 
-        async def read(self):
-            return b""
+        content = FakeContent(b"")
 
         async def __aenter__(self):
             return self
@@ -121,8 +128,7 @@ async def test_download_image_redirect(monkeypatch):
         status = 200
         headers = {"Content-Type": "image/png", "Content-Length": "3"}
 
-        async def read(self):
-            return b"abc"
+        content = FakeContent(b"abc")
 
         async def __aenter__(self):
             return self
@@ -131,18 +137,21 @@ async def test_download_image_redirect(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            self.calls = 0
+        calls = 0
+
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):
-            self.calls += 1
-            return RedirectResp() if self.calls == 1 else FinalResp()
+            FakeSession.calls += 1
+            return RedirectResp() if FakeSession.calls == 1 else FinalResp()
 
     import aiohttp
 
@@ -159,8 +168,7 @@ async def test_download_image_non_image_content_type(monkeypatch):
         status = 200
         headers = {"Content-Type": "text/html", "Content-Length": "4"}
 
-        async def read(self):
-            return b"<html>"
+        content = FakeContent(b"<html>")
 
         async def __aenter__(self):
             return self
@@ -169,13 +177,14 @@ async def test_download_image_non_image_content_type(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            pass
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):
@@ -197,8 +206,7 @@ async def test_download_image_oversize(monkeypatch):
         status = 200
         headers = {"Content-Type": "image/png", "Content-Length": "999999999"}
 
-        async def read(self):
-            return b"x" * 100
+        content = FakeContent(b"x" * 100)
 
         async def __aenter__(self):
             return self
@@ -207,13 +215,14 @@ async def test_download_image_oversize(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            pass
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):
@@ -235,8 +244,7 @@ async def test_download_image_redirect_missing_location(monkeypatch):
         status = 301
         headers = {}
 
-        async def read(self):
-            return b""
+        content = FakeContent(b"")
 
         async def __aenter__(self):
             return self
@@ -245,13 +253,14 @@ async def test_download_image_redirect_missing_location(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            pass
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):
@@ -271,8 +280,7 @@ async def test_download_image_empty_bytes(monkeypatch):
         status = 200
         headers = {"Content-Type": "image/png"}
 
-        async def read(self):
-            return b""
+        content = FakeContent(b"")
 
         async def __aenter__(self):
             return self
@@ -281,13 +289,14 @@ async def test_download_image_empty_bytes(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            pass
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):
@@ -307,8 +316,7 @@ async def test_download_image_fallback_content_type(monkeypatch):
         status = 200
         headers = {"Content-Type": "application/octet-stream"}
 
-        async def read(self):
-            return b"some_bytes"
+        content = FakeContent(b"some_bytes")
 
         async def __aenter__(self):
             return self
@@ -317,13 +325,14 @@ async def test_download_image_fallback_content_type(monkeypatch):
             return False
 
     class FakeSession:
-        def __init__(self):
-            pass
+        def __init__(self, **kwargs):
+            self.connector = kwargs["connector"]
 
         async def __aenter__(self):
             return self
 
         async def __aexit__(self, *exc):
+            await self.connector.close()
             return False
 
         def get(self, url, timeout=None, allow_redirects=False):

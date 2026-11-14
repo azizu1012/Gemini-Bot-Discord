@@ -5,6 +5,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from unittest.mock import AsyncMock, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -93,9 +94,12 @@ def test_duplicate_message_is_claimed_once():
         def __init__(self):
             self.claims = 0
 
-        async def claim_message_once(self, _message_id):
+        async def claim_message_once(self, _message_id, **_kwargs):
             self.claims += 1
             return self.claims == 1
+
+        is_message_completed = AsyncMock(return_value=False)
+        release_message_claim = AsyncMock()
 
     handler.kafka_service = FakeKafka()
     calls = []
@@ -147,11 +151,12 @@ async def test_eviction_stops_when_all_locks_are_held():
     await lock_a.acquire()
     await lock_b.acquire()
     try:
-        # Both u1/u2 are held, so neither can be evicted. Adding a third lock
-        # must NOT evict a held one — the dict stays at the held-count size.
+        # Both held locks and the newest lock must survive. The older idle
+        # u3 lock may be evicted when u4 is created.
         handler._get_user_lock("u3")
-        handler._get_user_lock("u4")
-        assert list(handler._user_locks.keys()) == ["u1", "u2"]
+        lock_d = handler._get_user_lock("u4")
+        assert list(handler._user_locks.keys()) == ["u1", "u2", "u4"]
+        assert handler._user_locks["u4"] is lock_d
         assert lock_a.locked()
         assert lock_b.locked()
     finally:
@@ -168,3 +173,94 @@ def test_lru_move_to_end_still_works():
     assert list(handler._user_locks.keys()) == ["u1", "u2", "u3"]
     handler._get_user_lock("u1")
     assert list(handler._user_locks.keys()) == ["u2", "u3", "u1"]
+
+
+@pytest.mark.asyncio
+async def test_eviction_preserves_lock_during_waiter_handoff():
+    handler = make_lock_handler(max_locks=1)
+    handler.process_message = AsyncMock()
+    original = handler._get_user_lock("u1")
+    await original.acquire()
+    waiter = asyncio.create_task(handler._process_message_guarded(message("u1")))
+    try:
+        await asyncio.sleep(0)
+        original.release()
+        # The waiter has been woken but has not yet resumed: locked() is false.
+        handler._get_user_lock("u2")
+        assert handler._get_user_lock("u1") is original
+    finally:
+        await waiter
+
+
+class LeaseService:
+    """Shared lease/completion state for worker redelivery tests."""
+
+    def __init__(self):
+        self.leases = {}
+        self.completed = set()
+
+    async def claim_message_once(self, message_id, *, token="legacy-owner"):
+        if message_id in self.leases or message_id in self.completed:
+            return False
+        self.leases[message_id] = token
+        return True
+
+    async def is_message_completed(self, message_id):
+        return message_id in self.completed
+
+    async def complete_message(self, message_id, token):
+        assert self.leases[message_id] == token
+        self.completed.add(message_id)
+        del self.leases[message_id]
+
+    async def release_message_claim(self, message_id, token):
+        if self.leases.get(message_id) == token:
+            del self.leases[message_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_failed_or_cancelled_claim_can_retry_then_deduplicate(failure):
+    handler = make_handler(1)
+    handler.logger = MagicMock()
+    handler.kafka_service = LeaseService()
+    handler._incoming_consumer = SimpleNamespace(ack=AsyncMock())
+    handler.process_message = AsyncMock(side_effect=failure())
+    with pytest.raises(failure):
+        await handler._process_message_guarded(message("u1", "m1"))
+    assert handler.kafka_service.leases == {}
+    assert handler.kafka_service.completed == set()
+    handler._incoming_consumer.ack.assert_not_awaited()
+
+    handler.process_message = AsyncMock(side_effect=handler._ack_incoming)
+    await handler._process_message_guarded(message("u1", "m1"))
+    await handler._process_message_guarded(message("u1", "m1"))
+    handler.process_message.assert_awaited_once()
+    assert handler._incoming_consumer.ack.await_count == 2
+    assert handler.kafka_service.completed == {"m1"}
+
+
+@pytest.mark.asyncio
+async def test_active_duplicate_is_not_acked_or_marked_completed():
+    handler = make_handler(1)
+    handler.logger = MagicMock()
+    handler.kafka_service = LeaseService()
+    handler.kafka_service.leases["m1"] = "another-worker"
+    handler._incoming_consumer = SimpleNamespace(ack=AsyncMock())
+    handler.process_message = AsyncMock()
+    await handler._process_message_guarded(message("u1", "m1"))
+    handler.process_message.assert_not_awaited()
+    handler._incoming_consumer.ack.assert_not_awaited()
+    assert handler.kafka_service.leases["m1"] == "another-worker"
+
+
+@pytest.mark.asyncio
+async def test_unacked_processing_releases_claim_without_marking_complete():
+    handler = make_handler(1)
+    handler.logger = MagicMock()
+    handler.kafka_service = LeaseService()
+    handler.process_message = AsyncMock()  # e.g. both main and busy publishes failed
+    await handler._process_message_guarded(message("u1", "m1"))
+    await handler._process_message_guarded(message("u1", "m1"))
+    assert handler.process_message.await_count == 2
+    assert handler.kafka_service.completed == set()

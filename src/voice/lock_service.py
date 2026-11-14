@@ -50,14 +50,14 @@ class RoomLockService:
     def is_allowed(self, member_id: int) -> bool:
         return member_id in self.allowed_ids()
 
-    def locked_channels(self, guild: discord.Guild) -> List[discord.VoiceChannel]:
+    def locked_channels(self, guild: discord.Guild) -> List[discord.VoiceChannel | discord.StageChannel]:
         return [c for c in self.all_locked_channels() if c.guild.id == guild.id]
 
-    def all_locked_channels(self) -> List[discord.VoiceChannel]:
+    def all_locked_channels(self) -> List[discord.VoiceChannel | discord.StageChannel]:
         found = []
         for record in self.store.records():
             channel = self.bot.get_channel(record.channel_id)
-            if isinstance(channel, discord.VoiceChannel):
+            if isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                 found.append(channel)
         return found
 
@@ -69,7 +69,7 @@ class RoomLockService:
                 removed.append(record)
         return removed
 
-    async def lock(self, channel: discord.VoiceChannel, actor_id: Optional[int]) -> LockOutcome:
+    async def lock(self, channel: discord.VoiceChannel | discord.StageChannel, actor_id: Optional[int]) -> LockOutcome:
         record = self.store.lock(channel.id, actor_id)
         await self.apply_permissions(channel)
         kicked = await self.enforce(channel, reason=f"Đã khóa phòng {channel.name}")
@@ -78,7 +78,7 @@ class RoomLockService:
         outcome = LockOutcome(record=record, kicked=kicked, purge=purge, reactions_removed=reactions)
         return outcome
 
-    async def unlock(self, channel: discord.VoiceChannel) -> Optional[LockRecord]:
+    async def unlock(self, channel: discord.VoiceChannel | discord.StageChannel) -> Optional[LockRecord]:
         record = self.store.unlock(channel.id)
 
         base = channel.overwrites_for(channel.guild.default_role)
@@ -103,7 +103,7 @@ class RoomLockService:
 
         return record
 
-    async def apply_permissions(self, channel: discord.VoiceChannel) -> None:
+    async def apply_permissions(self, channel: discord.VoiceChannel | discord.StageChannel) -> None:
         base = channel.overwrites_for(channel.guild.default_role)
         base.connect = False
         base.add_reactions = False
@@ -126,7 +126,7 @@ class RoomLockService:
                 members.append(member)
         return members
 
-    async def enforce(self, channel: discord.VoiceChannel, reason: str = "Phòng đã khóa") -> List[str]:
+    async def enforce(self, channel: discord.VoiceChannel | discord.StageChannel, reason: str = "Phòng đã khóa") -> List[str]:
         kicked = []
         allowed = self.allowed_ids()
         for member in list(channel.members):
@@ -139,7 +139,7 @@ class RoomLockService:
                 pass
         return kicked
 
-    async def clean_messages(self, channel: discord.VoiceChannel, record: LockRecord) -> PurgeReport:
+    async def clean_messages(self, channel: discord.VoiceChannel | discord.StageChannel, record: LockRecord) -> PurgeReport:
         return await self.purge_service.purge_foreign_messages(
             channel,
             cutoff=record.locked_at,
@@ -148,7 +148,7 @@ class RoomLockService:
             limit=200,
         )
 
-    async def strip_reactions(self, channel: discord.VoiceChannel) -> int:
+    async def strip_reactions(self, channel: discord.VoiceChannel | discord.StageChannel) -> int:
         removed = 0
         allowed = self.allowed_ids()
         try:
@@ -196,7 +196,7 @@ class RoomLockService:
                     pass
         return touched
 
-    async def ensure_locked(self, channel: discord.VoiceChannel) -> bool:
+    async def ensure_locked(self, channel: discord.VoiceChannel | discord.StageChannel) -> bool:
         base = channel.overwrites_for(channel.guild.default_role)
         if base.connect is not False or base.add_reactions is not False:
             base.connect = False

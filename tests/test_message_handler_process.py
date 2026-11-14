@@ -200,6 +200,28 @@ async def test_process_sets_and_clears_processing_state(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("busy", ["processing", "working"])
+async def test_busy_guard_defers_without_processing_or_releasing(monkeypatch, busy):
+    h, consumer = make_full_handler(monkeypatch)
+    h.db_repo.set_user_processing_state.return_value = busy
+    await h.process_message(make_normal_msg())
+    consumer.ack.assert_not_awaited()
+    h._call_pipeline_with_deadline.assert_not_awaited()
+    h._publish_outgoing.assert_not_awaited()
+    h.db_repo.clear_user_processing_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_busy_guard_error_defers_without_releasing(monkeypatch):
+    h, consumer = make_full_handler(monkeypatch)
+    h.db_repo.set_user_processing_state.side_effect = RuntimeError("database offline")
+    await h.process_message(make_normal_msg())
+    consumer.ack.assert_not_awaited()
+    h._call_pipeline_with_deadline.assert_not_awaited()
+    h.db_repo.clear_user_processing_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_start_worker_reclaims_pending_at_startup_and_periodically():
     """Periodic reclaim runs alongside the startup reclaim.
 
@@ -256,3 +278,49 @@ async def test_start_worker_reclaims_pending_at_startup_and_periodically():
     assert h._worker_tasks == set()
     h.kafka_service.stop.assert_awaited_once()
     h.db_repo.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatches_startup_periodic_and_normal_entries():
+    h = make_handler()
+    h.config = SimpleNamespace(RECLAIM_PENDING_INTERVAL_SECONDS=0.001)
+    h.db_repo.init_db = AsyncMock()
+    h.db_repo.close = AsyncMock()
+    h.kafka_service.start_producer = AsyncMock()
+    h.kafka_service.stop = AsyncMock()
+    h.search_subtask_client = SimpleNamespace(close=AsyncMock())
+    h._worker_tasks = set()
+    h._user_locks = {}
+    h._worker_semaphore = asyncio.Semaphore(3)
+    h.kafka_service = SimpleNamespace(
+        start_producer=AsyncMock(), stop=AsyncMock(),
+    )
+    entries = [
+        _RedisMsg({"type": "invalidate_all_cache"}, "", f"{index}-0")
+        for index in range(3)
+    ]
+    done = asyncio.Event()
+    acked = []
+
+    async def ack(msg):
+        acked.append(msg.entry_id)
+        if len(acked) == 3:
+            done.set()
+
+    batches = iter([[entries[0]], [entries[1]]])
+
+    async def reclaim(**kwargs):
+        return next(batches, [])
+
+    async def normal_entries():
+        yield entries[2]
+        await done.wait()
+
+    consumer = MagicMock()
+    consumer.ack = AsyncMock(side_effect=ack)
+    consumer.reclaim_pending = AsyncMock(side_effect=reclaim)
+    consumer.__aiter__ = lambda self: normal_entries()
+    h.kafka_service.start_consumer = AsyncMock(return_value=consumer)
+    await asyncio.wait_for(h.start_worker(), timeout=1)
+    assert sorted(acked) == ["0-0", "1-0", "2-0"]
+    assert h.cache_mgr.clear_all_caches.call_count == 3

@@ -298,7 +298,10 @@ async def test_endpoint_config_flow():
     db = MagicMock()
     cfg = MagicMock()
 
-    flow = EndpointConfigFlow(gateway=gw, resolver=resolver, db_repo=db, config=cfg, admin_user_id="123")
+    flow = EndpointConfigFlow(
+        gateway=gw, resolver=resolver, db_repo=db, config=cfg, admin_user_id="123",
+        is_admin_user=AsyncMock(return_value=True),
+    )
 
     interaction = MagicMock()
     interaction.followup.send = AsyncMock()

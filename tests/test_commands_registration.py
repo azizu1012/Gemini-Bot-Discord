@@ -120,7 +120,7 @@ def _make_bot_core():
     )
     bot_core.logger = MagicMock()
     bot_core.kafka_service = MagicMock()
-    bot_core._is_admin_user = MagicMock(return_value=True)
+    bot_core._is_admin_user = AsyncMock(return_value=True)
     bot_core._is_moderator_user = MagicMock(return_value=True)
     bot_core.voice_lock_manager = MagicMock()
     # is_owner_check returns an async predicate decorator
@@ -146,6 +146,35 @@ def test_register_slash_commands_runs_and_registers(monkeypatch):
     # many commands + a group command added
     assert tree._cmd.registered
     assert len(tree._cmd.registered) >= 10
+
+
+@pytest.mark.asyncio
+async def test_imagine_publish_false_unregisters_and_reports_error(monkeypatch):
+    _install_app_commands_mocks(monkeypatch)
+    core, tree = _make_bot_core()
+    core._is_admin_user = AsyncMock(return_value=True)
+    core.kafka_service.publish = AsyncMock(return_value=False)
+    core.active_interactions = {}
+    core._interaction_timestamps = {}
+    interaction = MagicMock()
+    interaction.id = 123
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+
+    def register(key, value):
+        core.active_interactions[key] = value
+        core._interaction_timestamps[key] = 1
+
+    core.register_interaction = register
+    register_slash_commands(core)
+    command = next(cmd for cmd in tree._cmd.registered if cmd.__name__ == "imagine_slash")
+    await command(interaction, SimpleNamespace(value="create"), "a cat")
+
+    assert core.active_interactions == {}
+    assert core._interaction_timestamps == {}
+    assert interaction.followup.send.await_count == 2
+    assert interaction.followup.send.call_args.kwargs["ephemeral"] is True
+    assert "Không thể" in interaction.followup.send.call_args.args[0]
 
 
 def test_on_app_command_error_checkfailure(monkeypatch):
@@ -871,6 +900,61 @@ async def test_endpoint_switch_on_choose_unconfigured(monkeypatch):
     choice_interaction = _interaction()
     await on_choose(choice_interaction, "openai")
     assert "chưa được cấu hình" in choice_interaction.response.send_message.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_switch_rechecks_revoked_admin(monkeypatch):
+    import src.handlers.discord.commands as cmd_mod
+
+    captured = {}
+
+    def capture_view(on_choose):
+        captured["choose"] = on_choose
+        return MagicMock()
+
+    monkeypatch.setattr(cmd_mod, "SDKChoiceView", capture_view)
+    core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_switch")
+    core.db_repo.get_llm_endpoints = AsyncMock(return_value={"genai": {}})
+    core.db_repo.set_active_sdk = AsyncMock()
+    await handler(_interaction())
+    core._is_admin_user.return_value = False
+    choice = _interaction()
+    await captured["choose"](choice, "genai")
+    core._is_admin_user.assert_awaited_once_with(str(choice.user.id))
+    core.db_repo.set_active_sdk.assert_not_awaited()
+    assert "owner" in choice.response.send_message.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authorized", [True, False])
+async def test_endpoint_models_rechecks_admin_after_pickers(monkeypatch, authorized):
+    import src.handlers.discord.commands as cmd_mod
+
+    resolver = MagicMock()
+    resolver.get_active_sdk = AsyncMock(return_value="genai")
+    resolver.get_endpoint = AsyncMock(return_value={"base_url": "http://example.com", "api_key": "key"})
+    gateway = MagicMock()
+    gateway.list_models_for = AsyncMock(return_value=[{"id": "m1"}])
+    monkeypatch.setattr(cmd_mod, "get_endpoint_resolver", lambda: resolver)
+    monkeypatch.setattr(cmd_mod, "get_llm_gateway", lambda: gateway)
+    core, handler = _find_group_handler(monkeypatch, "endpoint", "endpoint_models")
+    core.db_repo.upsert_llm_model_slots = AsyncMock()
+
+    async def pickers(self, interaction, models):
+        core._is_admin_user.return_value = authorized
+        return {"reasoning": "m1", "final": None, "fallback": None}
+
+    monkeypatch.setattr(cmd_mod.EndpointConfigFlow, "run_slot_pickers", pickers)
+    interaction = _interaction()
+    await handler(interaction)
+    core._is_admin_user.assert_awaited_once_with(str(interaction.user.id))
+    if authorized:
+        core.db_repo.upsert_llm_model_slots.assert_awaited_once()
+        resolver.invalidate.assert_called_once()
+    else:
+        core.db_repo.upsert_llm_model_slots.assert_not_awaited()
+        resolver.invalidate.assert_not_called()
+        assert "owner" in interaction.followup.send.call_args.args[0]
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@ import asyncio
 import random
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import discord
@@ -105,6 +105,36 @@ class BotCore:
             return True
         return await self.db_repo.is_moderator_user(str(user_id))
 
+    async def _chat_limit_reply(self, user_id: str, *, is_dm: bool) -> Optional[str]:
+        if not self.config.CHAT_LIMITS_ENABLED:
+            return None
+        # Keep the existing unlimited admin/moderator tiers, including DB roles.
+        if await self._is_admin_user(user_id) or await self._is_moderator_user(user_id):
+            return None
+        premium = await self.db_repo.is_premium_user(user_id)
+        prefix = f"azuris:chat-limits:{user_id}"
+        spam_window = self.config.SPAM_WINDOW
+        count = await self.kafka_service.increment_counter(f"{prefix}:spam", spam_window)
+        if count > self.config.SPAM_THRESHOLD:
+            return f"Bạn nhắn quá nhanh rồi. Vui lòng thử lại sau {spam_window} giây nhé! ⏳"
+
+        rate = self.config.PREMIUM_RATE_LIMIT if premium else self.config.DEFAULT_RATE_LIMIT
+        limit, window = (int(part) for part in rate.split("/"))
+        count = await self.kafka_service.increment_counter(f"{prefix}:rate:{window}", window)
+        if count > limit:
+            return f"Bạn đã sử dụng hết giới hạn tin nhắn ({limit}/{window}s). Vui lòng thử lại sau nhé! ⏳"
+
+        if is_dm:
+            limit = self.config.PREMIUM_DM_LIMIT if premium else self.config.DEFAULT_DM_LIMIT
+            now = datetime.now(timezone.utc)
+            midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            count = await self.kafka_service.increment_counter(
+                f"{prefix}:dm:{now.date().isoformat()}", int((midnight - now).total_seconds()) + 1
+            )
+            if count > limit:
+                return f"Bạn đã sử dụng hết giới hạn DM hôm nay ({limit}/{limit}). Vui lòng thử lại vào ngày mai nhé! 🛑"
+        return None
+
     def _build_voice_lock_manager(self) -> Optional[VoiceLockManager]:
         try:
             owner_id = int(self.config.ADMIN_ID)
@@ -126,7 +156,7 @@ class BotCore:
             return []
         channels = []
         for ch in interaction.guild.channels:
-            if isinstance(ch, (discord.VoiceChannel, discord.StageChannel)):
+            if isinstance(ch, discord.VoiceChannel):
                 prefix = "🔒 " if ch.id in lm.locked_channels else ""
                 name = f"{prefix}{ch.name}"
                 if current.lower() in name.lower():
@@ -238,7 +268,7 @@ class BotCore:
             whitelist = lm.load_whitelist()
             for channel_id in list(lm.locked_channels):
                 channel = self.bot.get_channel(channel_id)
-                if not isinstance(channel, discord.VoiceChannel):
+                if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
                     lm.locked_channels.discard(channel_id)
                     lm.save_locked_channels()
                     if channel_id in lm.enforced_names:
@@ -417,6 +447,8 @@ class BotCore:
             reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
             if reclaimed:
                 self.logger.info(f"Reclaimed {len(reclaimed)} pending outgoing messages on startup")
+            for msg in reclaimed:
+                self._dispatch_outgoing(msg)
             self._consume_task = asyncio.create_task(self.consume_outgoing_loop())
         except Exception as e:
             self.logger.error(f"Failed to start BotCore Redis services: {e}")
@@ -429,17 +461,34 @@ class BotCore:
             self.logger.error("Consumer for 'discord-outgoing' not found in RedisStreamService")
             return
 
+        async def _periodic_reclaim():
+            interval = float(getattr(self.config, "RECLAIM_PENDING_INTERVAL_SECONDS", 60) or 60)
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    for msg in await consumer.reclaim_pending(min_idle_ms=30000):
+                        self._dispatch_outgoing(msg)
+                except Exception as e:
+                    self.logger.warning(f"Outgoing pending reclaim failed: {e}")
+
+        reclaim_task = asyncio.create_task(_periodic_reclaim())
         try:
             async for msg in consumer:
-                payload = msg.value
-                payload['_consumer_entry_id'] = msg.entry_id
-                task = asyncio.create_task(self.handle_outgoing_payload(payload))
-                self._pending_outgoing_tasks.add(task)
-                task.add_done_callback(self._pending_outgoing_tasks.discard)
+                self._dispatch_outgoing(msg)
         except asyncio.CancelledError:
             self.logger.info("BotCore Redis consumer loop cancelled")
         except Exception as e:
             self.logger.error(f"Error in BotCore Redis consumer loop: {e}")
+        finally:
+            reclaim_task.cancel()
+            await asyncio.gather(reclaim_task, return_exceptions=True)
+
+    def _dispatch_outgoing(self, msg) -> None:
+        payload = dict(msg.value)
+        payload['_consumer_entry_id'] = msg.entry_id
+        task = asyncio.create_task(self.handle_outgoing_payload(payload))
+        self._pending_outgoing_tasks.add(task)
+        task.add_done_callback(self._pending_outgoing_tasks.discard)
 
     def register_interaction(self, interaction_id: str, interaction: discord.Interaction) -> None:
         """Record an active interaction with a timestamp for TTL sweeping."""
@@ -599,31 +648,33 @@ class BotCore:
         if action not in ("reply", "reply_batch"):
             return
 
-        entry_id_str = payload.pop('_consumer_entry_id', None)
+        entry_id_str = payload.get('_consumer_entry_id')
 
         try:
             if action == "reply_batch":
-                await self._process_reply_batch(payload)
+                delivered = await self._process_reply_batch(payload)
             else:
-                await self._process_reply(payload)
+                delivered = await self._process_reply(payload)
         except Exception:
             raise
         else:
-            if entry_id_str and self._outgoing_consumer:
-                await self._outgoing_consumer.ack_id(entry_id_str)
+            if delivered and entry_id_str and self._outgoing_consumer:
+                if await self._outgoing_consumer.ack_id(entry_id_str) and action == "reply_batch":
+                    reply_group_id = str(payload.get("reply_group_id") or payload.get("reference_message_id") or "unknown")
+                    self._delivery_state.pop(reply_group_id, None)
 
-    async def _process_reply(self, payload: dict) -> None:
+    async def _process_reply(self, payload: dict) -> bool:
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
         if not channel_id_str:
-            return
+            return False
 
         channel_id = int(channel_id_str)
         channel = self.bot.get_channel(channel_id)
         if not channel:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
-            return
+            return False
 
         content = payload.get("content")
         if content:
@@ -649,19 +700,21 @@ class BotCore:
         )
         if sent_message:
             self._cancel_typing_task(user_id)
+            return True
+        return False
 
-    async def _process_reply_batch(self, payload: dict) -> None:
+    async def _process_reply_batch(self, payload: dict) -> bool:
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
         if not channel_id_str:
-            return
+            return False
 
         channel_id = int(channel_id_str)
         channel = self.bot.get_channel(channel_id)
         if not channel:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
-            return
+            return False
 
         self._cancel_typing_task(user_id)
 
@@ -685,7 +738,7 @@ class BotCore:
             items = [{"index": idx, "content": chunk} for idx, chunk in enumerate(chunks)]
 
         if not items:
-            return
+            return True
 
         items.sort(key=lambda x: x.get("index", 0))
         chunk_total = int(payload.get("chunk_total") or len(items))
@@ -752,7 +805,7 @@ class BotCore:
                 sent_ok = sent_message is not None
 
             if not sent_ok:
-                break
+                return False
 
             if idx == 0:
                 self._cancel_typing_task(user_id)
@@ -760,8 +813,7 @@ class BotCore:
             sent_set.add(idx)
             state["last_index"] = idx
 
-        if int(state.get("last_index", -1)) >= chunk_total - 1:
-            self._delivery_state.pop(reply_group_id, None)
+        return int(state.get("last_index", -1)) >= chunk_total - 1
 
     async def _send_message_with_retry(
         self,
@@ -785,7 +837,7 @@ class BotCore:
         except Exception as e:
             self.logger.error(
                 f"[EGRESS] Failed to {label} after {max_attempts} attempts "
-                f"(reply chunk dropped): {e}"
+                f"(reply left pending): {e}"
             )
             return None
 
@@ -933,7 +985,7 @@ class BotCore:
             if message.author.bot:
                 return
 
-            if self.room_lock_service and isinstance(message.channel, discord.VoiceChannel):
+            if self.room_lock_service and isinstance(message.channel, (discord.VoiceChannel, discord.StageChannel)):
                 if self.room_lock_service.is_locked(message.channel.id) and not self.room_lock_service.is_allowed(message.author.id):
                     try:
                         await message.delete()
@@ -949,6 +1001,16 @@ class BotCore:
             is_mentioned = self.bot.user in message.mentions
 
             if not is_dm and not is_mentioned:
+                return
+
+            try:
+                limit_reply = await self._chat_limit_reply(user_id, is_dm=is_dm)
+            except Exception as e:
+                self.logger.error(f"Chat limit check failed for {user_id}: {e}")
+                await message.reply("🚨 Hệ thống Redis đang lỗi. Vui lòng thử lại sau.", mention_author=False)
+                return
+            if limit_reply:
+                await message.reply(limit_reply, mention_author=False)
                 return
 
             import time
@@ -1101,7 +1163,7 @@ class BotCore:
 
             if after.id in lm.ignore_next_updates:
                 return
-            if not isinstance(after, discord.VoiceChannel) or after.id not in lm.locked_channels:
+            if not isinstance(after, (discord.VoiceChannel, discord.StageChannel)) or after.id not in lm.locked_channels:
                 return
 
             is_bot_edit = False

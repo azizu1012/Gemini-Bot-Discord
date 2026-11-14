@@ -51,6 +51,7 @@ def make_bc():
     bc.voice_lock_manager = None
     bc.room_lock_service = None
     bc.kafka_service = MagicMock()
+    bc._chat_limit_reply = AsyncMock(return_value=None)
     bc._register_slash_commands = MagicMock()
     return bc
 
@@ -103,7 +104,33 @@ async def test_on_message_dm_not_mentioned():
     message.mentions = []
     bc._handle_confirmation_message = AsyncMock(return_value=False)
     await events["on_message"](message)
+    bc._chat_limit_reply.assert_not_awaited()
     # not dm, not mentioned -> returns
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [False, True])
+async def test_on_message_limits_reject_before_lock_and_queue(failure):
+    bc = make_bc()
+    bc._handle_confirmation_message = AsyncMock(return_value=False)
+    bc._redis_client = MagicMock()
+    bc._redis_client.set = AsyncMock()
+    if failure:
+        bc._chat_limit_reply.side_effect = ConnectionError("Redis unavailable")
+    else:
+        bc._chat_limit_reply.return_value = "Bạn nhắn quá nhanh rồi. ⏳"
+    message = MagicMock()
+    message.author.bot = False
+    message.author.id = 42
+    message.channel = MagicMock(spec=discord.DMChannel)
+    message.reply = AsyncMock()
+    await _capture_events(bc)["on_message"](message)
+    bc._chat_limit_reply.assert_awaited_once_with("42", is_dm=True)
+    message.reply.assert_awaited_once()
+    bc._redis_client.set.assert_not_awaited()
+    bc.kafka_service.publish.assert_not_called()
+    assert bc._active_user_locks == {}
+    assert bc.active_typing_tasks == {}
 
 
 @pytest.mark.asyncio
@@ -166,7 +193,8 @@ async def test_on_voice_state_update_no_lock_manager():
 
 
 @pytest.mark.asyncio
-async def test_on_guild_channel_update_anti_edit():
+@pytest.mark.parametrize("channel_type", [discord.VoiceChannel, discord.StageChannel])
+async def test_on_guild_channel_update_anti_edit(channel_type):
     bc = make_bc()
     bc.bot.user.id = 1
     bc.voice_lock_manager = MagicMock()
@@ -177,7 +205,7 @@ async def test_on_guild_channel_update_anti_edit():
     bc.bot.loop.create_task = MagicMock()
 
     events = _capture_events(bc)
-    after = MagicMock(spec=discord.VoiceChannel)
+    after = MagicMock(spec=channel_type)
     after.id = 100
     after.name = "renamed"
     after.guild = MagicMock()
@@ -374,9 +402,10 @@ async def test_on_ready_full_flow(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_on_message_locked_voice_channel_deletes():
+@pytest.mark.parametrize("channel_type", [discord.VoiceChannel, discord.StageChannel])
+async def test_on_message_locked_voice_channel_deletes(channel_type):
     bc = make_bc()
-    v_channel = MagicMock(spec=discord.VoiceChannel)
+    v_channel = MagicMock(spec=channel_type)
     v_channel.id = 555
     bc.room_lock_service = MagicMock()
     bc.room_lock_service.is_locked = MagicMock(return_value=True)
