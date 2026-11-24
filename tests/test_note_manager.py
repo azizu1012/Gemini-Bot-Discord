@@ -267,7 +267,9 @@ async def test_retrieve_notes_exception_returns_error_str():
     mgr = make_mgr()
     mgr.db_repo.get_user_notes_db = AsyncMock(side_effect=RuntimeError("retrieve fail"))
     res = await mgr.retrieve_notes_from_db("u1", "query")
-    assert "Exception when retrieving notes" in res
+    assert "Không thể truy cập ghi chú" in res
+    assert "Exception" not in res
+    assert "retrieve fail" not in res
 
 
 @pytest.mark.asyncio
@@ -275,4 +277,6 @@ async def test_delete_note_exception_returns_error_str():
     mgr = make_mgr()
     mgr.db_repo.delete_user_note_db = AsyncMock(side_effect=RuntimeError("delete fail"))
     res = await mgr.delete_note_from_db("u1", "n1")
-    assert "Exception when deleting note" in res
+    assert "Không thể xóa note" in res
+    assert "Exception" not in res
+    assert "delete fail" not in res

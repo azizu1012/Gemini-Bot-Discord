@@ -11,7 +11,7 @@ import httpx
 from google import genai
 from google.genai import types as genai_types
 
-from src.core.llm.base import LLMError, LLMResponse, classify_error
+from src.core.llm.base import LLMError, LLMResponse, classify_error, extract_status_code
 from src.core.llm.redaction import redact_diagnostic
 
 DEFAULT_GENAI_BASE_URL = "https://generativelanguage.googleapis.com"
@@ -133,7 +133,10 @@ def _contents_to_router_wire(contents: List[Dict[str, Any]]) -> List[Dict[str, A
         wire_parts: List[Dict[str, Any]] = []
         for part in content.get("parts", []) or []:
             if part.get("text") is not None:
-                wire_parts.append({"text": part["text"]})
+                wire_part = {"text": part["text"]}
+                if part.get("thought_signature") is not None:
+                    wire_part["thoughtSignature"] = _bytes_to_standard_base64(part["thought_signature"])
+                wire_parts.append(wire_part)
             elif part.get("inline_data"):
                 inline = part["inline_data"] or {}
                 wire_part = {
@@ -147,12 +150,15 @@ def _contents_to_router_wire(contents: List[Dict[str, Any]]) -> List[Dict[str, A
                 wire_parts.append(wire_part)
             elif part.get("function_call"):
                 call = part["function_call"] or {}
-                wire_parts.append({
+                wire_part = {
                     "functionCall": {
                         "name": call.get("name") or "",
                         "args": call.get("args") or {},
                     }
-                })
+                }
+                if part.get("thought_signature") is not None:
+                    wire_part["thoughtSignature"] = _bytes_to_standard_base64(part["thought_signature"])
+                wire_parts.append(wire_part)
             elif part.get("function_response"):
                 response = part["function_response"] or {}
                 wire_parts.append({
@@ -256,7 +262,11 @@ class GenAIClient:
                 config=config,
             )
         except Exception as e:
-            raise LLMError(classify_error(e), redact_diagnostic(e, (self.api_key,))) from None
+            raise LLMError(
+                classify_error(e),
+                redact_diagnostic(e, (self.api_key,)),
+                status_code=extract_status_code(e),
+            ) from None
         return LLMResponse(candidates=list(response.candidates or []), raw=response)
 
     async def _generate_custom_endpoint(
@@ -300,7 +310,11 @@ class GenAIClient:
             payload = response.json()
             parsed = genai_types.GenerateContentResponse.model_validate(payload)
         except Exception as e:
-            raise LLMError(classify_error(e), redact_diagnostic(e, (self.api_key,))) from None
+            raise LLMError(
+                classify_error(e),
+                redact_diagnostic(e, (self.api_key,)),
+                status_code=extract_status_code(e),
+            ) from None
         return LLMResponse(candidates=list(parsed.candidates or []), raw=parsed)
 
     async def list_models(self) -> List[Dict[str, str]]:
@@ -318,7 +332,11 @@ class GenAIClient:
         try:
             return await asyncio.to_thread(_list)
         except Exception as e:
-            raise LLMError(classify_error(e), redact_diagnostic(e, (self.api_key,))) from None
+            raise LLMError(
+                classify_error(e),
+                redact_diagnostic(e, (self.api_key,)),
+                status_code=extract_status_code(e),
+            ) from None
 
     async def close(self) -> None:
         return None

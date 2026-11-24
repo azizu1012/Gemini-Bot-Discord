@@ -699,6 +699,9 @@ class MessageHandler:
             # 5. Intent Detection & Dynamic context builder
             bot_name = payload.get("bot_name", "Chad Gibiti")
             correction_context = self._detect_user_correction(content)
+            # Chụp lại text gốc trước khi chèn SYSTEM NOTE: cue intent chỉ dành
+            # cho lượt hiện tại, không được persist/cache vào lịch sử.
+            persisted_content = content
             intent_cues = []
             if self._is_identity_question(content):
                 intent_cues.append(f"[SYSTEM NOTE: Identity query. Respond in 1-2 sentences as {bot_name}.]")
@@ -708,14 +711,14 @@ class MessageHandler:
                 content += "\n\n" + "\n".join(intent_cues)
 
             reference_content = payload.get("reference_content")
-            if reference_content:
-                user_message = f"[Trả lời tin nhắn: {reference_content}]\n{content}{attachment_data}"
-            else:
-                user_message = content + attachment_data
-
-            # 6. Database Logs & RAM Cache (done with final consolidated message)
-            await self.db_repo.log_message_db(user_id, "user", user_message)
-            self.cache_mgr.add_chat_message(user_id, "user", user_message)
+            # base_user_message = phần plain text để persist/cache (KHÔNG chứa
+            # RAG context, system note, URL ảnh...). user_message = prompt đầy đủ
+            # cho lượt hiện tại (gồm cả attachment_data transient).
+            base_user_message = (
+                f"[Trả lời tin nhắn: {reference_content}]\n{persisted_content}"
+                if reference_content else persisted_content
+            )
+            user_message = base_user_message + attachment_data
 
             distinct_user_count = await self.db_repo.count_distinct_message_users_db()
             has_other_users = await self.db_repo.has_other_users_history_db(user_id)
@@ -752,6 +755,12 @@ class MessageHandler:
             for hist_msg in history:
                 role = "model" if hist_msg["role"] == "assistant" else hist_msg["role"]
                 messages.append({"role": role, "parts": [{"text": hist_msg["content"]}]})
+
+            # 6. Database Logs & RAM Cache: chỉ persist plain text (user trước,
+            # assistant add sau khi có response). Turn hiện tại không nằm trong
+            # history vừa đọc nên không bị lặp câu hỏi trong prompt.
+            await self.db_repo.log_message_db(user_id, "user", base_user_message)
+            self.cache_mgr.add_chat_message(user_id, "user", base_user_message)
 
             # Tin nhắn user cuối cùng chứa text và toàn bộ inline_data của ảnh tải được
             user_parts: list[dict[str, Any]] = [{"text": user_message}]

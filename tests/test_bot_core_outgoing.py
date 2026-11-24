@@ -1,6 +1,8 @@
 """Offline tests for BotCore's outgoing-payload handling and Redis setup."""
 import asyncio
 import sys
+import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -226,6 +228,50 @@ async def test_sender_loop_exit_leaves_queue_in_place_when_nonempty():
     assert "u1" in bc._outgoing_queues
     assert bc._outgoing_queues["u1"] is queue
     assert not queue.empty()
+
+# ---------------- dispatch fan-out cap ----------------
+@pytest.mark.asyncio
+async def test_dispatch_outgoing_bounds_concurrent_payloads():
+    """Reclaim có thể trả về cả nghìn entry: không được tạo task không giới hạn."""
+    bc = _make_bot_core()
+    bc._DISPATCH_CONCURRENCY = 2
+    bc._dispatch_sem = asyncio.Semaphore(2)
+
+    running = 0
+    peak = 0
+    started = asyncio.Event()
+
+    async def slow(payload):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        started.set()
+        await asyncio.sleep(0.02)
+        running -= 1
+
+    bc.handle_outgoing_payload = slow
+    msgs = [SimpleNamespace(value={"action": "reply", "user_id": "u1"}, entry_id=f"{i}-0") for i in range(6)]
+    for msg in msgs:
+        bc._dispatch_outgoing(msg)
+    await started.wait()
+    await asyncio.gather(*list(bc._pending_outgoing_tasks))
+    assert peak == 2
+    assert bc._pending_outgoing_tasks == set()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_outgoing_sweeps_stale_delivery_state():
+    bc = _make_bot_core()
+    bc.handle_outgoing_payload = AsyncMock()
+    now = time.monotonic()
+    bc._delivery_state["old"] = {"sent": {0}, "last_index": 0, "created_at": now - 7200.0}
+    bc._delivery_state["fresh"] = {"sent": {0}, "last_index": 0, "created_at": now}
+    msg = SimpleNamespace(value={"action": "typing"}, entry_id="9-0")
+    bc._dispatch_outgoing(msg)
+    await asyncio.gather(*list(bc._pending_outgoing_tasks))
+    assert "old" not in bc._delivery_state
+    assert "fresh" in bc._delivery_state
+
 
 # ---------------- setup_redis ----------------
 @pytest.mark.asyncio

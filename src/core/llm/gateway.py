@@ -112,7 +112,13 @@ class LLMGateway:
                     status_code=e.status_code if isinstance(e, LLMError) else None,
                 )
                 last_error = err
-                if err.kind == "auth":
+                # 403 = endpoint từ chối model/route cụ thể → thử slot fallback.
+                # 401 (hoặc auth không rõ status mà không phải permission) là
+                # key hỏng toàn cục → dừng ngay, fallback cũng sẽ hỏng.
+                model_level_permission = err.status_code == 403 or (
+                    err.status_code is None and "permission" in str(err).lower()
+                )
+                if err.kind == "auth" and not model_level_permission:
                     raise err from None
                 is_last = idx == len(attempts) - 1
                 if is_last:

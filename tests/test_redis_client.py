@@ -29,6 +29,8 @@ class FakeRedis:
         self.claimed_entries = []
         self.acked = []
         self.xadd_calls = 0
+        self.xadd_records = []
+        self.stream_entries = {}  # entry_id -> fields (for XRANGE lookups)
         self.ping_ok = True
         self.set_claim = None
         self.closed = False
@@ -56,10 +58,27 @@ class FakeRedis:
         return [len(self.pending_entries)]
 
     async def xpending_range(self, stream, group, min, max, count):
-        return list(self.pending_entries)
+        entries = list(self.pending_entries)
+        if isinstance(min, str) and min.startswith("("):
+            exclusive = min[1:]
+
+            def _mid(entry):
+                mid = entry.get(b"message_id", entry.get("message_id", b""))
+                return mid.decode("utf-8") if isinstance(mid, bytes) else str(mid)
+
+            entries = [e for e in entries if _mid(e) > exclusive]
+        return entries[:count] if count else entries
 
     async def xclaim(self, stream, group, consumer, min_idle_ms, msg_ids):
         return self.claimed_entries
+
+    async def xrange(self, name, min="-", max="+", count=None):
+        if isinstance(min, bytes):
+            min = min.decode("utf-8")
+        fields = self.stream_entries.get(min)
+        if fields is None:
+            return []
+        return [(min, fields)]
 
     async def xgroup_create(self, stream, group, id, mkstream):
         if self.xgroup_error:
@@ -68,6 +87,7 @@ class FakeRedis:
 
     async def xadd(self, stream, entry, maxlen, approximate):
         self.xadd_calls += 1
+        self.xadd_records.append((stream, entry))
         return "1-0"
 
     async def set(self, key, value, nx, ex):
@@ -190,6 +210,83 @@ async def test_consumer_reclaim_pending_selects_idle():
     assert len(reclaimed) == 1
     assert reclaimed[0].entry_id == "1-1"
     assert reclaimed[0].value == {"x": 1}
+    await consumer.stop()
+
+
+@pytest.mark.asyncio
+async def test_consumer_reclaim_pending_dead_letters_poison_pill():
+    """Entry vượt ngưỡng times_delivered phải sang DLQ + ACK, không reclaim lại."""
+    redis = FakeRedis()
+    redis.xpending = AsyncMock(return_value={"pending": 1, "min": "1-1", "max": "1-1", "consumers": []})
+    redis.pending_entries = [
+        {b"message_id": b"1-1", b"time_since_delivered": 50000, b"times_delivered": 5},
+    ]
+    redis.stream_entries = {"1-1": {b"key": b"k", b"value": b"{\"x\":1}"}}
+    consumer = await _consumer_with(redis)
+    reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
+
+    assert reclaimed == []
+    assert redis.acked == ["1-1"]
+    assert redis.xadd_calls == 1
+    dlq_stream, record = redis.xadd_records[0]
+    assert dlq_stream == "mystream-dead-letter"
+    assert record[b"value"] == b"{\"x\":1}"
+    assert record["_dlq_original_id"] == "1-1"
+    assert record["_dlq_deliveries"] == "5"
+    await consumer.stop()
+
+
+@pytest.mark.asyncio
+async def test_consumer_reclaim_pending_dead_letter_keeps_pel_on_write_failure():
+    """Không ghi được DLQ thì không được ACK (tránh mất dữ liệu im lặng)."""
+    redis = FakeRedis()
+    redis.xpending = AsyncMock(return_value={"pending": 1, "min": "1-1", "max": "1-1", "consumers": []})
+    redis.pending_entries = [
+        {b"message_id": b"1-1", b"time_since_delivered": 50000, b"times_delivered": 7},
+    ]
+    redis.stream_entries = {"1-1": {b"key": b"k", b"value": b"{}"}}
+
+    async def boom(*a, **kw):
+        raise ConnectionError("xadd fail")
+
+    redis.xadd = boom
+    consumer = await _consumer_with(redis)
+    assert await consumer.reclaim_pending(min_idle_ms=30000) == []
+    assert redis.acked == []
+    await consumer.stop()
+
+
+@pytest.mark.asyncio
+async def test_consumer_reclaim_pending_acks_trimmed_entries():
+    """Entry bị trim/xdel không còn payload: ACK để không kẹt PEL vĩnh viễn."""
+    redis = FakeRedis()
+    redis.xpending = AsyncMock(return_value={"pending": 1, "min": "1-1", "max": "1-1", "consumers": []})
+    redis.pending_entries = [
+        {b"message_id": b"1-1", b"time_since_delivered": 50000, b"times_delivered": 1},
+    ]
+    redis.claimed_entries = [("1-1", {})]
+    consumer = await _consumer_with(redis)
+    assert await consumer.reclaim_pending(min_idle_ms=30000) == []
+    assert redis.acked == ["1-1"]
+    await consumer.stop()
+
+
+@pytest.mark.asyncio
+async def test_consumer_reclaim_pending_walks_multiple_pages():
+    """> 1 trang XPENDING: entry kẹt ở trang sau vẫn phải được reclaim."""
+    redis = FakeRedis()
+    redis.pending_entries = [
+        {b"message_id": f"{i}-0".encode(), b"time_since_delivered": 1000, b"times_delivered": 1}
+        for i in range(1, 6)
+    ] + [{b"message_id": b"9-0", b"time_since_delivered": 60000, b"times_delivered": 1}]
+    redis.xpending = AsyncMock(return_value={"pending": 6, "min": "1-0", "max": "9-0", "consumers": []})
+    redis.claimed_entries = [("9-0", {b"key": b"k", b"value": b"{\"late\":true}"})]
+    consumer = await _consumer_with(redis)
+    consumer._RECLAIM_PAGE_SIZE = 2
+
+    reclaimed = await consumer.reclaim_pending(min_idle_ms=30000)
+    assert [m.entry_id for m in reclaimed] == ["9-0"]
+    assert reclaimed[0].value == {"late": True}
     await consumer.stop()
 
 
