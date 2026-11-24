@@ -263,8 +263,9 @@ async def test_dispatch_outgoing_bounds_concurrent_payloads():
 async def test_dispatch_outgoing_sweeps_stale_delivery_state():
     bc = _make_bot_core()
     bc.handle_outgoing_payload = AsyncMock()
-    bc._delivery_state["old"] = {"sent": {0}, "last_index": 0, "created_at": 1.0}
-    bc._delivery_state["fresh"] = {"sent": {0}, "last_index": 0, "created_at": time.monotonic()}
+    now = time.monotonic()
+    bc._delivery_state["old"] = {"sent": {0}, "last_index": 0, "created_at": now - 7200.0}
+    bc._delivery_state["fresh"] = {"sent": {0}, "last_index": 0, "created_at": now}
     msg = SimpleNamespace(value={"action": "typing"}, entry_id="9-0")
     bc._dispatch_outgoing(msg)
     await asyncio.gather(*list(bc._pending_outgoing_tasks))
