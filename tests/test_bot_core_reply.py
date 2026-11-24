@@ -56,6 +56,24 @@ async def test_process_reply_missing_channel():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["reply", "reply_batch"])
+async def test_process_reply_invalid_channel_id_is_acked(action):
+    """channel_id rác không được raise (sẽ làm chết sender loop) mà ACK bỏ qua."""
+    bc = make_bc()
+    bc._outgoing_consumer = MagicMock(ack_id=AsyncMock(return_value=True))
+    payload = {
+        "action": action,
+        "channel_id": "not-a-number",
+        "user_id": "u1",
+        "content": "a",
+        "chunks": ["a"],
+        "_consumer_entry_id": "1-1",
+    }
+    await bc._process_outgoing_payload(payload)
+    bc._outgoing_consumer.ack_id.assert_awaited_once_with("1-1")
+
+
+@pytest.mark.asyncio
 async def test_process_reply_channel_not_found():
     bc = make_bc()
     bc.bot.get_channel = MagicMock(return_value=None)

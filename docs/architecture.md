@@ -61,10 +61,8 @@ Port 55432/6379 trên host chỉ còn ý nghĩa với legacy local runtime (`src
 Azuris_refactor_code_base/
 ├── main.py                       # Entrypoint → ủy quyền run_bot.py
 ├── run_bot.py                    # Trình khởi chạy chính
-├── run_bot.ps1 / run_bot.sh      # Script launcher (Win/Linux)
-├── stop_infra.ps1 / stop_infra.sh# Tắt hạ tầng an toàn
-├── install_services.ps1 / .sh    # Bootstrap Redis + PostgreSQL
-├── ecosystem.config.js           # Cấu hình PM2 (Linux)
+├── run_bot.ps1 / run_bot.sh      # Script launcher (Win/Linux) — 1 nút, gồm stop/rebuild/logs
+├── docker-compose.yml            # Runtime duy nhất: bot + postgres + redis
 ├── .env                          # Biến môi trường
 ├── requirements.txt              # Dependencies Python
 ├── README.md                     # Hướng dẫn khởi chạy nhanh
@@ -188,6 +186,9 @@ Redis Stream: discord-incoming
                 └── Final Synthesis (gemini-flash, stream real)
                     → Gom chunks, continuation nếu MAX_TOKENS
         → Lưu message vào DB + update RAM cache
+            • Sau khi đọc history, trước khi append turn hiện tại (không tự lặp)
+            • Chỉ lưu plain text gốc — RAG index block, SYSTEM NOTE cue,
+              URL ảnh và attachment_data là transient, không vào lịch sử
         → Push vào Redis Stream: discord-outgoing
 ```
 

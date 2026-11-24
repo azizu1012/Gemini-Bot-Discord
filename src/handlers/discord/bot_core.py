@@ -31,6 +31,16 @@ class BotCore:
     # already-stale reply.
     _OUTGOING_QUEUE_MAXSIZE = 100
 
+    # Cap on concurrent handle_outgoing_payload() tasks. Startup/periodic
+    # reclaim can hand over thousands of PEL entries at once; creating one
+    # unbounded task per entry (each possibly doing REST calls for
+    # typing/slash_reply) would fan out without limit.
+    _DISPATCH_CONCURRENCY = 32
+
+    # Abandoned reply groups (e.g. a batch that kept failing and was never
+    # ACKed) must not accumulate in _delivery_state forever.
+    _DELIVERY_STATE_TTL_SECONDS = 3600.0
+
     def __init__(self, config: Config):
         self.config = config
         self.logger = logger
@@ -486,9 +496,24 @@ class BotCore:
     def _dispatch_outgoing(self, msg) -> None:
         payload = dict(msg.value)
         payload['_consumer_entry_id'] = msg.entry_id
-        task = asyncio.create_task(self.handle_outgoing_payload(payload))
+        self._sweep_stale_delivery_state()
+        task = asyncio.create_task(self._run_dispatched_outgoing(payload))
         self._pending_outgoing_tasks.add(task)
         task.add_done_callback(self._pending_outgoing_tasks.discard)
+
+    async def _run_dispatched_outgoing(self, payload: dict) -> None:
+        """Run one dispatched payload under a shared concurrency cap.
+
+        Startup/periodic reclaim can hand over a whole PEL in one go; without a
+        cap each entry becomes its own task doing REST calls (typing,
+        slash_reply), which fans out without bound.
+        """
+        semaphore = getattr(self, "_dispatch_sem", None)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self._DISPATCH_CONCURRENCY)
+            self._dispatch_sem = semaphore
+        async with semaphore:
+            await self.handle_outgoing_payload(payload)
 
     def register_interaction(self, interaction_id: str, interaction: discord.Interaction) -> None:
         """Record an active interaction with a timestamp for TTL sweeping."""
@@ -507,6 +532,29 @@ class BotCore:
         if stale:
             self.logger.info(f"Swept {len(stale)} stale interactions")
 
+    def _sweep_stale_delivery_state(self) -> None:
+        """Drop delivery bookkeeping for reply groups abandoned long ago.
+
+        A reply_batch that never completes keeps its entry in _delivery_state
+        forever (it is only popped on a successful ACK). Without expiry a
+        long-running gateway leaks one dict per abandoned batch — and a stale
+        group id that reappears much later would silently skip chunks that were
+        never delivered.
+        """
+        if not self._delivery_state:
+            return
+        cutoff = time.monotonic() - self._DELIVERY_STATE_TTL_SECONDS
+        stale = [
+            group_id
+            for group_id, state in self._delivery_state.items()
+            if isinstance(state.get("created_at"), (int, float))
+            and float(state["created_at"]) < cutoff
+        ]
+        for group_id in stale:
+            self._delivery_state.pop(group_id, None)
+        if stale:
+            self.logger.info(f"Swept {len(stale)} stale delivery groups")
+
     async def handle_outgoing_payload(self, payload: dict):
         self._sweep_stale_interactions()
         action = payload.get("action")
@@ -515,6 +563,7 @@ class BotCore:
         self.logger.info(f"[REDIS-RECV] BotCore consumed outgoing event | Action: {action} | User: {user_id} | MsgID/IntID: {payload.get('reference_message_id') or payload.get('interaction_id')}")
 
         if not action:
+            await self._ack_outgoing_entry(payload)
             return
 
         if action in ("reply", "reply_batch"):
@@ -524,8 +573,9 @@ class BotCore:
                 # reply. Waiting for a free slot would stall the shared Redis
                 # consumer for every user, so dropping an already-stale item is
                 # the safer choice for a chat bot.
+                evicted = None
                 try:
-                    queue.get_nowait()
+                    evicted = queue.get_nowait()
                 except asyncio.QueueEmpty:
                     pass
                 else:
@@ -534,6 +584,10 @@ class BotCore:
                     f"[EGRESS] Reply queue for user {user_id} is full "
                     f"(maxsize={queue.maxsize}); dropped oldest item to keep latest reply"
                 )
+                # Payload bị bỏ vẫn mang entry id; ACK ngay để reclaim không
+                # gửi lại bản cũ trễ/trùng.
+                if isinstance(evicted, dict):
+                    await self._ack_outgoing_entry(evicted)
             await queue.put(payload)
             self._ensure_sender_task(user_id)
             return
@@ -589,6 +643,24 @@ class BotCore:
 
         except Exception as e:
             self.logger.error(f"Failed to handle outgoing Redis payload: {e}")
+        finally:
+            # Non-reply action không queued → ACK để không nằm mãi trong PEL.
+            # reply/reply_batch đã return ở trên, ACK trong _process_outgoing_payload.
+            await self._ack_outgoing_entry(payload)
+
+    async def _ack_outgoing_entry(self, payload: dict) -> None:
+        entry_id = payload.get("_consumer_entry_id")
+        if not entry_id:
+            return
+        consumer = getattr(self, "_outgoing_consumer", None)
+        if consumer is None:
+            return
+        try:
+            await consumer.ack_id(entry_id)
+        except Exception as e:
+            # ACK lỗi không được làm chết task dispatch; entry sẽ được reclaim
+            # và xử lý lại (at-least-once).
+            self.logger.warning(f"[EGRESS] ACK entry {entry_id} thất bại: {e}")
 
     def _get_outgoing_queue(self, user_id: str) -> asyncio.Queue:
         queue = self._outgoing_queues.get(user_id)
@@ -667,14 +739,21 @@ class BotCore:
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
         if not channel_id_str:
-            return False
-
-        channel_id = int(channel_id_str)
+            self.logger.warning("[EGRESS] reply payload rỗng (thiếu channel_id); không thể gửi lại.")
+            return True
+        try:
+            channel_id = int(channel_id_str)
+        except (TypeError, ValueError):
+            self.logger.warning(f"[EGRESS] channel_id không hợp lệ ({channel_id_str!r}); bỏ qua.")
+            return True
         channel = self.bot.get_channel(channel_id)
         if not channel:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
-            return False
+            self.logger.warning(
+                f"[EGRESS] reply payload trỏ channel không tồn tại ({channel_id}); bỏ qua."
+            )
+            return True
 
         content = payload.get("content")
         if content:
@@ -685,11 +764,16 @@ class BotCore:
 
         reference = None
         if ref_id_str:
-            reference = discord.MessageReference(
-                message_id=int(ref_id_str),
-                channel_id=channel_id,
-                fail_if_not_exists=False,
-            )
+            try:
+                ref_message_id = int(ref_id_str)
+            except (TypeError, ValueError):
+                ref_message_id = None
+            if ref_message_id is not None:
+                reference = discord.MessageReference(
+                    message_id=ref_message_id,
+                    channel_id=channel_id,
+                    fail_if_not_exists=False,
+                )
 
         sent_message = await self._send_message_with_retry(
             channel,  # type: ignore[arg-type]
@@ -707,14 +791,21 @@ class BotCore:
         channel_id_str = payload.get("channel_id")
         user_id = payload.get("user_id") or "unknown"
         if not channel_id_str:
-            return False
-
-        channel_id = int(channel_id_str)
+            self.logger.warning("[EGRESS] reply_batch payload rỗng (thiếu channel_id); không thể gửi lại.")
+            return True
+        try:
+            channel_id = int(channel_id_str)
+        except (TypeError, ValueError):
+            self.logger.warning(f"[EGRESS] channel_id không hợp lệ ({channel_id_str!r}); bỏ qua.")
+            return True
         channel = self.bot.get_channel(channel_id)
         if not channel:
             channel = await self.bot.fetch_channel(channel_id)
         if not channel:
-            return False
+            self.logger.warning(
+                f"[EGRESS] reply_batch payload trỏ channel không tồn tại ({channel_id}); bỏ qua."
+            )
+            return True
 
         self._cancel_typing_task(user_id)
 
@@ -745,7 +836,7 @@ class BotCore:
 
         state = self._delivery_state.setdefault(
             reply_group_id,
-            {"sent": set(), "last_index": -1, "created_at": datetime.utcnow()},
+            {"sent": set(), "last_index": -1, "created_at": time.monotonic()},
         )
         sent_set = state.get("sent", set())
         start_index = int(state.get("last_index", -1)) + 1
@@ -753,11 +844,16 @@ class BotCore:
         ref_id_str = payload.get("reference_message_id")
         reference = None
         if ref_id_str:
-            reference = discord.MessageReference(
-                message_id=int(ref_id_str),
-                channel_id=channel_id,
-                fail_if_not_exists=False,
-            )
+            try:
+                ref_message_id = int(ref_id_str)
+            except (TypeError, ValueError):
+                ref_message_id = None
+            if ref_message_id is not None:
+                reference = discord.MessageReference(
+                    message_id=ref_message_id,
+                    channel_id=channel_id,
+                    fail_if_not_exists=False,
+                )
 
         for item in items:
             idx = int(item.get("index", 0))
@@ -902,13 +998,50 @@ class BotCore:
             except asyncio.CancelledError:
                 pass
 
-        for task in list(self._pending_outgoing_tasks):
+        pending = list(self._pending_outgoing_tasks)
+        self._pending_outgoing_tasks.clear()
+        for task in pending:
             if not task.done():
                 task.cancel()
-            self._pending_outgoing_tasks.discard(task)
-        if self._pending_outgoing_tasks:
-            await asyncio.gather(*self._pending_outgoing_tasks, return_exceptions=True)
-            self._pending_outgoing_tasks.clear()
+        if pending:
+            # Gather đúng danh sách vừa cancel — discard trước khi gather sẽ
+            # khiến task bị huỷ mà không ai await (cảnh báo task destroyed).
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        # Cancel per-user egress sender loops.
+        senders = getattr(self, "_outgoing_senders", {}) or {}
+        sender_tasks = [t for t in list(senders.values()) if not t.done()]
+        for task in sender_tasks:
+            task.cancel()
+        if sender_tasks:
+            await asyncio.gather(*sender_tasks, return_exceptions=True)
+        senders.clear()
+
+        # Cancel typing loops and drop stale per-user locks.
+        typing_tasks = getattr(self, "active_typing_tasks", {}) or {}
+        for task in list(typing_tasks.values()):
+            if not task.done():
+                task.cancel()
+        typing_tasks.clear()
+        getattr(self, "_active_user_locks", {}).clear()
+
+        # Stop the voice-lock enforce loop if it was started.
+        voice_task = getattr(self, "_voice_enforce_task", None)
+        if voice_task is not None:
+            if not voice_task.done():
+                voice_task.cancel()
+            self._voice_enforce_task = None
+
+        # Close the Redis client created in __init__.
+        redis_client = getattr(self, "_redis_client", None)
+        if redis_client is not None:
+            close = getattr(redis_client, "aclose", None) or getattr(redis_client, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception as e:
+                    self.logger.warning(f"Failed to close Redis client cleanly: {e}")
+            self._redis_client = None
 
         await self.kafka_service.stop()
 

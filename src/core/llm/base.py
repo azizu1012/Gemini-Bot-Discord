@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -93,11 +94,8 @@ _AUTH_TOKENS = (
     "unauthenticated",
     "permission denied",
     "permission_denied",
-    "401",
-    "403",
 )
 _RATE_LIMIT_TOKENS = (
-    "429",
     "rate limit",
     "resource exhausted",
     "resource_exhausted",
@@ -106,9 +104,7 @@ _RATE_LIMIT_TOKENS = (
     "overloaded",
 )
 _UNAVAILABLE_TOKENS = (
-    "503",
     "service unavailable",
-    "500",
     "internal server error",
     "internal_server_error",
     "unavailable",
@@ -130,7 +126,6 @@ _CONNECTION_TOKENS = (
 _NOT_FOUND_TOKENS = (
     "not found",
     "not_found",
-    "404",
     "does not exist",
     "no such model",
 )
@@ -138,6 +133,32 @@ _NOT_FOUND_TOKENS = (
 
 def _text_of(error: Exception) -> str:
     return f"{type(error).__name__}: {error}".lower()
+
+_STATUS_CODE_RE = re.compile(r"\b(?:http|status(?:_code)?|code)\s*[:=]?\s*(\d{3})\b")
+
+def extract_status_code(error: Exception) -> Optional[int]:
+    """Trích HTTP status code từ exception nếu có.
+
+    Chỉ đọc thuộc tính có ngữ nghĩa status (không quét số trần trong text).
+    """
+    candidates = (getattr(error, "response", None), error)
+    for obj in candidates:
+        if obj is None:
+            continue
+        for attr in ("status_code", "status", "code"):
+            value = getattr(obj, attr, None)
+            # google-genai đặt code lỗi ở .code (int); chỉ nhận dải HTTP hợp lệ,
+            # tránh nhầm với .code dạng chuỗi/enum của SDK khác.
+            if isinstance(value, int) and 100 <= value <= 599:
+                return value
+            if isinstance(value, str) and value.strip().isdigit():
+                status = int(value.strip())
+                if 100 <= status <= 599:
+                    return status
+    match = _STATUS_CODE_RE.search(_text_of(error))
+    if match:
+        return int(match.group(1))
+    return None
 
 
 def is_invalid_key_error(text: str) -> bool:
@@ -171,6 +192,16 @@ def is_connection_error(error: Exception) -> bool:
 def classify_error(error: Exception) -> str:
     if isinstance(error, LLMError):
         return error.kind
+    status = extract_status_code(error)
+    if status is not None:
+        if status in (401, 403):
+            return "auth"
+        if status == 429:
+            return "rate_limit"
+        if status in (500, 502, 503, 504):
+            return "unavailable"
+        if status == 404:
+            return "not_found"
     text = _text_of(error)
     if is_invalid_key_error(text):
         return "auth"

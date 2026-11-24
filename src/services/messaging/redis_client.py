@@ -98,6 +98,81 @@ class RedisStreamConsumer:
             self._logger.error(f"Failed to ACK entry '{entry_id}' on '{self._stream}': {e}")
             return False
 
+    # XPENDING pages are bounded; walk several pages per reclaim cycle so a
+    # large stuck PEL (> 500 entries) cannot hide entries forever.
+    _RECLAIM_PAGE_SIZE = 500
+    _RECLAIM_MAX_PAGES = 20
+    _CLAIM_BATCH_SIZE = 100
+    _DEAD_LETTER_SUFFIX = "-dead-letter"
+
+    @staticmethod
+    def _coerce_int(raw: Any) -> int:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _move_to_dead_letter(self, entry_id: str, deliveries: int) -> bool:
+        """Copy a poison-pill entry to the dead-letter stream and drop it from the PEL.
+
+        At-least-once redelivery means an entry that always fails (bad payload,
+        permanently unreachable channel, ...) would otherwise be reclaimed on
+        every cycle forever. Best practice is to bound deliveries, preserve the
+        payload for inspection, ACK the original, and alert.
+
+        Returns True when the original entry was ACKed (moved or already gone).
+        """
+        dlq_stream = f"{self._stream}{self._DEAD_LETTER_SUFFIX}"
+        payload: Optional[dict] = None
+        try:
+            rows = await self._redis.xrange(self._stream, min=entry_id, max=entry_id, count=1)
+            if rows:
+                _, fields = rows[0]
+                payload = dict(fields or {})
+        except Exception as e:
+            self._logger.warning(
+                f"[DLQ] Không đọc được entry {entry_id} trên '{self._stream}': {e}"
+            )
+
+        if payload:
+            record = dict(payload)
+            record["_dlq_source_stream"] = self._stream
+            record["_dlq_source_group"] = self._group
+            record["_dlq_original_id"] = entry_id
+            record["_dlq_deliveries"] = str(deliveries)
+            try:
+                await self._redis.xadd(
+                    dlq_stream,
+                    record,
+                    maxlen=Config._get_int("RECLAIM_DEAD_LETTER_MAXLEN", 10000, min_value=100),
+                    approximate=True,
+                )
+            except Exception as e:
+                # Without the preserved copy, ACKing would silently lose data.
+                self._logger.error(
+                    f"[DLQ] Không ghi được entry {entry_id} vào '{dlq_stream}': {e}; giữ lại trong PEL."
+                )
+                return False
+            self._logger.error(
+                f"[DLQ] Entry {entry_id} trên '{self._stream}' đã chuyển sang '{dlq_stream}' "
+                f"sau {deliveries} lần giao."
+            )
+        else:
+            # Payload đã bị MAXLEN trim hoặc XDEL: không còn gì để xử lý/lưu.
+            self._logger.warning(
+                f"[PEL] Entry {entry_id} trên '{self._stream}' không còn trong stream "
+                f"(trim/xdel) sau {deliveries} lần giao; ACK để giải phóng PEL."
+            )
+
+        try:
+            await self._redis.xack(self._stream, self._group, entry_id)
+            return True
+        except Exception as e:
+            self._logger.warning(f"[PEL] ACK entry {entry_id} sau DLQ thất bại: {e}")
+            return False
+
     async def reclaim_pending(self, min_idle_ms: int = 30000) -> list[_RedisMsg]:
         reclaimed: list[_RedisMsg] = []
         try:
@@ -106,46 +181,88 @@ class RedisStreamConsumer:
             if not pending_count:
                 return reclaimed
 
-            entries = await self._redis.xpending_range(
-                self._stream, self._group, min='-', max='+', count=50
-            )
-
+            max_deliveries = Config._get_int("RECLAIM_MAX_DELIVERIES", 5, min_value=1, max_value=100)
+            cursor = "-"
             msg_ids: list[str] = []
-            for entry in entries:
-                msg_id = entry.get(b'message_id', entry.get('message_id', b''))
-                if isinstance(msg_id, bytes):
-                    msg_id = msg_id.decode('utf-8')
-                idle_ms = entry.get(b'time_since_delivered', entry.get('time_since_delivered', 0))
-                if isinstance(idle_ms, bytes):
-                    idle_ms = int(idle_ms.decode('utf-8'))
-                else:
-                    idle_ms = int(idle_ms) if idle_ms else 0
-                if idle_ms >= min_idle_ms:
-                    msg_ids.append(str(msg_id))
+            dead_lettered = 0
+
+            for _ in range(self._RECLAIM_MAX_PAGES):
+                entries = await self._redis.xpending_range(
+                    self._stream, self._group, min=cursor, max="+", count=self._RECLAIM_PAGE_SIZE
+                )
+                if not entries:
+                    break
+
+                last_id = ""
+                for entry in entries:
+                    msg_id = entry.get(b"message_id", entry.get("message_id", b""))
+                    if isinstance(msg_id, bytes):
+                        msg_id = msg_id.decode("utf-8")
+                    msg_id = str(msg_id)
+                    if not msg_id:
+                        continue
+                    last_id = msg_id
+                    idle_ms = self._coerce_int(
+                        entry.get(b"time_since_delivered", entry.get("time_since_delivered", 0))
+                    )
+                    if idle_ms < min_idle_ms:
+                        continue
+                    deliveries = self._coerce_int(
+                        entry.get(b"times_delivered", entry.get("times_delivered", 0))
+                    )
+                    if deliveries >= max_deliveries:
+                        if await self._move_to_dead_letter(msg_id, deliveries):
+                            dead_lettered += 1
+                        continue
+                    msg_ids.append(msg_id)
+
+                if len(entries) < self._RECLAIM_PAGE_SIZE or not last_id:
+                    break
+                cursor = f"({last_id}"
 
             if not msg_ids:
+                if dead_lettered:
+                    self._logger.warning(
+                        f"PEL reclaim on '{self._stream}': {dead_lettered} entry(ies) moved to dead-letter."
+                    )
                 return reclaimed
 
-            claimed = await self._redis.xclaim(
-                self._stream, self._group, self._consumer_name, min_idle_ms, msg_ids
+            for start in range(0, len(msg_ids), self._CLAIM_BATCH_SIZE):
+                batch = msg_ids[start:start + self._CLAIM_BATCH_SIZE]
+                claimed = await self._redis.xclaim(
+                    self._stream, self._group, self._consumer_name, min_idle_ms, batch
+                )
+
+                for eid, fields in claimed:
+                    eid_str = eid.decode("utf-8") if isinstance(eid, bytes) else str(eid)
+                    if not fields:
+                        # Redis 7 trả mảng rỗng cho ID đã bị trim/xdel: không thể
+                        # xử lý nữa, phải ACK nếu không PEL kẹt vĩnh viễn.
+                        self._logger.warning(
+                            f"[PEL] Claimed entry {eid_str} trên '{self._stream}' không còn payload; ACK bỏ."
+                        )
+                        try:
+                            await self._redis.xack(self._stream, self._group, eid_str)
+                        except Exception as e:
+                            self._logger.warning(f"[PEL] ACK entry {eid_str} (trimmed) thất bại: {e}")
+                        continue
+                    raw_key = fields.get(b"key") or fields.get("key") or b""
+                    if isinstance(raw_key, bytes):
+                        key = raw_key.decode("utf-8")
+                    else:
+                        key = str(raw_key)
+                    raw_value = fields.get(b"value") or fields.get("value")
+                    if raw_value is None:
+                        continue
+                    if isinstance(raw_value, bytes):
+                        raw_value = raw_value.decode("utf-8")
+                    value = json.loads(str(raw_value))
+                    reclaimed.append(_RedisMsg(value, key, eid_str))
+
+            self._logger.info(
+                f"Reclaimed {len(reclaimed)} pending entries on '{self._stream}'"
+                + (f" ({dead_lettered} dead-lettered)" if dead_lettered else "")
             )
-
-            for eid, fields in claimed:
-                raw_key = fields.get(b'key') or fields.get('key') or b''
-                if isinstance(raw_key, bytes):
-                    key = raw_key.decode('utf-8')
-                else:
-                    key = str(raw_key)
-                raw_value = fields.get(b'value') or fields.get('value')
-                if raw_value is None:
-                    continue
-                if isinstance(raw_value, bytes):
-                    raw_value = raw_value.decode('utf-8')
-                value = json.loads(str(raw_value))
-                eid_str = eid.decode('utf-8') if isinstance(eid, bytes) else str(eid)
-                reclaimed.append(_RedisMsg(value, key, eid_str))
-
-            self._logger.info(f"Reclaimed {len(reclaimed)} pending entries on '{self._stream}'")
         except Exception as e:
             self._logger.warning(f"PEL reclaim error on '{self._stream}': {e}")
 

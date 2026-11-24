@@ -50,6 +50,7 @@
 | `fallback` | Thử lại khi model chính lỗi | `reasoning` → `final` |
 - `fallback` PHẢI cùng provider với endpoint active. Không tự chuyển provider — muốn đổi thì `/endpoint switch` thủ công.
 - Khi model chính lỗi: retry cùng model theo `*_MAX_API_RETRIES`, sau đó thử `fallback` đúng 1 lần. Hết lượt → báo lỗi cho user.
+- Ngoại lệ **không** dùng fallback: lỗi auth do key hỏng toàn cục (`401`, hoặc auth không rõ status code và không phải `permission`). Lỗi `403 PERMISSION_DENIED` ở mức model/route vẫn được thử `fallback` — endpoint có thể cho phép model khác. Phân loại dựa trên HTTP status code trích từ exception (`response.status_code`) trước, sau đó mới tới heuristic theo text.
 
 ## 5. Bảo mật API key
 

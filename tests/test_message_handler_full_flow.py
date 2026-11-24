@@ -89,6 +89,34 @@ async def test_process_message_full_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_process_message_persists_plain_text_without_system_notes():
+    """History phải lưu câu hỏi gốc: không SYSTEM NOTE cue, không RAG context,
+    và không lặp lại câu hỏi trong prompt gửi LLM."""
+    h = make_handler()
+    h.cache_mgr.get_chat_history = MagicMock(return_value=[])
+    await h.process_message(make_msg({
+        "type": "message",
+        "user_id": "u1",
+        "content": "bạn là ai",
+        "channel_id": "c1",
+        "message_id": "m1",
+        "attachments": [],
+    }))
+    persisted = [c.args for c in h.db_repo.log_message_db.await_args_list]
+    user_rows = [row for row in persisted if row[1] == "user"]
+    assert len(user_rows) == 1
+    _user_id, _role, text = user_rows[0]
+    assert text == "bạn là ai"
+    assert "SYSTEM NOTE" not in text
+
+    pipeline_call = h._call_pipeline_with_deadline.await_args
+    messages = pipeline_call.args[1]
+    user_msgs = [m for m in messages if m.get("role") == "user"]
+    assert len(user_msgs) == 1
+    assert user_msgs[0]["parts"][0]["text"].count("bạn là ai") == 1
+
+
+@pytest.mark.asyncio
 async def test_process_message_easy_path():
     h = make_handler()
     h.cache_mgr.get_chat_history = MagicMock(return_value=[])

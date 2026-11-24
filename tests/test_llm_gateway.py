@@ -102,6 +102,34 @@ def test_no_fallback_for_auth():
     asyncio.run(run())
 
 
+def test_fallback_on_model_level_403_permission():
+    async def run():
+        resp = LLMResponse([])
+        roles = {"final": SlotModel("genai", "m1", "final"), "fallback": SlotModel("genai", "m2", "fallback")}
+        err = LLMError("auth", "403 PERMISSION_DENIED: model not allowed", status_code=403)
+        g, clients = make_gateway(roles, [err, resp])
+        out = await g.generate(role="final", system_instruction="", generation_config={}, messages=[])
+        assert out is resp
+        assert clients["genai"].calls == ["m1", "m2"]
+
+    asyncio.run(run())
+
+
+def test_no_fallback_for_auth_401_status_code():
+    async def run():
+        roles = {"final": SlotModel("genai", "m1", "final"), "fallback": SlotModel("genai", "m2", "fallback")}
+        err = LLMError("auth", "unauthorized", status_code=401)
+        g, clients = make_gateway(roles, [err])
+        try:
+            await g.generate(role="final", system_instruction="", generation_config={}, messages=[])
+            assert False, "phải raise"
+        except LLMError as e:
+            assert e.kind == "auth"
+        assert clients["genai"].calls == ["m1"]
+
+    asyncio.run(run())
+
+
 def test_fallback_role_does_not_chain():
     async def run():
         roles = {"fallback": SlotModel("genai", "m2", "fallback")}

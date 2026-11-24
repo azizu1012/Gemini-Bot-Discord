@@ -13,6 +13,7 @@ from src.core.llm.base import (
     Part,
     SlotModel,
     classify_error,
+    extract_status_code,
     SLOTS,
 )
 
@@ -59,8 +60,42 @@ def test_classify():
         assert got == expected, f"{err!r}: got {got}, expected {expected}"
 
 
+def test_classify_status_code_attribute_wins():
+    class HttpError(Exception):
+        def __init__(self, message, status_code):
+            super().__init__(message)
+            self.status_code = status_code
+
+    assert classify_error(HttpError("boom", 403)) == "auth"
+    assert classify_error(HttpError("boom", 429)) == "rate_limit"
+    assert classify_error(HttpError("boom", 503)) == "unavailable"
+    assert classify_error(HttpError("boom", 404)) == "not_found"
+    # Mã lỗi xuất hiện nhưng không phải HTTP status → không được coi là not_found.
+    assert classify_error(Exception("processed 404 tokens")) == "other"
+
+
+def test_extract_status_code_ignores_bare_numbers():
+    assert extract_status_code(Exception("processed 404 tokens")) is None
+    assert extract_status_code(Exception("GenAI endpoint HTTP 403: denied")) == 403
+
+
+def test_extract_status_code_google_genai_error_shape():
+    class GenAIAPIError(Exception):
+        """Mô phỏng google.genai.errors.APIError: .code int, .status là enum text."""
+
+        def __init__(self, code, status):
+            super().__init__(f"{code} {status}. details")
+            self.code = code
+            self.status = status
+
+    assert extract_status_code(GenAIAPIError(403, "PERMISSION_DENIED")) == 403
+    assert classify_error(GenAIAPIError(429, "RESOURCE_EXHAUSTED")) == "rate_limit"
+
+
 if __name__ == "__main__":
     test_shapes()
     test_error_classes()
     test_classify()
+    test_classify_status_code_attribute_wins()
+    test_extract_status_code_ignores_bare_numbers()
     print("ALL PASS")

@@ -83,6 +83,9 @@ Với mặc định 3 tin/30s, anti-spam có thể chặn trước mức 10/60s 
 | `MAX_SEARCH_CALLS_PER_TURN` | 5 | 1-20 |
 | `MIN_FREE_SPACE_MB` | 100 | Ngưỡng dọn file upload cũ |
 | `RECLAIM_PENDING_INTERVAL_SECONDS` | 60 | 10-3600 (chu kỳ reclaim tin pending mỗi 60s) |
+| `RECLAIM_MAX_DELIVERIES` | 5 | 1-100 (số lần giao tối đa trước khi đẩy entry sang dead-letter) |
+| `RECLAIM_DEAD_LETTER_MAXLEN` | 10000 | ≥100 (giới hạn độ dài stream `<stream>-dead-letter`) |
+| `REDIS_STREAM_MAXLEN` | 100000 | ≥1000 (MAXLEN xấp xỉ của stream chính) |
 
 ### NLP gate (hằng số code trong `src/core/nlp_gate.py`, không env)
 

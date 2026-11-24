@@ -138,6 +138,25 @@ def _has_minimum_search_evidence(tool_results: str) -> bool:
 
     return any(_has_minimum_evidence_block(block) for block in intent_blocks.values())
 
+_SEARCH_EVIDENCE_MARKERS = (
+    "top ranked sources",
+    "top trusted sources",
+    "quality sources found",
+    "reputable sources found",
+)
+
+def _looks_like_search_evidence(tool_results: str) -> bool:
+    """True nếu tool_results đến từ search (không phải calculate/note/vision...).
+
+    Extra retrieval pass và hedging chỉ nên áp dụng cho turn thực sự search.
+    """
+    if not tool_results:
+        return False
+    if _extract_intent_blocks(tool_results):
+        return True
+    lower = tool_results.lower()
+    return any(marker in lower for marker in _SEARCH_EVIDENCE_MARKERS)
+
 
 def _looks_semantically_incomplete(text: str) -> bool:
     cleaned = (text or "").strip()
@@ -417,7 +436,7 @@ class GeminiPipeline:
             self.logger.info(f"Returning image recognition result directly for {user_id}.")
             return image_result
 
-        if tool_results and not _is_tool_result_sufficient(tool_results):
+        if tool_results and _looks_like_search_evidence(tool_results) and not _is_tool_result_sufficient(tool_results):
             partial_ok = self.config.SEARCH_ALLOW_PARTIAL_ANSWER and _has_minimum_search_evidence(tool_results)
             if self.config.SEARCH_ENABLE_EXTRA_RETRIEVAL_PASS and not partial_ok:
                 self.logger.info(f"Evidence insufficient for {user_id}. Running one additional retrieval pass.")
@@ -684,7 +703,7 @@ class GeminiPipeline:
     async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
         MAX_RETRIES = max(5, self.config.FINAL_MAX_API_RETRIES)
 
-        if tool_results and not _is_tool_result_sufficient(tool_results):
+        if tool_results and _looks_like_search_evidence(tool_results) and not _is_tool_result_sufficient(tool_results):
             if self.config.SEARCH_ALLOW_PARTIAL_ANSWER and _has_minimum_search_evidence(tool_results):
                 self.logger.info(f"Using partial evidence response mode for user {user_id}.")
                 reasoning_result = (
@@ -901,6 +920,8 @@ class GeminiPipeline:
                         f"Fallback empty candidate for {user_id} "
                         f"(attempt {attempt + 1}/{MAX_RETRIES}), retrying."
                     )
+                    if attempt + 1 < MAX_RETRIES:
+                        await asyncio.sleep(1 + attempt)
                     continue
 
                 text = _candidate_text(candidate)
@@ -946,6 +967,8 @@ class GeminiPipeline:
 
                 if self.api_mgr._is_connection_error(e):
                     self.logger.warning("⚠️ Lite fallback endpoint unreachable; retrying.")
+                    if attempt + 1 < MAX_RETRIES:
+                        await asyncio.sleep(1 + attempt)
                     continue
 
                 self.api_mgr.log_exception(

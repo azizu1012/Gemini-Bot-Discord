@@ -65,6 +65,13 @@ Runner trực tiếp cũ + toàn bộ `src/.runtime/` (~1GB) đã xóa. Docker l
 - **ACK semantics**: một message chỉ được ACK sau khi publish reply thành công (hoặc sau khi publish fallback busy-reply thành công). Nếu cả hai thất bại, message được để lại un-ACKed cho reclaim thay vì bị drop im lặng (at-least-once).
 - **Search subtask group id ổn định** (`azuris_search_results`): restart không tích luỹ consumer group mồ côi; subtask worker ACK sau khi publish kết quả.
 - **Egress**: hàng đợi reply outgoing bị giới hạn (100), drop item cũ nhất khi overflow; vòng lặp sender sống sót qua lỗi từng payload.
+  - Payload bị evict/không phải `reply` được **ACK ngay** để không nằm lại vĩnh viễn trong PEL của consumer group.
+  - Lỗi **vĩnh viễn** khi gửi (thiếu `channel_id`, channel đã bị xoá) → log warning + ACK, không retry vô ích.
+  - Lỗi **tạm thời** khi gọi API Discord → giữ un-ACKed cho `reclaim_pending()` thử lại (at-least-once).
+- **Reclaim batch & paging**: `reclaim_pending()` đọc PEL theo trang 500 entry, tối đa 20 trang mỗi lượt, dùng cursor độc quyền (`(id`) và `XCLAIM` theo lô 100 — PEL lớn không còn bị chặn ở 500 entry đầu.
+- **Dead-letter cho poison pill**: entry có `times_delivered >= RECLAIM_MAX_DELIVERIES` (mặc định 5) được copy sang stream `<stream>-dead-letter` (kèm `_dlq_source_stream`, `_dlq_source_group`, `_dlq_original_id`, `_dlq_deliveries`) rồi ACK. Nếu ghi DLQ lỗi thì **không** ACK — entry ở lại PEL. Entry đã bị MAXLEN trim/`XDEL` (không còn payload) được ACK kèm warning để giải phóng PEL.
+  - Kiểm tra DLQ: `XRANGE discord-incoming-dead-letter - + COUNT 100` (hoặc `discord-outgoing-dead-letter`), xử lý tay rồi `XDEL` khỏi DLQ.
+- **Dispatch cap (egress)**: `_dispatch_outgoing` chạy `handle_outgoing_payload` dưới `Semaphore(32)` — reclaim lúc startup/định kỳ trả cả nghìn entry vẫn không tạo task không giới hạn. `_delivery_state` của reply group bỏ dở được dọn sau 3600s để gateway chạy dài không rò rỉ bộ nhớ.
 
 ### Bảo trì DB
 ```sql

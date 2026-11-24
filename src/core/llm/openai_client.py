@@ -22,6 +22,7 @@ from src.core.llm.base import (
     LLMResponse,
     Part,
     classify_error,
+    extract_status_code,
 )
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -272,14 +273,14 @@ class OpenAIClient:
         try:
             completion = await self._client.chat.completions.create(**request)
         except Exception as e:
-            raise LLMError(classify_error(e), str(e), raw=e) from e
+            raise LLMError(classify_error(e), str(e), status_code=extract_status_code(e), raw=e) from e
         return self.emulate_response(completion)
 
     async def list_models(self) -> List[Dict[str, str]]:
         try:
             listing = await self._client.models.list()
         except Exception as e:
-            raise LLMError(classify_error(e), str(e), raw=e) from e
+            raise LLMError(classify_error(e), str(e), status_code=extract_status_code(e), raw=e) from e
         data = getattr(listing, "data", None) or []
         out: List[Dict[str, str]] = []
         for model in data:
