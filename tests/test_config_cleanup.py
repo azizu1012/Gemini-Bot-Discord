@@ -129,12 +129,14 @@ def test_chat_limit_configuration_reads_environment(monkeypatch):
     for name, value in {
         "SPAM_THRESHOLD": "4", "SPAM_WINDOW": "20", "DEFAULT_RATE_LIMIT": "12/60",
         "PREMIUM_RATE_LIMIT": "30/90", "DEFAULT_DM_LIMIT": "8", "PREMIUM_DM_LIMIT": "25",
+        "DEFAULT_DAILY_MESSAGE_LIMIT": "120",
     }.items():
         monkeypatch.setenv(name, value)
     cfg = Config()
     assert (cfg.SPAM_THRESHOLD, cfg.SPAM_WINDOW) == (4, 20)
     assert (cfg.DEFAULT_RATE_LIMIT, cfg.PREMIUM_RATE_LIMIT) == ("12/60", "30/90")
     assert (cfg.DEFAULT_DM_LIMIT, cfg.PREMIUM_DM_LIMIT) == (8, 25)
+    assert cfg.DEFAULT_DAILY_MESSAGE_LIMIT == 120
     for invalid in ("bad", "0/60", "10/0", "-1/60", "10/60/90"):
         monkeypatch.setenv("DEFAULT_RATE_LIMIT", invalid)
         assert Config._get_rate_limit("DEFAULT_RATE_LIMIT", "10/60") == "10/60"

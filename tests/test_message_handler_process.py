@@ -115,6 +115,28 @@ async def test_process_daily_limit_reached(monkeypatch):
     first_payload = h._publish_outgoing.call_args_list[0][0][0]
     assert first_payload["action"] == "reply"
     assert "giới hạn" in first_payload["content"]
+    assert "(50/50)" in first_payload["content"]
+
+
+@pytest.mark.asyncio
+async def test_process_daily_limit_uses_configured_value():
+    """Trần ngày đọc từ config, không hardcode 50."""
+
+    h = make_handler()
+    h.config.DEFAULT_DAILY_MESSAGE_LIMIT = 120
+    h.resolver.is_configured = AsyncMock(return_value=True)
+    h.premium_mgr.is_admin_user = AsyncMock(return_value=False)
+    h.premium_mgr.is_moderator_user = AsyncMock(return_value=False)
+    h.premium_mgr.is_premium_user = AsyncMock(return_value=False)
+    h.db_repo.count_user_messages_today_db = AsyncMock(return_value=120)
+    h._process_message_guarded = AsyncMock()
+
+    await h.process_message(make_msg({"type": "message", "user_id": "u1", "content": "hi", "channel_id": "c1", "message_id": "m1"}))
+
+    first_payload = h._publish_outgoing.call_args_list[0][0][0]
+    assert first_payload["action"] == "reply"
+    assert "(120/120)" in first_payload["content"]
+    h._process_message_guarded.assert_not_awaited()
 
 
 def make_full_handler(monkeypatch):

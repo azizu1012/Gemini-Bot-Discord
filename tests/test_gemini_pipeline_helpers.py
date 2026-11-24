@@ -283,18 +283,6 @@ class FakeGateway:
         cand = self.call_candidates()
         return SimpleNamespace(candidates=[cand] if cand else [])
 
-    def _is_invalid_key_error(self, s):
-        return "invalid key" in str(s)
-
-    def _is_rate_limit_error(self, s):
-        return "rate limit" in str(s)
-
-    def _is_unavailable_error(self, s):
-        return "unavailable" in str(s)
-
-    def _is_connection_error(self, s):
-        return "connection" in str(s)
-
     def log_exception(self, **kw):
         pass
 
@@ -397,15 +385,6 @@ async def test_fallback_lite_returns_error_on_retry_exhausted():
         async def generate(self, **kwargs):
             raise ConnectionError("connection failed")
 
-        def _is_connection_error(self, s):
-            return True
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_rate_limit_error(self, s):
-            return False
-
     pipeline = make_pipeline(ErrGateway(None))
     result = await pipeline._call_gemini_final(
         [{"role": "user", "parts": [{"text": "hi"}]}],
@@ -457,18 +436,6 @@ async def test_continue_final_output_handles_rate_limit_then_success():
                 raise Exception("rate limit hit")
             return SimpleNamespace(candidates=[_step_candidate(text="continued", finish="STOP")])
 
-        def _is_rate_limit_error(self, s):
-            return "rate limit" in str(s)
-
-        def _is_unavailable_error(self, s):
-            return False
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
-
     pipeline = make_pipeline(RLGateway(None))
     result = await pipeline._continue_final_output(
         accumulated_text="partial",
@@ -486,15 +453,6 @@ async def test_continue_final_output_stops_on_invalid_key():
     class KeyGateway(FakeGateway):
         async def generate(self, **kwargs):
             raise Exception("invalid key abc")
-
-        def _is_invalid_key_error(self, s):
-            return "invalid key" in str(s)
-
-        def _is_rate_limit_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
 
     pipeline = make_pipeline(KeyGateway(None))
     result = await pipeline._continue_final_output(
@@ -550,15 +508,6 @@ async def test_fallback_lite_invalid_key_returns_user_error():
         async def generate(self, **kwargs):
             raise Exception("invalid key abc")
 
-        def _is_invalid_key_error(self, s):
-            return "invalid key" in str(s)
-
-        def _is_rate_limit_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
-
     pipeline = make_pipeline(KeyGateway(None))
     result = await pipeline._fallback_lite_as_flash(
         [{"role": "user", "parts": [{"text": "hi"}]}],
@@ -581,18 +530,6 @@ async def test_final_rate_limit_fallback_to_lite():
                 raise Exception("rate limit hit")
             return SimpleNamespace(candidates=[_step_candidate(text="lite answer", finish="STOP")])
 
-        def _is_rate_limit_error(self, s):
-            return "rate limit" in str(s)
-
-        def _is_unavailable_error(self, s):
-            return False
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
-
         def log_exception(self, **kw):
             pass
 
@@ -612,15 +549,6 @@ async def test_final_invalid_key_breaks_to_fallback():
     class KeyGateway(FakeGateway):
         async def generate(self, **kwargs):
             raise Exception("invalid key abc")
-
-        def _is_invalid_key_error(self, s):
-            return "invalid key" in str(s)
-
-        def _is_rate_limit_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
 
         def log_exception(self, **kw):
             pass
@@ -646,15 +574,6 @@ async def test_final_connection_error_retries_then_empty_candidate():
             if state["n"] <= 1:
                 raise ConnectionError("connection reset")
             return SimpleNamespace(candidates=[])
-
-        def _is_connection_error(self, s):
-            return True
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_rate_limit_error(self, s):
-            return False
 
         def log_exception(self, **kw):
             pass
@@ -685,15 +604,6 @@ async def test_call_gemini_api_extra_retrieval_pass():
             if state["calls"] <= 2:
                 return SimpleNamespace(candidates=[_step_candidate(text=None, function_call=SimpleNamespace(name="web_search", args={"query": "q"}))])
             return SimpleNamespace(candidates=[_step_candidate(text="final answer", finish="STOP")])
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_rate_limit_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
 
         def log_exception(self, **kw):
             pass
@@ -778,12 +688,6 @@ async def test_reasoning_loop_rate_limit_retry(monkeypatch):
                 raise Exception("rate limit hit")
             return SimpleNamespace(candidates=[_step_candidate(text="ok after retry", finish="STOP")])
 
-        def _is_rate_limit_error(self, s):
-            return "rate limit" in str(s)
-
-        def _is_unavailable_error(self, s):
-            return False
-
     cfg = FakeConfig()
     cfg.REASONING_MAX_API_RETRIES = 2
     pipeline = make_pipeline(RLGateway(None), config=cfg)
@@ -798,15 +702,6 @@ async def test_reasoning_loop_invalid_key_breaks(monkeypatch):
     class KeyGateway(FakeGateway):
         async def generate(self, **kwargs):
             raise Exception("invalid key")
-
-        def _is_invalid_key_error(self, s):
-            return "invalid key" in str(s)
-
-        def _is_rate_limit_error(self, s):
-            return False
-
-        def _is_connection_error(self, s):
-            return False
 
     pipeline = make_pipeline(KeyGateway(None))
     result, _ = await pipeline._call_gemini_reasoning_loop(
@@ -906,15 +801,6 @@ async def test_continue_final_output_connection_error():
                 raise ConnectionError("conn down")
             return SimpleNamespace(candidates=[_step_candidate(text="ok", finish="STOP")])
 
-        def _is_connection_error(self, e):
-            return True
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_rate_limit_error(self, s):
-            return False
-
     pipeline = make_pipeline(ConnGateway(None))
     res = await pipeline._continue_final_output(
         accumulated_text="initial",
@@ -932,15 +818,6 @@ async def test_continue_final_output_generic_exception():
     class GenGateway(FakeGateway):
         async def generate(self, **kwargs):
             raise RuntimeError("other error")
-
-        def _is_connection_error(self, e):
-            return False
-
-        def _is_invalid_key_error(self, s):
-            return False
-
-        def _is_rate_limit_error(self, s):
-            return False
 
         def log_exception(self, **kw):
             pass

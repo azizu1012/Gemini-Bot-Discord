@@ -35,6 +35,9 @@ def test_normalize_intent_text():
     h = make_handler()
     assert h._normalize_intent_text("  Xin chào  Hà Nội  ") == "xin chao ha noi"
     assert h._normalize_intent_text("") == ""
+    # "đ" (U+0111) không tách được bằng NFD → phải map tay thành "d".
+    assert h._normalize_intent_text("Bạn làm được gì?") == "ban lam duoc gi"
+    assert h._normalize_intent_text("Đúng rồi") == "dung roi"
 
 
 def test_detect_user_correction_none():
@@ -61,6 +64,25 @@ def test_is_capability_question():
     assert h._is_capability_question("what can you do") is True
     assert h._is_capability_question("capabilities") is True
     assert h._is_capability_question("xin chào") is False
+    # Câu tiếng Việt tự nhiên phải khớp (trước đây "đ" bị nuốt thành "uoc").
+    assert h._is_capability_question("Bạn làm được gì?") is True
+    assert h._is_capability_question("ban lam duoc gi") is True
+
+
+def test_is_cross_user_presence_question_accented():
+    h = make_handler()
+    assert h._is_cross_user_presence_question("Bạn có chat với ai khác không") is True
+
+
+def test_daily_message_limit_reads_config():
+    h = make_handler()
+    h.config.DEFAULT_DAILY_MESSAGE_LIMIT = 120
+    assert h._daily_message_limit() == 120
+    h.config.DEFAULT_DAILY_MESSAGE_LIMIT = "120"
+    assert h._daily_message_limit() == 120
+    for bad in ("bad", 0, -5, None, True, MagicMock()):
+        h.config.DEFAULT_DAILY_MESSAGE_LIMIT = bad
+        assert h._daily_message_limit() == 50
 
 
 def test_is_cross_user_presence_question():

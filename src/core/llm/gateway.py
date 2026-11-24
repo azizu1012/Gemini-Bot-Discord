@@ -17,10 +17,6 @@ from src.core.llm.base import (
     LLMResponse,
     LLMUnsupportedError,
     classify_error,
-    is_connection_error,
-    is_invalid_key_error,
-    is_rate_limit_error,
-    is_unavailable_error,
 )
 from src.core.llm.genai_client import GenAIClient
 from src.core.llm.redaction import redact_diagnostic
@@ -192,22 +188,6 @@ class LLMGateway:
             f"[LLM][{stage}] role={role} kind={kind} attempt={attempt}/{max_attempts} "
             f"user={user_id} error={type(error).__name__}: {self._redact(error)[:300]}"
         )
-
-    @staticmethod
-    def _is_invalid_key_error(text: str) -> bool:
-        return is_invalid_key_error(text)
-
-    @staticmethod
-    def _is_rate_limit_error(text: str) -> bool:
-        return is_rate_limit_error(text)
-
-    @staticmethod
-    def _is_unavailable_error(text: str) -> bool:
-        return is_unavailable_error(text)
-
-    @staticmethod
-    def _is_connection_error(error: Exception) -> bool:
-        return is_connection_error(error)
 
     async def close(self) -> None:
         with self._lock:

@@ -26,18 +26,6 @@ class FakeGateway:
         self.calls.append(kwargs)
         return LLMResponse([Candidate(Content([Part(text="đã đọc ảnh")]))])
 
-    def _is_invalid_key_error(self, _error):
-        return False
-
-    def _is_rate_limit_error(self, _error):
-        return False
-
-    def _is_unavailable_error(self, _error):
-        return False
-
-    def _is_connection_error(self, _error):
-        return False
-
     def log_exception(self, **_kwargs):
         pass
 

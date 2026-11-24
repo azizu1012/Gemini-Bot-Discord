@@ -142,6 +142,8 @@ class Config:
         self.PREMIUM_RATE_LIMIT = self._get_rate_limit("PREMIUM_RATE_LIMIT", "20/60")
         self.DEFAULT_DM_LIMIT = self._get_int("DEFAULT_DM_LIMIT", 5, min_value=1)
         self.PREMIUM_DM_LIMIT = self._get_int("PREMIUM_DM_LIMIT", 15, min_value=1)
+        # Trần tổng tin nhắn chat/ngày cho Free User (DM + server), đếm từ lịch sử PostgreSQL.
+        self.DEFAULT_DAILY_MESSAGE_LIMIT = self._get_int("DEFAULT_DAILY_MESSAGE_LIMIT", 50, min_value=1)
 
         self.ADMIN_ID_RAW = os.getenv("ADMIN_IDS", os.getenv("ADMIN_ID", ""))
         self.ADMIN_USER_IDS = [i.strip() for i in self.ADMIN_ID_RAW.split(",") if i.strip()] if self.ADMIN_ID_RAW else []
@@ -301,6 +303,7 @@ DEFAULT_RATE_LIMIT = config.DEFAULT_RATE_LIMIT
 PREMIUM_RATE_LIMIT = config.PREMIUM_RATE_LIMIT
 DEFAULT_DM_LIMIT = config.DEFAULT_DM_LIMIT
 PREMIUM_DM_LIMIT = config.PREMIUM_DM_LIMIT
+DEFAULT_DAILY_MESSAGE_LIMIT = config.DEFAULT_DAILY_MESSAGE_LIMIT
 ADMIN_USER_IDS = config.ADMIN_USER_IDS
 MODERATOR_USER_IDS = config.MODERATOR_USER_IDS
 MAX_CONCURRENT_MESSAGES = config.MAX_CONCURRENT_MESSAGES
