@@ -391,22 +391,23 @@ class GeminiPipeline:
                     break
 
                 except Exception as e:
-                    error_str = str(e)
-                    if self.api_mgr._is_invalid_key_error(error_str):
+                    kind = classify_error(e)
+                    # auth = 401 (key hỏng toàn cục) hoặc 403 (gateway đã thử
+                    # slot fallback rồi mới ném lên) → retry tiếp cũng hỏng.
+                    if kind == "auth":
                         self.logger.warning(
-                            f"{stage} continuation invalid key on part {part_index}/{max_calls}; dừng retry (kiểm tra API key bằng /endpoint)."
+                            f"{stage} continuation auth error on part {part_index}/{max_calls}; dừng retry (kiểm tra API key bằng /endpoint)."
                         )
                         return current_text
 
-                    if self.api_mgr._is_rate_limit_error(error_str):
-                        error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
+                    if kind in ("rate_limit", "unavailable"):
                         self.logger.warning(
-                            f"{stage} continuation transient {error_type} on part {part_index}/{max_calls} retry {retry_index}/{per_part_retries}; rotating."
+                            f"{stage} continuation transient {kind} on part {part_index}/{max_calls} retry {retry_index}/{per_part_retries}; rotating."
                         )
                         await asyncio.sleep(2)
                         continue
 
-                    if self.api_mgr._is_connection_error(e):
+                    if kind == "connection":
                         self.logger.warning(
                             f"{stage} continuation endpoint unreachable on part {part_index}/{max_calls}; rotating."
                         )
@@ -649,22 +650,22 @@ class GeminiPipeline:
                 return ("Reasoning completed", tool_results_str)
 
             except Exception as e:
-                error_str = str(e)
+                kind = classify_error(e)
 
-                if isinstance(e, LLMNotConfiguredError) or classify_error(e) == "not_configured":
+                if isinstance(e, LLMNotConfiguredError) or kind == "not_configured":
                     raise
 
-                if "Empty candidate" in error_str:
-                    self.logger.warning(f"⚠️ {error_str}. Retrying attempt {attempt + 1}/{MAX_RETRIES}.")
+                if "empty candidate" in str(e).lower():
+                    self.logger.warning(f"⚠️ {e}. Retrying attempt {attempt + 1}/{MAX_RETRIES}.")
                     await asyncio.sleep(1)
                     continue
 
-                if self.api_mgr._is_invalid_key_error(error_str):
-                    self.logger.warning("Lite model gặp lỗi API key không hợp lệ; dừng retry (kiểm tra lại bằng /endpoint).")
+                if kind == "auth":
+                    self.logger.warning("Lite model gặp lỗi auth (401/403); dừng retry (kiểm tra lại bằng /endpoint).")
                     break
 
-                if self.api_mgr._is_rate_limit_error(error_str):
-                    error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
+                if kind in ("rate_limit", "unavailable"):
+                    error_type = kind
                     wait_time = 2 + (attempt * 2)
 
                     self.logger.warning(
@@ -680,7 +681,7 @@ class GeminiPipeline:
                     await asyncio.sleep(wait_time)
                     continue
 
-                if self.api_mgr._is_connection_error(e):
+                if kind == "connection":
                     self.logger.warning(
                         f"Lite endpoint unreachable; retrying (attempt {attempt + 1}/{MAX_RETRIES})."
                     )
@@ -813,17 +814,17 @@ class GeminiPipeline:
                 continue
 
             except Exception as e:
-                error_str = str(e)
+                kind = classify_error(e)
 
-                if isinstance(e, LLMNotConfiguredError) or classify_error(e) == "not_configured":
+                if isinstance(e, LLMNotConfiguredError) or kind == "not_configured":
                     raise
 
-                if self.api_mgr._is_invalid_key_error(error_str):
-                    self.logger.warning(f"⚠️ Flash model invalid key on attempt {attempt + 1}/{MAX_RETRIES}; dừng retry (kiểm tra bằng /endpoint).")
+                if kind == "auth":
+                    self.logger.warning(f"⚠️ Flash model auth error (401/403) on attempt {attempt + 1}/{MAX_RETRIES}; dừng retry (kiểm tra bằng /endpoint).")
                     break
 
-                if self.api_mgr._is_rate_limit_error(error_str):
-                    error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
+                if kind in ("rate_limit", "unavailable"):
+                    error_type = kind
                     self.logger.warning(f"⚠️ Flash transient {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}")
 
                     wait_time = 2 + (attempt * 2)
@@ -836,7 +837,7 @@ class GeminiPipeline:
 
                     continue
 
-                if self.api_mgr._is_connection_error(e):
+                if kind == "connection":
                     self.logger.warning(f"⚠️ Flash model endpoint unreachable; retrying (attempt {attempt + 1}/{MAX_RETRIES}).")
                     continue
 
@@ -950,22 +951,21 @@ class GeminiPipeline:
                     return text
 
             except Exception as e:
-                error_str = str(e)
+                kind = classify_error(e)
 
-                if isinstance(e, LLMNotConfiguredError) or classify_error(e) == "not_configured":
+                if isinstance(e, LLMNotConfiguredError) or kind == "not_configured":
                     raise
 
-                if self.api_mgr._is_invalid_key_error(error_str):
-                    self.logger.warning("⚠️ Lite fallback gặp lỗi API key không hợp lệ; dừng retry (kiểm tra bằng /endpoint).")
+                if kind == "auth":
+                    self.logger.warning("⚠️ Lite fallback gặp lỗi auth (401/403); dừng retry (kiểm tra bằng /endpoint).")
                     break
 
-                if self.api_mgr._is_rate_limit_error(error_str):
-                    error_type = "unavailable" if self.api_mgr._is_unavailable_error(error_str) else "rate_limit"
-                    self.logger.warning(f"⚠️ Lite fallback transient {error_type}. Attempt {attempt + 1}/{MAX_RETRIES}")
+                if kind in ("rate_limit", "unavailable"):
+                    self.logger.warning(f"⚠️ Lite fallback transient {kind}. Attempt {attempt + 1}/{MAX_RETRIES}")
                     await asyncio.sleep(2 + attempt * 2)
                     continue
 
-                if self.api_mgr._is_connection_error(e):
+                if kind == "connection":
                     self.logger.warning("⚠️ Lite fallback endpoint unreachable; retrying.")
                     if attempt + 1 < MAX_RETRIES:
                         await asyncio.sleep(1 + attempt)

@@ -8,6 +8,7 @@ import pytest
 
 sys.path.insert(0, ".")
 
+from src.core.llm.base import LLMError
 from src.core.gemini_pipeline import (
     GeminiPipeline,
     _append_continuation_text,
@@ -812,6 +813,49 @@ async def test_reasoning_loop_invalid_key_breaks(monkeypatch):
         [{"role": "user", "parts": [{"text": "hi"}]}], "u1", {"is_admin": False}
     )
     assert result == "Reasoning loop failed"
+
+
+@pytest.mark.asyncio
+async def test_continue_final_output_stops_on_llm_auth_403():
+    class PermissionGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            raise LLMError("auth", "403 PERMISSION_DENIED", status_code=403)
+
+    pipeline = make_pipeline(PermissionGateway(None))
+    result = await pipeline._continue_final_output(
+        accumulated_text="partial",
+        system_instruction="sys",
+        generation_config={},
+        slot_role="final",
+        user_id="u1",
+        stage="final_flash",
+    )
+    assert result == "partial"
+
+
+@pytest.mark.asyncio
+async def test_reasoning_loop_llm_error_rate_limit_uses_backoff(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    state = {"n": 0}
+
+    class TypedRLGateway(FakeGateway):
+        async def generate(self, **kwargs):
+            state["n"] += 1
+            if state["n"] == 1:
+                # Message không chứa token text nào — chỉ kind/status_code mới
+                # phân loại được (SDK google-genai viết hoa, không có "rate limit").
+                raise LLMError("rate_limit", "429 RESOURCE_EXHAUSTED", status_code=429)
+            return SimpleNamespace(candidates=[_step_candidate(text="ok after backoff", finish="STOP")])
+
+    cfg = FakeConfig()
+    cfg.REASONING_MAX_API_RETRIES = 2
+    pipeline = make_pipeline(TypedRLGateway(None), config=cfg)
+    result, _ = await pipeline._call_gemini_reasoning_loop(
+        [{"role": "user", "parts": [{"text": "hi"}]}], "u1", {"is_admin": False}
+    )
+    assert result == "ok after backoff"
+    assert sleep.await_args_list[0].args == (2,)
 
 
 @pytest.mark.asyncio

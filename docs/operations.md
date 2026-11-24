@@ -129,6 +129,7 @@ pipeline khi gate COMPLEX hoặc EASY lỗi/timeout (60s).
 ### Fallback
 - Lỗi model chính → retry cùng model theo `*_MAX_API_RETRIES` → thử `fallback` đúng 1 lần.
 - Fallback luôn cùng provider/SDK active; muốn đổi provider → `/endpoint switch` thủ công.
+- Phân loại lỗi ở **mọi tầng** (gateway lẫn pipeline) dùng `classify_error()` — HTTP status code thật trước, heuristic text sau; nhánh retry/backoff (`rate_limit`, `unavailable`, `connection`) và nhánh dừng (`auth`) không phụ thuộc cách SDK viết hoa message.
 - Chain-of-Thought được bảo toàn (thought, thought_signature trong `genai_types.Part`).
 
 ## Slash Commands
