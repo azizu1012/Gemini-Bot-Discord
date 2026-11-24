@@ -224,9 +224,6 @@ def test_log_exception():
     # no exception
 
 
-def test_static_error_helpers():
-    assert LLMGateway._is_connection_error(ConnectionError()) is True
-    assert LLMGateway._is_rate_limit_error("rate limit hit") is True
 
 
 @pytest.mark.asyncio

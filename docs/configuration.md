@@ -48,6 +48,7 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `PREMIUM_RATE_LIMIT` | `20/60` | 20 messages / 60s |
 | `DEFAULT_DM_LIMIT` | `5` | DM tối đa/ngày (free user) |
 | `PREMIUM_DM_LIMIT` | `15` | DM tối đa/ngày (premium) |
+| `DEFAULT_DAILY_MESSAGE_LIMIT` | `50` | Trần tổng tin nhắn chat/ngày của Free User (DM + server), đếm từ lịch sử PostgreSQL |
 
 Các giới hạn áp dụng cho tin nhắn DM và tin nhắn mention bot, trước khi xếp hàng xử lý.
 Admin và Moderator (cả cấu hình tĩnh lẫn role trong DB) được miễn các giới hạn này.
@@ -57,8 +58,8 @@ Tin nhắn bị chặn vì bot đang bận cũng tính vào giới hạn. Tin nh
 Anti-spam và rate limit dùng cửa sổ cố định bắt đầu từ lần thử đầu tiên; các lần thử sau không gia hạn cửa sổ.
 Giới hạn DM đặt lại lúc 00:00 UTC. Khi Redis lỗi, bot yêu cầu thử lại thay vì bỏ qua giới hạn.
 
-Giới hạn **50 messages/ngày** hiện có của Free User vẫn được worker kiểm tra từ lịch sử PostgreSQL,
-cho tổng tin nhắn chat (DM + server). Giới hạn DM **5/ngày** là giới hạn bổ sung, không thay thế 50/ngày.
+Giới hạn **50 messages/ngày** (`DEFAULT_DAILY_MESSAGE_LIMIT`) của Free User được worker kiểm tra từ lịch sử PostgreSQL,
+cho tổng tin nhắn chat (DM + server). Giới hạn DM **5/ngày** là giới hạn bổ sung, không thay thế trần tổng/ngày.
 Premium không có trần chat tổng mỗi ngày nhưng vẫn chịu anti-spam, rate limit và **15 DM/ngày**.
 Với mặc định 3 tin/30s, anti-spam có thể chặn trước mức 10/60s hoặc 20/60s; mọi giới hạn đều phải thỏa.
 
@@ -240,7 +241,7 @@ PostgreSQL 16, database `azuris` (trong Docker: service `postgres`, cổng nội
 | Admin | .env (tĩnh) + admin_users (động) | Toàn quyền | Không |
 | Moderator | .env (tĩnh) + moderator_users (động) | health_check, endpoint (xem) | Không reset-all, moderator, premium add |
 | Premium | premium_users (động) | Chat không trần tổng/ngày, imagine | Anti-spam, rate limit, 15 DM/ngày; không quyền quản trị |
-| Free User | Mặc định | 50 messages/ngày | Không imagine |
+| Free User | Mặc định | `DEFAULT_DAILY_MESSAGE_LIMIT` messages/ngày (mặc định 50) | Không imagine |
 
 ### Cơ chế bảo vệ
 1. Admin tĩnh bất khả xâm phạm: ID trong .env không thể bị demote bởi DB hay LLM

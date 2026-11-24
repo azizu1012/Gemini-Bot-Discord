@@ -177,7 +177,10 @@ class MessageHandler:
         return self._pipeline
 
     def _normalize_intent_text(self, text: str) -> str:
-        lowered = (text or "").lower()
+        # "đ" là chữ cái riêng (U+0111), không phải d + dấu, nên NFD không tách
+        # được và regex bên dưới sẽ nuốt nó thành khoảng trắng ("được" -> "uoc").
+        # Map tay trước khi bỏ dấu để ra "duoc".
+        lowered = (text or "").lower().replace("đ", "d")
         no_diacritics = "".join(
             ch for ch in unicodedata.normalize("NFD", lowered)
             if unicodedata.category(ch) != "Mn"
@@ -222,17 +225,17 @@ class MessageHandler:
 
     def _is_identity_question(self, text: str) -> bool:
         normalized = self._normalize_intent_text(text)
-        patterns = ["bạn là ai", "ban la ai", "who are you", "what is your name", "your name"]
+        patterns = ["ban la ai", "who are you", "what is your name", "your name"]
         return any(p in normalized for p in patterns)
 
     def _is_capability_question(self, text: str) -> bool:
         normalized = self._normalize_intent_text(text)
-        patterns = ["bạn làm được gì", "ban lam duoc gi", "what can you do", "capabilities"]
+        patterns = ["ban lam duoc gi", "what can you do", "capabilities"]
         return any(p in normalized for p in patterns)
 
     def _is_cross_user_presence_question(self, text: str) -> bool:
         normalized = self._normalize_intent_text(text)
-        patterns = ["chat với ai khác", "chat voi ai khac", "talk to other users"]
+        patterns = ["chat voi ai khac", "talk to other users"]
         return any(p in normalized for p in patterns)
 
     def _get_runtime_tool_capabilities(self, is_admin: bool) -> List[Tuple[str, str]]:
@@ -509,6 +512,16 @@ class MessageHandler:
         except Exception as e:
             self.logger.warning(f"Failed to close DB pool cleanly: {e}")
 
+    def _daily_message_limit(self) -> int:
+        # Chỉ nhận int (hoặc chuỗi số) thật; config giả/MagicMock trong test
+        # không được biến thành 1 qua int().
+        raw = getattr(self.config, "DEFAULT_DAILY_MESSAGE_LIMIT", 50)
+        if isinstance(raw, str) and raw.strip().isdigit():
+            raw = int(raw.strip())
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            return 50
+        return raw
+
     async def process_message(self, msg: _RedisMsg):
         """Process a single message from Redis Streams."""
         payload = msg.value
@@ -576,13 +589,14 @@ class MessageHandler:
 
             # 1. Daily Limit Validation for Free Tier users
             if not is_admin and not is_moderator and not is_premium:
+                daily_limit = self._daily_message_limit()
                 daily_count = await self.db_repo.count_user_messages_today_db(user_id)
-                if daily_count >= 50:
+                if daily_count >= daily_limit:
                     await self._publish_outgoing({
                         "action": "reply",
                         "channel_id": payload.get('channel_id'),
                         "user_id": user_id,
-                        "content": "Bạn đã sử dụng hết giới hạn tin nhắn hôm nay (50/50). Hãy nâng cấp Premium bằng lệnh `/premium buy` để tiếp tục dùng không giới hạn nhé! 🛑",
+                        "content": f"Bạn đã sử dụng hết giới hạn tin nhắn hôm nay ({daily_limit}/{daily_limit}). Hãy nâng cấp Premium bằng lệnh `/premium buy` để tiếp tục dùng không giới hạn nhé! 🛑",
                         "reference_message_id": payload.get('message_id')
                     }, user_id)
                     await self._ack_incoming(msg)
