@@ -177,7 +177,6 @@ class Config:
 
         # --- SEARCH TUNING ---
         self.MAX_SEARCH_CALLS_PER_TURN = self._get_int("MAX_SEARCH_CALLS_PER_TURN", 5, min_value=1, max_value=20)
-        self.SEARCH_PARALLEL_STREAMS = self._get_int("SEARCH_PARALLEL_STREAMS", 1, min_value=1, max_value=2)
         self.SEARCH_FALLBACK_PROVIDER_LIMIT = self._get_int("SEARCH_FALLBACK_PROVIDER_LIMIT", 2, min_value=1, max_value=4)
         self.SEARCH_INTENT_BATCH_SIZE = self._get_int("SEARCH_INTENT_BATCH_SIZE", 3, min_value=1, max_value=5)
         self.SEARCH_WEB_MODE = self._get_str("SEARCH_WEB_MODE", "grounded").lower()
@@ -191,7 +190,6 @@ class Config:
         self.SEARCH_SUBTASK_TIMEOUT_SEC = self._get_int("SEARCH_SUBTASK_TIMEOUT_SEC", 15, min_value=3, max_value=60)
         self.SEARCH_DEEP_READ_TOP_LINKS = self._get_int("SEARCH_DEEP_READ_TOP_LINKS", 2, min_value=0, max_value=5)
         self.SEARCH_DEEP_READ_MAX_CHARS = self._get_int("SEARCH_DEEP_READ_MAX_CHARS", 1800, min_value=400, max_value=8000)
-        self.SEARCH_EXA_AUTOPROMPT = self._get_bool("SEARCH_EXA_AUTOPROMPT", False)
         self.SEARCH_SEMANTIC_CACHE_ENABLED = self._get_bool("SEARCH_SEMANTIC_CACHE_ENABLED", True)
         self.SEARCH_GENERAL_CACHE_TTL_SEC = self._get_int("SEARCH_GENERAL_CACHE_TTL_SEC", 21600, min_value=60, max_value=86400 * 7)
         self.SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC = self._get_int("SEARCH_TIME_SENSITIVE_CACHE_TTL_SEC", 1800, min_value=30, max_value=86400)

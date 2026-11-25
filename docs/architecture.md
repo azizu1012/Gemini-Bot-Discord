@@ -197,7 +197,7 @@ Redis Stream: discord-incoming
 Redis Stream: discord-outgoing
     → bot_core.py (Gateway)
         → Cancel typing loop
-        → Chia nhỏ message (limit 1900 ký tự)
+        → Chia nhỏ message (limit 1800 ký tự)
         → _outgoing_sender_loop (queue tuần tự tránh rate limit)
         → Gửi lên Discord REST API
 ```
@@ -210,7 +210,6 @@ Redis Stream: discord-outgoing
 - `_outgoing_sender_loop`: Queue gửi tin tuần tự tránh rate limit
 - `_typing_loop`: Gửi typing status mỗi 5s
 - `_register_events`: Đăng ký on_message, on_ready
-- `_update_env_var`: Cập nhật biến .env runtime
 
 ### Worker — `src/handlers/message_handler.py`
 - `_download_file_with_sem`: Tải ảnh song song Semaphore(3)

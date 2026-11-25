@@ -33,7 +33,6 @@ File `.env` duy nhất, đọc bởi `src/core/config.py`.
 | `EXA_API_KEY` | Exa AI key |
 | `WEATHER_API_KEY` | OpenWeatherMap key |
 | `CITY` | Thành phố mặc định tra cứu thời tiết |
-| `SEARCH_PARALLEL_STREAMS` | Số luồng search song song (1–2, mặc định 1). Biến cũ `GOOGLE_SEARCH_STREAMS` vẫn được đọc |
 | `SEARCH_FALLBACK_PROVIDER_LIMIT` | Số provider fallback tối đa khi search fail (mặc định 2) |
 | `AZURIS_SEARCH_RESULTS_GROUP` | Tên Redis consumer group cố định cho luồng kết quả subtask (mặc định `azuris_search_results`). Dùng giá trị cố định để tránh orphaned group mỗi lần restart |
 
@@ -54,9 +53,11 @@ Các giới hạn áp dụng cho tin nhắn DM và tin nhắn mention bot, trư�
 Admin và Moderator (cả cấu hình tĩnh lẫn role trong DB) được miễn các giới hạn này.
 Redis dùng bộ đếm nguyên tử dùng chung giữa các tiến trình: kiểm tra anti-spam → rate limit → DM.
 Mỗi bước đếm cả lần thử bị từ chối tại bước đó; bước sau chỉ đếm khi bước trước cho phép.
-Tin nhắn bị chặn vì bot đang bận cũng tính vào giới hạn. Tin nhắn server không mention bot không tính.
+Các giới hạn Redis (anti-spam, rate limit, DM/ngày) được kiểm tra ở tầng Discord trước khi xếp hàng; mọi lần thử bị từ chối tại các bước đó đều bị trừ, kể cả tin bị chặn vì bot đang bận.
+Trần tổng 50 tin/ngày (`DEFAULT_DAILY_MESSAGE_LIMIT`) do worker đếm lại từ bảng `messages` trong PostgreSQL, nên chỉ tin đã thực sự vào xử lý và được ghi lịch sử mới bị tính; tin bị chặn vì bận (worker trả về trước khi ghi, để chờ xử lý lại) không bị tính.
+Tin nhắn server không mention bot không tính.
 Anti-spam và rate limit dùng cửa sổ cố định bắt đầu từ lần thử đầu tiên; các lần thử sau không gia hạn cửa sổ.
-Giới hạn DM đặt lại lúc 00:00 UTC. Khi Redis lỗi, bot yêu cầu thử lại thay vì bỏ qua giới hạn.
+Giới hạn DM và trần 50 tin/ngày đều tính mốc ngày theo UTC, đặt lại lúc 00:00 UTC. Khi Redis lỗi, bot yêu cầu thử lại thay vì bỏ qua giới hạn.
 
 Giới hạn **50 messages/ngày** (`DEFAULT_DAILY_MESSAGE_LIMIT`) của Free User được worker kiểm tra từ lịch sử PostgreSQL,
 cho tổng tin nhắn chat (DM + server). Giới hạn DM **5/ngày** là giới hạn bổ sung, không thay thế trần tổng/ngày.
@@ -104,16 +105,16 @@ Với mặc định 3 tin/30s, anti-spam có thể chặn trước mức 10/60s 
 
 PostgreSQL 16, database `azuris` (trong Docker: service `postgres`, cổng nội bộ 5432; legacy local: cổng 55432).
 
-### 17 bảng
+### 12 bảng
 
 #### Đang hoạt động
 
 **messages** — Lịch sử hội thoại
 | Cột | Kiểu | Mô tả |
 |-----|------|-------|
-| message_id | TEXT PK | ID Discord |
+| message_id | TEXT PK | `<discord_message_id>:user` hoặc `:assistant` — ổn định qua các lần xử lý lại nên `ON CONFLICT (message_id) DO NOTHING` chống ghi trùng khi tin bị reclaim. Không có `message_id` thì sinh UUID |
 | user_id | TEXT NOT NULL | ID người dùng |
-| role | TEXT NOT NULL | `user` / `model` |
+| role | TEXT NOT NULL | `user` / `assistant` (đổi sang `model` khi dựng prompt Gemini) |
 | content | TEXT NOT NULL | Nội dung |
 | timestamp | TIMESTAMPTZ | DEFAULT CURRENT_TIMESTAMP |
 
@@ -193,27 +194,18 @@ PostgreSQL 16, database `azuris` (trong Docker: service `postgres`, cổng nội
 |-----|------|-------|
 | chunk_id | TEXT PK | document_id prefix + chunk index |
 | document_id | TEXT NOT NULL | |
+| user_id | TEXT | Chủ sở hữu file; `search_similar_chunks` lọc theo cột này để chunk của user khác không lọt vào context |
 | content | TEXT NOT NULL | Nội dung chunk |
 | chunk_summary | TEXT NOT NULL | Tóm tắt |
 | keywords | TEXT[] | Từ khóa |
 | metadata | TEXT, created_at TIMESTAMPTZ | |
 
-**api_key_pool** — Key management
-| Cột | Kiểu |
-|-----|------|
-| key_id | BIGSERIAL PK |
-| api_key | TEXT UNIQUE |
-| provider | TEXT (default 'gemini') |
-| is_active | BOOLEAN, cooldown_until TIMESTAMPTZ, created_at TIMESTAMPTZ |
+#### Bảng đã bị xoá
 
-**api_key_rate_limits** — Per-key rate limits
-| Cột | Kiểu |
-|-----|------|
-| key_id | BIGINT PK → api_key_pool(key_id) |
-| requests_used | INTEGER, last_reset TIMESTAMPTZ |
-
-#### Legacy (không dùng)
-- `custom_api_models`, `custom_api_provider_config`, `bot_model_config`
+`init_db()` chạy `DROP TABLE IF EXISTS ... CASCADE` cho các bảng của cơ chế cũ, kể cả
+bảng đã được rename trước đó: `api_key_pool`, `api_key_rate_limits`,
+`custom_api_models`, `custom_api_provider_config`, `bot_model_config` và các bản
+`_deprecated_*` tương ứng. Chúng không còn tồn tại sau lần khởi động đầu tiên.
 
 ### Indexes
 
@@ -223,6 +215,7 @@ PostgreSQL 16, database `azuris` (trong Docker: service `postgres`, cổng nội
 | `idx_user_notes_user_scope_active` | user_notes | (user_id, scope, is_active) | BTREE |
 | `idx_user_notes_fact_hash` | user_notes | fact_hash | BTREE |
 | `idx_user_notes_metadata_gin` | user_notes | metadata | GIN (JSONB) |
+| `idx_rag_chunks_user` | rag_chunks | user_id | BTREE |
 | `idx_rag_chunks_keywords` | rag_chunks | keywords | GIN (array) |
 | `idx_rag_chunks_summary_trgm` | rag_chunks | chunk_summary | GIN (trgm) |
 

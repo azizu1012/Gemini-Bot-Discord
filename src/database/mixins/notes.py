@@ -219,7 +219,13 @@ class NotesMixin:
             )
         return int(result.split()[-1]) if result.startswith("UPDATE") else 0
 
-    async def search_similar_chunks(self, search_text: str, limit: int = 5) -> List[Dict[str, Any]]:
+    async def search_similar_chunks(
+        self,
+        search_text: str,
+        limit: int = 5,
+        user_id: Optional[str] = None,
+        document_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         pool = await self._ensure_pool()
         safe_limit = max(1, min(limit, 50))
         async with pool.acquire() as conn:
@@ -228,13 +234,17 @@ class NotesMixin:
                 SELECT chunk_id, document_id, content, chunk_summary, keywords, metadata, created_at,
                        (chunk_summary <-> $1) AS summary_distance
                 FROM rag_chunks
-                WHERE chunk_summary % $1 OR $2::text[] && keywords
+                WHERE (chunk_summary % $1 OR $2::text[] && keywords)
+                  AND ($4::text IS NULL OR user_id = $4)
+                  AND ($5::text IS NULL OR document_id = $5)
                 ORDER BY summary_distance ASC
                 LIMIT $3
                 """,
                 search_text,
                 [search_text],
                 safe_limit,
+                user_id or None,
+                document_id or None,
             )
         result = []
         for row in rows:

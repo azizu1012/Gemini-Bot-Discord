@@ -80,25 +80,6 @@ def test_load_web_mode_valid():
     assert mgr._load_search_web_mode() in {"grounded", "summary", "snippet", "links"}
 
 
-def test_load_google_search_streams_default():
-    mgr, _ = make_manager()
-    assert mgr._load_google_search_streams() == 1
-
-
-def test_load_google_search_streams_legacy_env(monkeypatch):
-    # .env sets SEARCH_PARALLEL_STREAMS=1; unset it to exercise the legacy path.
-    monkeypatch.delenv("SEARCH_PARALLEL_STREAMS", raising=False)
-    monkeypatch.setenv("GOOGLE_SEARCH_STREAMS", "2")
-    mgr, _ = make_manager()
-    assert mgr._load_google_search_streams() == 2
-
-
-def test_load_google_search_streams_modern_env(monkeypatch):
-    monkeypatch.setenv("SEARCH_PARALLEL_STREAMS", "1")
-    mgr, _ = make_manager()
-    assert mgr._load_google_search_streams() == 1
-
-
 # ---------------- mention tracking ----------------
 def test_record_and_pop_allowed_mentions():
     mgr, _ = make_manager()

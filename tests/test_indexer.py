@@ -76,6 +76,30 @@ async def test_build_index_context_uses_similar_chunks():
 
 
 @pytest.mark.asyncio
+async def test_build_index_context_scopes_query_to_user_and_document():
+    db = MagicMock()
+    db.search_similar_chunks = AsyncMock(return_value=[])
+    db.init_db = AsyncMock()
+    conn = MagicMock()
+    conn.fetch = AsyncMock(return_value=[])
+
+    @asynccontextmanager
+    async def acquire():
+        yield conn
+
+    db.pool = MagicMock()
+    db.pool.acquire = acquire
+    parser = MagicMock()
+    await build_index_context("d1", "q", db_repo=db, file_parser=parser, user_id="u1")
+
+    # Lọc user/document phải nằm trong SQL, không lọc sau LIMIT.
+    assert db.search_similar_chunks.await_args.kwargs["user_id"] == "u1"
+    assert db.search_similar_chunks.await_args.kwargs["document_id"] == "d1"
+    query = conn.fetch.await_args.args[0]
+    assert "user_id = $3" in query
+    assert conn.fetch.await_args.args[3] == "u1"
+
+@pytest.mark.asyncio
 async def test_build_index_context_fallback_query():
     db = MagicMock()
     db.search_similar_chunks = AsyncMock(return_value=[])

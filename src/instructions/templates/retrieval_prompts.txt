@@ -11,7 +11,7 @@
 [SYSTEM NOTE: Some sources were truncated due to length limits. A partial summary of evidence is provided below.]
 
 === search_budget_prompt ===
-[SYSTEM NOTE: Due to system load, your search depth was limited to 1 query and 2 results. Do your best with the provided info.]
+[SYSTEM NOTE: The web_search budget for this turn is exhausted. Do not call web_search again; answer using the evidence already collected and say so if it is insufficient.]
 
 === three_block_context_prompt ===
 [SYSTEM INSTRUCTION]

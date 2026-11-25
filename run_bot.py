@@ -150,7 +150,10 @@ async def run_bot_only(config):
         logger.info("Starting background worker for MessageHandler")
         worker_task = asyncio.create_task(message_handler.start_worker())
 
-        if os.getenv("SEARCH_SUBTASKS_ENABLED", "false").lower() == "true":
+        # Dùng cùng một cách parse cờ với ToolsManager (Config._get_bool nhận
+        # 1/true/yes/on). Đọc thô `os.getenv(...) == "true"` khiến `SEARCH_SUBTASKS_ENABLED=1`
+        # bật client gửi subtask mà không bật worker tiêu thụ → mọi search chờ timeout.
+        if getattr(config, "SEARCH_SUBTASKS_ENABLED", False):
             search_worker = SearchSubtaskWorker(config)
             logger.info("Starting SearchSubtaskWorker")
             search_task = asyncio.create_task(search_worker.start_worker())

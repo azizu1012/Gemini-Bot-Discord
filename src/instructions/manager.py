@@ -104,7 +104,7 @@ ANTI-DRIFT:
 TOOL POLICY:
 - Prefer native function calls.
 - For web_search: call only when recent/factual verification is required.
-- Maximum 1 web_search call per user turn.
+- Use as few web_search calls as needed; the per-turn search budget is enforced by the system.
 - Query must be deterministic and concise (no random suffix, no noisy expansion).
 - For multi-intent requests, split intents mentally and process in small batches while keeping evidence isolated per intent.
 - Reuse tool context already collected in this turn.

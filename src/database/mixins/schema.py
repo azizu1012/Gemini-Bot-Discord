@@ -123,6 +123,7 @@ class SchemaMixin:
                 CREATE TABLE IF NOT EXISTS rag_chunks (
                     chunk_id TEXT PRIMARY KEY,
                     document_id TEXT NOT NULL,
+                    user_id TEXT,
                     content TEXT NOT NULL,
                     chunk_summary TEXT NOT NULL,
                     keywords TEXT[] NOT NULL DEFAULT '{}',
@@ -185,6 +186,10 @@ class SchemaMixin:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_user_scope_active ON user_notes (user_id, scope, is_active)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_fact_hash ON user_notes (fact_hash)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_user_notes_metadata_gin ON user_notes USING gin (metadata)")
+            # rag_chunks được tạo trước khi có cột user_id; DB đang chạy cần
+            # ALTER để khỏi phải xoá/tạo lại bảng.
+            await conn.execute("ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS user_id TEXT")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_user ON rag_chunks (user_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_keywords ON rag_chunks USING GIN (keywords)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_chunks_summary_trgm ON rag_chunks USING GIN (chunk_summary gin_trgm_ops)")
 
