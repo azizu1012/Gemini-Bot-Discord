@@ -117,3 +117,80 @@ async def test_release_closes_client_even_when_get_fails(monkeypatch):
 
     await release()  # must not raise
     client.close.assert_awaited()
+
+
+# ---------------- search subtask worker gating ----------------
+
+def _run_bot_stubs(monkeypatch, started):
+    """Thay BotCore/MessageHandler/SearchSubtaskWorker bằng stub để chạy run_bot_only."""
+    import run_bot as run_bot_mod
+
+    class _StubBot:
+        def __init__(self, config):
+            self.config = config
+
+        async def start(self, token):
+            pass
+
+        async def shutdown(self):
+            pass
+
+    class _StubHandler:
+        def __init__(self, config):
+            self.config = config
+
+        async def start_worker(self):
+            import asyncio as _asyncio
+
+            await _asyncio.Event().wait()
+
+        async def shutdown(self):
+            pass
+
+    class _StubSearchWorker:
+        def __init__(self, config):
+            self.config = config
+            started.append(config)
+
+        async def start_worker(self):
+            import asyncio as _asyncio
+
+            await _asyncio.Event().wait()
+
+        async def shutdown(self):
+            pass
+
+    monkeypatch.setattr(run_bot_mod, "BotCore", _StubBot)
+    monkeypatch.setattr(run_bot_mod, "MessageHandler", _StubHandler)
+    monkeypatch.setattr(run_bot_mod, "SearchSubtaskWorker", _StubSearchWorker)
+    monkeypatch.setattr(run_bot_mod, "_acquire_worker_lock", AsyncMock(return_value=None))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag, expected", [(True, True), (False, False)])
+async def test_run_bot_only_starts_search_worker_from_config_flag(monkeypatch, flag, expected):
+    """Cờ phải lấy từ Config (parse 1/true/yes/on), không đọc thô env."""
+    from run_bot import run_bot_only
+
+    started = []
+    _run_bot_stubs(monkeypatch, started)
+    cfg = SimpleNamespace(
+        REDIS_URL="redis://localhost:6379/0",
+        TOKEN="token",
+        SEARCH_SUBTASKS_ENABLED=flag,
+    )
+    await run_bot_only(cfg)
+    assert bool(started) is expected
+
+
+@pytest.mark.asyncio
+async def test_config_search_subtasks_flag_accepts_one(monkeypatch):
+    from src.core.config import Config
+
+    monkeypatch.setattr("src.core.config._load_runtime_env", lambda root: None)
+    monkeypatch.setenv("SEARCH_SUBTASKS_ENABLED", "1")
+    assert Config().SEARCH_SUBTASKS_ENABLED is True
+    monkeypatch.setenv("SEARCH_SUBTASKS_ENABLED", "true")
+    assert Config().SEARCH_SUBTASKS_ENABLED is True
+    monkeypatch.setenv("SEARCH_SUBTASKS_ENABLED", "off")
+    assert Config().SEARCH_SUBTASKS_ENABLED is False

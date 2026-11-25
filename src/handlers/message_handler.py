@@ -194,18 +194,17 @@ class MessageHandler:
             return {}
 
         normalized = self._normalize_intent_text(raw)
+        # So khớp theo TỪ, không phải substring: bỏ dấu làm nhiều từ khác nghĩa
+        # đụng nhau ("không dùng" vs "không đúng", "nhắm" vs "nhầm") và "bia"
+        # nằm trong "unbiased"/"bias". Các marker đã bỏ vì quá nhiễu:
+        # "bia", "khong dung", "nham", "wrong", "correction".
         markers = (
-            "bia",
             "sai roi",
             "khong phai",
-            "khong dung",
-            "nham",
             "y toi la",
             "dinh chinh",
-            "wrong",
-            "correction",
         )
-        has_marker = any(marker in normalized for marker in markers)
+        has_marker = any(re.search(rf"(?<![a-z0-9]){re.escape(marker)}(?![a-z0-9])", normalized) for marker in markers)
         has_emphatic_definition = bool(re.search(r"\b[a-z0-9]{2,12}\s+la\s+.+\bma\b", normalized))
 
         correction_text = ""
@@ -264,9 +263,14 @@ class MessageHandler:
             distinct_user_count=int(privacy_context.get("distinct_user_count") or 0),
             tool_lines=tool_lines
         )
-        user_identity = privacy_context.get("user_identity", "")
+        user_identity = str(privacy_context.get("user_identity") or "")
         if user_identity:
-            prompt += f"\n[USER PERSONAL IDENTITIES & PREFERENCES]\n{user_identity}\n"
+            # Ghi chú do người dùng tự khai có thể chứa xuống dòng/tag giả để
+            # thoát khỏi khối này và chèn chỉ thị mới vào system prompt.
+            safe_identity = re.sub(r"[<>]", " ", user_identity)
+            safe_identity = re.sub(r"\s+", " ", safe_identity).strip()[:2000]
+            if safe_identity:
+                prompt += f"\n[USER PERSONAL IDENTITIES & PREFERENCES]\n{safe_identity}\n"
 
         # Thay thế động tên bot
         bot_name = privacy_context.get("bot_name", "Chad Gibiti")
@@ -677,7 +681,8 @@ class MessageHandler:
                             attachment_data += f"\n[System Note: Blocked index: {validation.get('reason')}]\n"
                         else:
                             attachment_data += await build_index_context(
-                                doc_id, content, db_repo=self.db_repo, file_parser=self.file_parser
+                                doc_id, content, db_repo=self.db_repo, file_parser=self.file_parser,
+                                user_id=user_id,
                             )
                     except Exception as e:
                         self.logger.error(f"Error indexing: {e}")
@@ -707,7 +712,8 @@ class MessageHandler:
                 last_index = self.file_index_svc.get_latest_index_for_user(user_id)
                 if last_index and last_index.get("document_id"):
                     attachment_data += await build_index_context(
-                        last_index["document_id"], content, db_repo=self.db_repo, file_parser=self.file_parser
+                        last_index["document_id"], content, db_repo=self.db_repo, file_parser=self.file_parser,
+                        user_id=user_id,
                     )
 
             # 5. Intent Detection & Dynamic context builder
@@ -737,6 +743,13 @@ class MessageHandler:
             distinct_user_count = await self.db_repo.count_distinct_message_users_db()
             has_other_users = await self.db_repo.has_other_users_history_db(user_id)
             user_identity = await self.note_mgr.get_user_identity(user_id)
+            # Khoá dòng lịch sử của turn này, ổn định qua các lần thử lại để
+            # ON CONFLICT (message_id) DO NOTHING thực sự chống ghi trùng và để
+            # lần thử sau không đọc lại chính câu hỏi của mình từ lịch sử.
+            incoming_message_id = str(payload.get("message_id") or "")
+            user_row_id = f"{incoming_message_id}:user" if incoming_message_id else None
+            assistant_row_id = f"{incoming_message_id}:assistant" if incoming_message_id else None
+            persisted_row_ids = [rid for rid in (user_row_id, assistant_row_id) if rid]
 
             admin_cross_user_evidence = ""
             if is_admin:
@@ -758,8 +771,11 @@ class MessageHandler:
             # Tận dụng In-memory KV Cache từ RAM
             history = self.cache_mgr.get_chat_history(user_id, limit=12)
             if history is None:
-                # Cache miss: query PostgreSQL
-                history = await self.db_repo.get_user_history_from_db(user_id, limit=12)
+                # Cache miss: query PostgreSQL. Loại các dòng của turn hiện tại
+                # (nếu có) để lần thử lại không đọc lại chính câu hỏi của mình.
+                history = await self.db_repo.get_user_history_from_db(
+                    user_id, limit=12, exclude_message_ids=persisted_row_ids
+                )
                 self.cache_mgr.set_chat_history(user_id, history)
                 self.logger.info(f"[CACHE MISS] Loaded chat history for user {user_id} from PostgreSQL.")
             else:
@@ -771,9 +787,9 @@ class MessageHandler:
                 messages.append({"role": role, "parts": [{"text": hist_msg["content"]}]})
 
             # 6. Database Logs & RAM Cache: chỉ persist plain text (user trước,
-            # assistant add sau khi có response). Turn hiện tại không nằm trong
-            # history vừa đọc nên không bị lặp câu hỏi trong prompt.
-            await self.db_repo.log_message_db(user_id, "user", base_user_message)
+            # assistant add sau khi có response). Tin đang xử lý cố ý chưa nằm
+            # trong history nên không bị lặp câu hỏi trong prompt.
+            await self.db_repo.log_message_db(user_id, "user", base_user_message, user_row_id)
             self.cache_mgr.add_chat_message(user_id, "user", base_user_message)
 
             # Tin nhắn user cuối cùng chứa text và toàn bộ inline_data của ảnh tải được
@@ -816,7 +832,7 @@ class MessageHandler:
                 response_text = await self._call_pipeline_with_deadline(pipeline, messages, user_id, privacy_context)
 
             # 8. Log reply and Split response chunks sequentially
-            await self.db_repo.log_message_db(user_id, "assistant", response_text)
+            await self.db_repo.log_message_db(user_id, "assistant", response_text, assistant_row_id)
             self.cache_mgr.add_chat_message(user_id, "assistant", response_text)
 
             allowed_mentions = self.tools_mgr.pop_allowed_mentions(user_id)
@@ -1021,12 +1037,16 @@ class MessageHandler:
                 self.logger.error(f"Failed to save image details to DB for user {user_id}")
 
             # 4. Publish reply
+            # Prompt do slash option nhập tay (Discord cho tới 6000 ký tự) nên phải
+            # cắt ngắn trước khi ghép vào content: toàn bộ content phải nằm trong
+            # giới hạn 2000 ký tự của một message Discord.
+            prompt_preview = prompt if len(prompt) <= 1200 else prompt[:1200] + "…"
             await self._publish_outgoing({
                 "action": "slash_reply",
                 "interaction_id": interaction_id,
                 "channel_id": channel_id,
                 "user_id": user_id,
-                "content": f"🎨 **{author_display_name}** đã tạo ảnh thành công với prompt: *\"{prompt}\"*",
+                "content": f"🎨 **{author_display_name}** đã tạo ảnh thành công với prompt: *\"{prompt_preview}\"*",
                 "file_base64": base64_image_str,
                 "file_name": local_filename,
                 "embed_title": f"🎨 {prompt[:200]}",

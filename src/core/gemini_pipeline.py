@@ -34,21 +34,54 @@ def _prepare_user_input_block(user_input: str, max_chars: int = 2200) -> str:
     return f"<USER_INPUT>\n{text}\n</USER_INPUT>"
 
 
+def _sanitize_metadata_text(value: Any, max_chars: int) -> str:
+    """Một dòng an toàn để nhét vào <USER_METADATA>.
+
+    Nội dung do user kiểm soát (tên hiển thị, ghi chú identity, câu đính chính)
+    nên phải bỏ xuống dòng và ký tự đóng/mở tag — nếu không user có thể đóng
+    <USER_METADATA> sớm rồi chèn chỉ thị giả vào prompt hệ thống.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[<>]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text[:max_chars].rstrip()
+
+
 def _prepare_user_metadata_block(privacy_context: Dict[str, Any]) -> str:
-    display_name = str(privacy_context.get("discord_display_name") or "").strip()
-    if not display_name:
-        display_name = "Unknown"
-    display_name = re.sub(r"\s+", " ", display_name)
-    if len(display_name) > 80:
-        display_name = display_name[:80].rstrip()
+    display_name = _sanitize_metadata_text(privacy_context.get("discord_display_name"), 80) or "Unknown"
 
     system_role = "Admin" if bool(privacy_context.get("is_admin")) else "Standard User"
-    return (
-        "<USER_METADATA>\n"
-        f"Discord Display Name: {display_name}\n"
-        f"System Role: {system_role}\n"
-        "</USER_METADATA>"
-    )
+    lines = [
+        "<USER_METADATA>",
+        f"Discord Display Name: {display_name}",
+        f"System Role: {system_role}",
+    ]
+
+    # Lượt này người dùng đang đính chính lại thông tin trước đó.
+    if bool(privacy_context.get("is_user_correction")):
+        correction = _sanitize_metadata_text(privacy_context.get("active_user_correction"), 300)
+        if correction:
+            lines.append(
+                "User is correcting earlier information in this turn; "
+                f"treat it as the updated truth: {correction}"
+            )
+        else:
+            lines.append(
+                "User is correcting earlier information in this turn; treat their message as the updated truth."
+            )
+
+    # Người dùng đang hỏi về những người dùng khác của bot. Không có tín hiệu
+    # này model dễ trả lời như thể bot là instance riêng của một người.
+    if bool(privacy_context.get("is_cross_user_presence_question")):
+        lines.append(
+            "The user is asking about other users of this bot; answer from the runtime "
+            "cross-user signal in your instructions, not from this user's scoped memory."
+        )
+
+    lines.append("</USER_METADATA>")
+    return "\n".join(lines)
 
 
 def _prepare_user_context_block(user_input: str, privacy_context: Dict[str, Any], max_chars: int = 2200) -> str:
@@ -702,7 +735,7 @@ class GeminiPipeline:
         return "Reasoning loop failed", tool_results_str
 
     async def _call_gemini_final(self, original_messages: List[Dict[str, Any]], reasoning_result: str, tool_results: str, user_id: str, privacy_context: Dict[str, Any]) -> str:
-        MAX_RETRIES = max(5, self.config.FINAL_MAX_API_RETRIES)
+        MAX_RETRIES = self.config.FINAL_MAX_API_RETRIES
 
         if tool_results and _looks_like_search_evidence(tool_results) and not _is_tool_result_sufficient(tool_results):
             if self.config.SEARCH_ALLOW_PARTIAL_ANSWER and _has_minimum_search_evidence(tool_results):

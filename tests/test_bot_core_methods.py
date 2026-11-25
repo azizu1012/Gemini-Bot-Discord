@@ -30,8 +30,6 @@ def make_bc():
     bc.logger = NullLogger()
     bc.db_repo = MagicMock()
     bc.bot = MagicMock()
-    bc.confirmation_pending = {}
-    bc.admin_confirmation_pending = {}
     bc._outgoing_queues = {}
     bc._outgoing_senders = {}
     bc._pending_outgoing_tasks = set()
@@ -392,127 +390,25 @@ async def test_voice_lock_enforce_loop_kicks_non_whitelist(channel_type):
 
 
 @pytest.mark.asyncio
-async def test_confirmation_pending_timeout():
-    from datetime import datetime, timedelta
-
+async def test_voice_lock_enforce_loop_drops_deleted_channel_via_store():
+    """Kênh không còn là voice/stage phải được unlock qua store, không sửa bản sao property."""
     bc = make_bc()
-    user_id = "100"
-    bc.confirmation_pending[user_id] = {"timestamp": datetime.now() - timedelta(seconds=70)}
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "yes"
-    msg.reply = AsyncMock()
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is True
-    assert user_id not in bc.confirmation_pending
-    assert "Hết thời gian" in msg.reply.call_args[0][0]
+    bc.bot.is_closed = MagicMock(side_effect=[False, True])
+    bc.bot.user = MagicMock()
+    bc.bot.user.id = 1
+    lm = MagicMock()
+    lm.owner_id = 9
+    lm.load_whitelist = MagicMock(return_value={})
+    lm.locked_channels = {100}
+    lm.enforced_names = {}
+    bc.voice_lock_manager = lm
+    bc.bot.get_channel = MagicMock(return_value=MagicMock(spec=discord.TextChannel))
 
+    await bc._voice_lock_enforce_loop()
 
-@pytest.mark.asyncio
-async def test_confirmation_pending_yes():
-    from datetime import datetime
-
-    bc = make_bc()
-    user_id = "100"
-    bc.confirmation_pending[user_id] = {"timestamp": datetime.now()}
-    bc.db_repo.clear_user_data_db = AsyncMock()
-    bc.kafka_service.publish = AsyncMock(return_value=True)
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "có"
-    msg.reply = AsyncMock()
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is True
-    assert user_id not in bc.confirmation_pending
-    bc.db_repo.clear_user_data_db.assert_awaited_once_with(user_id)
-    assert "Đã xóa lịch sử" in msg.reply.call_args[0][0]
-
-
-@pytest.mark.asyncio
-async def test_confirmation_pending_no():
-    from datetime import datetime
-
-    bc = make_bc()
-    user_id = "100"
-    bc.confirmation_pending[user_id] = {"timestamp": datetime.now()}
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "không"
-    msg.reply = AsyncMock()
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is True
-    assert user_id not in bc.confirmation_pending
-    assert "Đã hủy" in msg.reply.call_args[0][0]
-
-
-@pytest.mark.asyncio
-async def test_confirmation_pending_invalid():
-    from datetime import datetime
-
-    bc = make_bc()
-    user_id = "100"
-    bc.confirmation_pending[user_id] = {"timestamp": datetime.now()}
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "random text"
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is False
-    assert user_id not in bc.confirmation_pending
-
-
-@pytest.mark.asyncio
-async def test_admin_confirmation_pending_timeout():
-    from datetime import datetime, timedelta
-
-    bc = make_bc()
-    user_id = "100"
-    bc.admin_confirmation_pending[user_id] = {"timestamp": datetime.now() - timedelta(seconds=70)}
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "yes reset"
-    msg.reply = AsyncMock()
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is True
-    assert user_id not in bc.admin_confirmation_pending
-    assert "Hết thời gian" in msg.reply.call_args[0][0]
-
-
-@pytest.mark.asyncio
-async def test_admin_confirmation_pending_yes_reset():
-    from datetime import datetime
-
-    bc = make_bc()
-    user_id = "100"
-    bc.admin_confirmation_pending[user_id] = {"timestamp": datetime.now()}
-    bc._is_admin_user = AsyncMock(return_value=True)
-    bc.db_repo.clear_all_data_db = AsyncMock()
-    bc.kafka_service.publish = AsyncMock(return_value=True)
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "yes reset"
-    msg.reply = AsyncMock()
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is True
-    assert user_id not in bc.admin_confirmation_pending
-    bc.db_repo.clear_all_data_db.assert_awaited_once()
-    assert "Đã xóa toàn bộ" in msg.reply.call_args[0][0]
-
-
-@pytest.mark.asyncio
-async def test_admin_confirmation_pending_cancel():
-    from datetime import datetime
-
-    bc = make_bc()
-    user_id = "100"
-    bc.admin_confirmation_pending[user_id] = {"timestamp": datetime.now()}
-    msg = MagicMock()
-    msg.author.id = int(user_id)
-    msg.content = "cancel"
-    msg.reply = AsyncMock()
-    handled = await bc._handle_confirmation_message(msg)
-    assert handled is True
-    assert user_id not in bc.admin_confirmation_pending
-    assert "Đã hủy" in msg.reply.call_args[0][0]
+    lm.lock_store.unlock.assert_called_once_with(100)
+    lm.save_locked_channels.assert_not_called()
+    lm.save_enforced_names.assert_not_called()
 
 
 @pytest.mark.asyncio

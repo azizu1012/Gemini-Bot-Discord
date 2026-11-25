@@ -49,9 +49,6 @@ class BotCore:
         self.health_checker = get_health_checker()
         self.health_checker.db_repo = self.db_repo
 
-        self.confirmation_pending: Dict[str, Dict[str, Any]] = {}
-        self.admin_confirmation_pending: Dict[str, Dict[str, Any]] = {}
-
         intents = discord.Intents.default()
         intents.message_content = True
         intents.dm_messages = True
@@ -279,11 +276,9 @@ class BotCore:
             for channel_id in list(lm.locked_channels):
                 channel = self.bot.get_channel(channel_id)
                 if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
-                    lm.locked_channels.discard(channel_id)
-                    lm.save_locked_channels()
-                    if channel_id in lm.enforced_names:
-                        del lm.enforced_names[channel_id]
-                        lm.save_enforced_names()
+                    # `locked_channels`/`enforced_names` là property trả bản sao nên
+                    # sửa chúng là mất hút; phải xoá qua store để flush xuống file.
+                    lm.lock_store.unlock(channel_id)
                     continue
 
                 for member in channel.members:
@@ -297,84 +292,6 @@ class BotCore:
                             lm.log_action(f"⚠️ KICK FAIL: {member.name} khỏi {channel.name}: {e}")
 
             await asyncio.sleep(1)
-
-    async def _handle_confirmation_message(self, message: discord.Message) -> bool:
-        user_id = str(message.author.id)
-        content = (message.content or "").strip()
-        now = datetime.now()
-
-        if user_id in self.confirmation_pending:
-            state = self.confirmation_pending.get(user_id, {})
-            if now - state.get("timestamp", now) > timedelta(seconds=60):
-                self.confirmation_pending.pop(user_id, None)
-                await message.reply("⏳ Hết thời gian xác nhận. Hãy gọi lại /reset-chat nếu cần.", mention_author=False)
-                return True
-
-            # Chỉ nuốt tin nhắn nếu là phản hồi yes/no/y/n/có/không rõ ràng
-            valid_yes = {"yes", "y", "co", "có"}
-            valid_no = {"no", "n", "khong", "không"}
-            normalized_content = content.lower()
-
-            if normalized_content in valid_yes:
-                self.confirmation_pending.pop(user_id, None)
-                await self.db_repo.clear_user_data_db(user_id)
-                try:
-                    await self.kafka_service.publish(
-                        "discord-incoming",
-                        payload={"type": "invalidate_cache", "user_id": user_id},
-                        key=user_id
-                    )
-                except Exception as pub_err:
-                    self.logger.error(f"Failed to publish invalidate_cache for user {user_id}: {pub_err}")
-                await message.reply("✅ Đã xóa lịch sử chat của bạn.", mention_author=False)
-                return True
-            elif normalized_content in valid_no:
-                self.confirmation_pending.pop(user_id, None)
-                await message.reply("❌ Đã hủy yêu cầu reset chat.", mention_author=False)
-                return True
-            else:
-                # Không phải là yes/no hợp lệ, hủy trạng thái pending nhưng không nuốt tin nhắn
-                self.confirmation_pending.pop(user_id, None)
-                return False
-
-        if user_id in self.admin_confirmation_pending:
-            state = self.admin_confirmation_pending.get(user_id, {})
-            if now - state.get("timestamp", now) > timedelta(seconds=60):
-                self.admin_confirmation_pending.pop(user_id, None)
-                await message.reply("⏳ Hết thời gian xác nhận. Hãy gọi lại /reset-all nếu cần.", mention_author=False)
-                return True
-
-            # Chỉ nuốt nếu là "yes reset" hoặc phản hồi hủy rõ ràng "no"/"cancel"
-            normalized_content = content.strip().lower()
-            valid_cancel = {"no", "n", "cancel", "huy", "hủy", "khong", "không"}
-
-            if normalized_content == "yes reset":
-                self.admin_confirmation_pending.pop(user_id, None)
-                if not await self._is_admin_user(user_id):
-                    await message.reply("❌ Bạn không có quyền admin để xác nhận reset.", mention_author=False)
-                    return True
-
-                await self.db_repo.clear_all_data_db()
-                try:
-                    await self.kafka_service.publish(
-                        "discord-incoming",
-                        payload={"type": "invalidate_all_cache"},
-                        key="all"
-                    )
-                except Exception as pub_err:
-                    self.logger.error(f"Failed to publish invalidate_all_cache: {pub_err}")
-                await message.reply("✅ Đã xóa toàn bộ dữ liệu hệ thống.", mention_author=False)
-                return True
-            elif normalized_content in valid_cancel:
-                self.admin_confirmation_pending.pop(user_id, None)
-                await message.reply("❌ Đã hủy yêu cầu reset toàn bộ dữ liệu.", mention_author=False)
-                return True
-            else:
-                # Không phải là xác nhận hợp lệ hoặc từ chối, hủy trạng thái pending nhưng không nuốt tin nhắn
-                self.admin_confirmation_pending.pop(user_id, None)
-                return False
-
-        return False
 
     def _build_attachment_payload(
         self,
@@ -1125,9 +1042,6 @@ class BotCore:
                         return
                     except (discord.Forbidden, discord.HTTPException):
                         pass
-
-            if await self._handle_confirmation_message(message):
-                return
 
             user_id = str(message.author.id)
             is_dm = isinstance(message.channel, discord.DMChannel)

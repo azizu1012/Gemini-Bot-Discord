@@ -25,11 +25,13 @@ class FakeConn:
         self.executed.append((query, args))
         self.pool.last_query = query
         self.pool.last_args = args
-        # For update/delete command tags used in comparisons.
+        # Command tag override (asyncpg returns e.g. "INSERT 0 0" on conflict).
+        if self.pool.execute_result is not None:
+            return self.pool.execute_result
         if query.strip().upper().startswith("UPDATE"):
-            return self.pool.execute_result or "UPDATE 1"
+            return "UPDATE 1"
         if query.strip().upper().startswith("DELETE"):
-            return self.pool.execute_result or "DELETE 1"
+            return "DELETE 1"
         return "OK 1"
 
     async def fetchrow(self, query, *args):
@@ -315,6 +317,49 @@ async def test_get_user_history_from_db():
     conn.fetch_rows = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
     rows = await owner.get_user_history_from_db("u1")
     assert rows == [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]
+
+
+@pytest.mark.asyncio
+async def test_count_query_pins_utc_and_keeps_index_usable():
+    """Mốc ngày phải cố định UTC và không bọc hàm quanh cột để index còn dùng được."""
+    conn, pool = make_conn_pool()
+    owner = make_owner(pool, ChatMixin)
+    conn.fetchval_result = 3
+    await owner.count_user_messages_today_db("u1")
+    query = pool.last_query
+    assert "DATE(" not in query.upper()  # bọc hàm quanh cột = mất index
+    assert "AT TIME ZONE 'UTC'" in query
+    assert "date_trunc('day'" in query
+
+
+@pytest.mark.asyncio
+async def test_log_message_db_reports_duplicate_as_false():
+    conn, pool = make_conn_pool()
+    owner = make_owner(pool, ChatMixin)
+    pool.execute_result = "INSERT 0 1"
+    assert await owner.log_message_db("u1", "user", "hello", "m1") is True
+    pool.execute_result = "INSERT 0 0"
+    assert await owner.log_message_db("u1", "user", "hello", "m1") is False
+
+
+@pytest.mark.asyncio
+async def test_get_user_history_from_db_excludes_rows_of_current_turn():
+    """Lần thử lại phải loại dòng của chính turn đó khỏi lịch sử đưa vào prompt."""
+    conn, pool = make_conn_pool()
+    owner = make_owner(pool, ChatMixin)
+    conn.fetch_rows = []
+    await owner.get_user_history_from_db("u1", limit=12, exclude_message_ids=["m1:user", "m1:assistant"])
+    assert "message_id <> ALL($3::text[])" in pool.last_query
+    assert pool.last_args[2] == ["m1:user", "m1:assistant"]
+
+
+@pytest.mark.asyncio
+async def test_get_user_history_from_db_skips_filter_when_no_ids():
+    conn, pool = make_conn_pool()
+    owner = make_owner(pool, ChatMixin)
+    conn.fetch_rows = []
+    await owner.get_user_history_from_db("u1", exclude_message_ids=[None, ""])
+    assert "ALL(" not in pool.last_query
 
 
 @pytest.mark.asyncio

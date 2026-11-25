@@ -64,18 +64,28 @@ async def build_index_context(
     file_parser: FileParserService,
     chunk_limit: int = 3,
     chunk_preview_chars: int = 3800,
+    user_id: Optional[str] = None,
 ) -> str:
-    selected = await db_repo.search_similar_chunks(query, limit=chunk_limit)
-    selected = [c for c in selected if c.get("document_id") == document_id] if document_id else selected
+    # Lọc document_id ngay trong SQL: nếu lọc sau LIMIT thì 3 chunk gần nhất có
+    # thể thuộc tài liệu khác và kết quả đúng bị loại oan.
+    selected = await db_repo.search_similar_chunks(
+        query,
+        limit=chunk_limit,
+        user_id=user_id or None,
+        document_id=document_id or None,
+    )
 
     if not selected:
         try:
             await db_repo.init_db()
             async with db_repo.pool.acquire() as conn:  # type: ignore[union-attr]
                 rows = await conn.fetch(
-                    "SELECT chunk_id, document_id, content, chunk_summary, keywords, metadata FROM rag_chunks WHERE document_id = $1 LIMIT $2",
+                    "SELECT chunk_id, document_id, content, chunk_summary, keywords, metadata "
+                    "FROM rag_chunks WHERE document_id = $1 "
+                    "AND ($3::text IS NULL OR user_id = $3) LIMIT $2",
                     document_id,
                     chunk_limit,
+                    user_id or None,
                 )
                 selected = [dict(row) for row in rows]
         except Exception as e:
@@ -279,16 +289,18 @@ class FileIndexService:
 
                     await conn.execute(
                         """
-                        INSERT INTO rag_chunks (chunk_id, document_id, content, chunk_summary, keywords, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        INSERT INTO rag_chunks (chunk_id, document_id, user_id, content, chunk_summary, keywords, metadata)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7)
                         ON CONFLICT (chunk_id) DO UPDATE
-                        SET content = EXCLUDED.content,
+                        SET user_id = EXCLUDED.user_id,
+                            content = EXCLUDED.content,
                             chunk_summary = EXCLUDED.chunk_summary,
                             keywords = EXCLUDED.keywords,
                             metadata = EXCLUDED.metadata
                         """,
                         chunk_id,
                         document_id,
+                        user_id,
                         chunk_text,
                         summary,
                         keywords,

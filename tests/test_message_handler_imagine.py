@@ -96,6 +96,31 @@ async def test_imagine_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_imagine_success_truncates_long_prompt_in_reply(monkeypatch):
+    """Slash option cho tới 6000 ký tự — content reply phải nằm trong 2000 của Discord."""
+    h = make_handler()
+    h.resolver.is_configured = AsyncMock(return_value=True)
+    raw_client = MagicMock()
+    image = MagicMock()
+    image.image.image_bytes = b"\x89PNG"
+    image.rai_filtered_reason = None
+    raw_client.models.generate_images = MagicMock(
+        return_value=MagicMock(generated_images=[image])
+    )
+    h.gateway.get_raw_genai_client = AsyncMock(return_value=raw_client)
+    h.db_repo.save_generated_image = AsyncMock(return_value=True)
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+    await h._process_imagine_command({
+        "user_id": "u1", "prompt": "x" * 6000, "interaction_id": "i1", "channel_id": "c1",
+    })
+    content = h._publish_outgoing.call_args[0][0]["content"]
+    assert len(content) <= 2000
+    assert "…" in content  # dấu "…" báo hiệu prompt đã bị cắt
+    assert "x" * 1300 not in content
+
+
+@pytest.mark.asyncio
 async def test_imagine_rai_blocked(monkeypatch):
     h = make_handler()
     h.resolver.is_configured = AsyncMock(return_value=True)

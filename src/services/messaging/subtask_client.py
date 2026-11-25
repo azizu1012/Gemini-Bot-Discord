@@ -49,11 +49,14 @@ class SearchSubtaskClient:
             async for msg in self._consumer:
                 payload = msg.value or {}
                 correlation_id = str(payload.get("correlation_id") or "")
-                if not correlation_id:
-                    continue
-                future = self._pending.pop(correlation_id, None)
-                if future and not future.done():
-                    future.set_result(payload)
+                if correlation_id:
+                    future = self._pending.pop(correlation_id, None)
+                    if future and not future.done():
+                        future.set_result(payload)
+                # ACK mọi entry đã xử lý (kể cả entry thiếu correlation_id):
+                # stream này không có reclaim nên entry không ACK sẽ nằm lại PEL
+                # vĩnh viễn, và lần đọc sau sẽ trả lại đúng entry đó.
+                await self._consumer.ack(msg)
         except asyncio.CancelledError:
             pass
         except Exception as e:

@@ -105,15 +105,36 @@ async def test_process_message_persists_plain_text_without_system_notes():
     persisted = [c.args for c in h.db_repo.log_message_db.await_args_list]
     user_rows = [row for row in persisted if row[1] == "user"]
     assert len(user_rows) == 1
-    _user_id, _role, text = user_rows[0]
+    _user_id, _role, text, row_id = user_rows[0]
     assert text == "bạn là ai"
     assert "SYSTEM NOTE" not in text
+    # message_id ổn định để ON CONFLICT chống ghi trùng khi tin bị xử lý lại.
+    assert row_id == "m1:user"
+    assistant_rows = [row for row in persisted if row[1] == "assistant"]
+    assert assistant_rows[0][3] == "m1:assistant"
 
     pipeline_call = h._call_pipeline_with_deadline.await_args
     messages = pipeline_call.args[1]
     user_msgs = [m for m in messages if m.get("role") == "user"]
     assert len(user_msgs) == 1
     assert user_msgs[0]["parts"][0]["text"].count("bạn là ai") == 1
+
+
+@pytest.mark.asyncio
+async def test_process_message_retry_excludes_its_own_rows_from_history():
+    """Tin bị reclaim sau khi worker chết phải không đọc lại chính nó trong lịch sử."""
+    h = make_handler()
+    h.cache_mgr.get_chat_history = MagicMock(return_value=None)  # ép cache miss → query DB
+    await h.process_message(make_msg({
+        "type": "message",
+        "user_id": "u1",
+        "content": "xin chào",
+        "channel_id": "c1",
+        "message_id": "m9",
+        "attachments": [],
+    }))
+    kwargs = h.db_repo.get_user_history_from_db.await_args.kwargs
+    assert kwargs["exclude_message_ids"] == ["m9:user", "m9:assistant"]
 
 
 @pytest.mark.asyncio

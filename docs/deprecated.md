@@ -42,7 +42,7 @@
 
 | Cũ | Mới |
 |----|-----|
-| `GOOGLE_SEARCH_STREAMS` | `SEARCH_PARALLEL_STREAMS` (biến cũ vẫn đọc + warning, sẽ bỏ ở bản sau) |
+| `GOOGLE_SEARCH_STREAMS` | Đã bỏ cùng `SEARCH_PARALLEL_STREAMS` — search chỉ còn một luồng DuckDuckGo + fan-out fallback provider, nên không còn gì để điều chỉnh |
 
 ## 5. Migration sau khi update
 

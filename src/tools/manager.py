@@ -58,22 +58,9 @@ class ToolsManager:
             intent_batch_size=self._load_intent_batch_size(),
             min_quality_sources=self._load_min_quality_sources(),
             time_sensitive_min_quality_sources=self._load_time_sensitive_min_quality_sources(),
-            exa_use_autoprompt=self._load_exa_autoprompt(),
-            google_search_streams=self._load_google_search_streams(),
         )
 
     # ── Config loaders ─────────────────────────────────────
-
-    def _load_google_search_streams(self) -> int:
-        if Config._get_str("SEARCH_PARALLEL_STREAMS"):
-            return Config._get_int("SEARCH_PARALLEL_STREAMS", 1, min_value=1, max_value=2)
-        if Config._get_str("GOOGLE_SEARCH_STREAMS"):
-            self.logger.warning(
-                "GOOGLE_SEARCH_STREAMS đã đổi tên thành SEARCH_PARALLEL_STREAMS; "
-                "biến cũ vẫn được đọc trong bản này."
-            )
-            return Config._get_int("GOOGLE_SEARCH_STREAMS", 1, min_value=1, max_value=2)
-        return 1
 
     def _load_fallback_provider_limit(self) -> int:
         return Config._get_int("SEARCH_FALLBACK_PROVIDER_LIMIT", 2, min_value=1, max_value=4)
@@ -108,9 +95,6 @@ class ToolsManager:
 
     def _load_deep_read_max_chars(self) -> int:
         return Config._get_int("SEARCH_DEEP_READ_MAX_CHARS", 1800, min_value=400, max_value=8000)
-
-    def _load_exa_autoprompt(self) -> bool:
-        return Config._get_bool("SEARCH_EXA_AUTOPROMPT", False)
 
     def _load_search_semantic_cache_enabled(self) -> bool:
         return Config._get_bool("SEARCH_SEMANTIC_CACHE_ENABLED", True)

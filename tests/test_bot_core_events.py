@@ -29,8 +29,6 @@ class NullLogger:
 def make_bc():
     bc = object.__new__(BotCore)
     bc.logger = NullLogger()
-    bc.confirmation_pending = {}
-    bc.admin_confirmation_pending = {}
     bc._outgoing_queues = {}
     bc._outgoing_senders = {}
     bc.active_typing_tasks = {}
@@ -102,7 +100,6 @@ async def test_on_message_dm_not_mentioned():
     message.author.bot = False
     message.channel = MagicMock()
     message.mentions = []
-    bc._handle_confirmation_message = AsyncMock(return_value=False)
     await events["on_message"](message)
     bc._chat_limit_reply.assert_not_awaited()
     # not dm, not mentioned -> returns
@@ -112,7 +109,6 @@ async def test_on_message_dm_not_mentioned():
 @pytest.mark.parametrize("failure", [False, True])
 async def test_on_message_limits_reject_before_lock_and_queue(failure):
     bc = make_bc()
-    bc._handle_confirmation_message = AsyncMock(return_value=False)
     bc._redis_client = MagicMock()
     bc._redis_client.set = AsyncMock()
     if failure:
@@ -138,7 +134,6 @@ async def test_on_message_redis_lock_busy():
     bc = make_bc()
     bc._redis_client = MagicMock()
     bc._redis_client.set = AsyncMock(return_value=False)  # not acquired
-    bc._handle_confirmation_message = AsyncMock(return_value=False)
     events = _capture_events(bc)
     message = MagicMock()
     message.author.bot = False
@@ -258,7 +253,6 @@ async def test_on_message_success_publishes():
     bc = make_bc()
     bc._redis_client = MagicMock()
     bc._redis_client.set = AsyncMock(return_value=True)  # acquired
-    bc._handle_confirmation_message = AsyncMock(return_value=False)
     bc.kafka_service.publish = AsyncMock(return_value=True)
     bc._collect_message_attachments = AsyncMock(return_value=[])
     bc._resolve_referenced_message = AsyncMock(return_value=None)

@@ -13,6 +13,9 @@ class NullLogger:
     def info(self, *a, **k):
         pass
 
+    def warning(self, *a, **k):
+        pass
+
     def error(self, *a, **k):
         pass
 
@@ -23,15 +26,31 @@ def make_worker():
     worker.config = MagicMock()
     worker.kafka_service = MagicMock()
     worker.tools_mgr = MagicMock()
-    worker._consume_task = None
+    worker._tasks = set()
     return worker
 
 
 @pytest.mark.asyncio
 async def test_process_subtask_missing_correlation_returns():
     worker = make_worker()
-    await worker._process_subtask(MagicMock(), MagicMock(), {"query": "q"})
+    consumer = MagicMock()
+    consumer.ack = AsyncMock(return_value=True)
+    msg = MagicMock()
+    await worker._process_subtask(consumer, msg, {"query": "q"})
     worker.kafka_service.publish.assert_not_called()
+    # Payload hỏng không bao giờ xử lý được: phải ACK để không nằm lại PEL vĩnh viễn.
+    consumer.ack.assert_awaited_once_with(msg)
+
+
+@pytest.mark.asyncio
+async def test_process_subtask_missing_query_acks():
+    worker = make_worker()
+    consumer = MagicMock()
+    consumer.ack = AsyncMock(return_value=True)
+    msg = MagicMock()
+    await worker._process_subtask(consumer, msg, {"correlation_id": "c9"})
+    worker.kafka_service.publish.assert_not_called()
+    consumer.ack.assert_awaited_once_with(msg)
 
 
 @pytest.mark.asyncio
@@ -95,6 +114,26 @@ async def test_shutdown_stops_kafka():
     worker.kafka_service.stop = AsyncMock()
     await worker.shutdown()
     worker.kafka_service.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_inflight_tasks():
+    import asyncio
+
+    worker = make_worker()
+    worker.kafka_service.stop = AsyncMock()
+    finished = []
+
+    async def _job():
+        await asyncio.sleep(0)
+        finished.append(True)
+
+    task = asyncio.create_task(_job())
+    worker._tasks.add(task)
+    task.add_done_callback(worker._tasks.discard)
+    await worker.shutdown()
+    assert finished == [True]
+    assert worker._tasks == set()
 
 
 

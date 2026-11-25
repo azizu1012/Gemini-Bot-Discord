@@ -63,12 +63,28 @@ class LLMGateway:
         if not ep:
             raise LLMNotConfiguredError(f"SDK `{sdk}` chưa được cấu hình.")
         cache_key = (sdk, ep["base_url"], ep["api_key"])
+        stale: List[Any] = []
         with self._lock:
             client = self._clients.get(cache_key)
-        if client is None:
-            client = self._client_factory(sdk, ep["base_url"], ep["api_key"])
-            with self._lock:
+            if client is None:
+                # Endpoint của SDK này vừa đổi qua /endpoint: client cũ vẫn giữ
+                # connection pool + (với openai) HTTP session tới base_url cũ nên
+                # phải đóng và loại khỏi cache, nếu không sẽ rò rỉ dần mỗi lần đổi.
+                stale = [value for key, value in self._clients.items() if key[0] == sdk]
+                for key in [key for key in self._clients if key[0] == sdk]:
+                    del self._clients[key]
+                client = self._client_factory(sdk, ep["base_url"], ep["api_key"])
                 self._clients[cache_key] = client
+        # close() là async nên phải await ngoài lock; lỗi đóng client cũ không được
+        # làm hỏng request hiện tại.
+        for old in stale:
+            close = getattr(old, "close", None)
+            if close is None:
+                continue
+            try:
+                await close()
+            except Exception:
+                pass
         return client
 
     async def generate(

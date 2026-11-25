@@ -38,8 +38,6 @@ class SearchEngine:
         intent_batch_size: int = 3,
         min_quality_sources: int = 1,
         time_sensitive_min_quality_sources: int = 2,
-        exa_use_autoprompt: bool = False,
-        google_search_streams: int = 1,
     ):
         self.logger = logger_override or logger
         self.search_web_mode = search_web_mode
@@ -50,7 +48,6 @@ class SearchEngine:
         self.fallback_provider_limit = fallback_provider_limit
         self.intent_batch_size = intent_batch_size
         self.search_failed_query_cooldown_seconds = search_failed_query_cooldown_seconds
-        self.google_search_streams = google_search_streams
 
         # Submodules
         self.cache = SearchCache(

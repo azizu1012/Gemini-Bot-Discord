@@ -87,6 +87,44 @@ async def test_get_client_creates_and_caches():
 
 
 @pytest.mark.asyncio
+async def test_get_client_evicts_and_closes_superseded_client():
+    """Đổi endpoint qua /endpoint phải đóng client cũ, không để rò rỉ session."""
+    gw, resolver = make_gateway()
+    resolver.set_endpoint("genai", "http://old", "key-old")
+    old = MagicMock()
+    old.close = AsyncMock()
+    new = MagicMock()
+    new.close = AsyncMock()
+    gw._client_factory = MagicMock(side_effect=[old, new])
+
+    assert await gw._get_client("genai") is old
+
+    resolver.set_endpoint("genai", "http://new", "key-new")
+    assert await gw._get_client("genai") is new
+    old.close.assert_awaited_once()
+    assert ("genai", "http://old", "key-old") not in gw._clients
+    assert gw._clients[("genai", "http://new", "key-new")] is new
+
+
+@pytest.mark.asyncio
+async def test_get_client_keeps_client_of_other_sdk_on_endpoint_change():
+    gw, resolver = make_gateway()
+    resolver.set_endpoint("openai", "http://o", "ko")
+    other = MagicMock()
+    other.close = AsyncMock()
+    gw._client_factory = MagicMock(return_value=other)
+    assert await gw._get_client("openai") is other
+
+    resolver.set_endpoint("genai", "http://g", "kg")
+    genai_client = MagicMock()
+    genai_client.close = AsyncMock()
+    gw._client_factory = MagicMock(return_value=genai_client)
+    assert await gw._get_client("genai") is genai_client
+    other.close.assert_not_awaited()
+    assert gw._clients[("openai", "http://o", "ko")] is other
+
+
+@pytest.mark.asyncio
 async def test_get_client_not_configured():
     gw, resolver = make_gateway()
     with pytest.raises(LLMNotConfiguredError):
